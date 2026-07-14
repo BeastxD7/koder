@@ -13,6 +13,11 @@
   "win32RegValueName": "Koder",
   "win32AppUserModelId": "Koder.Koder",
   "win32ShellNameShort": "Koder",
+  "win32ContextMenu": {
+    "x64": { "clsid": "691E9A78-A330-4A49-A432-6D92E5C3DA71" },
+    "arm64": { "clsid": "EBF7FB8F-AF6F-45A8-8759-7AA9F21DEB58" },
+    "ia32": { "clsid": "CEAADC03-3D3C-4976-A8EF-328E96605B78" }
+  },
   "darwinBundleIdentifier": "com.koder.ide",
   "linuxIconName": "koder",
   "licenseName": "MIT",
