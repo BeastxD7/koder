@@ -118,47 +118,105 @@ function send() {
   vscode.postMessage({ type: "send", text });
 }
 
-// ---------- BYOK settings panel ----------
+// ---------- BYOK settings panel (provider → key → model) ----------
 const settingsPanel = document.getElementById("settingsPanel");
 const settingsBody = document.getElementById("settingsBody");
-const PROVIDER_LABELS = {
-  anthropic: "Anthropic (Claude)",
-  openai: "OpenAI",
-  openrouter: "OpenRouter — 400+ models",
-  gemini: "Google Gemini",
-  deepseek: "DeepSeek",
-  groq: "Groq",
-  xai: "xAI (Grok)",
+
+const PROVIDERS = {
+  anthropic: {
+    label: "Anthropic (Claude)",
+    keyUrl: "console.anthropic.com",
+    models: ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5", "claude-fable-5"],
+  },
+  openrouter: {
+    label: "OpenRouter — one key, 400+ models",
+    keyUrl: "openrouter.ai/keys",
+    models: [
+      "anthropic/claude-sonnet-5",
+      "anthropic/claude-opus-4.8",
+      "openai/gpt-5.5",
+      "google/gemini-3-pro",
+      "deepseek/deepseek-chat",
+      "qwen/qwen3-coder",
+    ],
+  },
+  gemini: {
+    label: "Google Gemini",
+    keyUrl: "aistudio.google.com/apikey",
+    models: ["gemini-3-pro", "gemini-3-flash", "gemini-3.1-flash-lite"],
+  },
+  openai: {
+    label: "OpenAI",
+    keyUrl: "platform.openai.com/api-keys",
+    models: ["gpt-5.5", "gpt-5.6", "gpt-5.6-luna"],
+  },
+  deepseek: { label: "DeepSeek", keyUrl: "platform.deepseek.com", models: ["deepseek-chat", "deepseek-reasoner"] },
+  groq: { label: "Groq", keyUrl: "console.groq.com/keys", models: ["gpt-oss-120b", "llama-4-scout"] },
+  xai: { label: "xAI (Grok)", keyUrl: "console.x.ai", models: ["grok-4.1-fast", "grok-4"] },
 };
 
-function showSettings(state) {
-  settingsBody.innerHTML = "";
-  const dm = document.createElement("div");
-  dm.className = "field";
-  dm.innerHTML = `<label>Default model <span class="muted">provider/model</span></label>
-    <input id="defaultModel" placeholder="anthropic/claude-sonnet-5">`;
-  dm.querySelector("input").value = state.defaultModel || "";
-  settingsBody.appendChild(dm);
+let settingsState = { defaultModel: "", set: {} };
 
-  for (const [id, label] of Object.entries(PROVIDER_LABELS)) {
-    const f = document.createElement("div");
-    f.className = "field";
-    const isSet = state.set?.[id];
-    f.innerHTML = `<label>${label} ${isSet ? '<span class="pill">key saved</span>' : ""}</label>
-      <input type="password" data-provider="${id}" placeholder="${isSet ? "•••••••• (leave blank to keep)" : "API key"}">`;
-    settingsBody.appendChild(f);
-  }
+function renderSettings() {
+  const sel = document.getElementById("providerSelect");
+  const providerId = sel?.value || Object.keys(PROVIDERS)[0];
+  const p = PROVIDERS[providerId];
+  const isSet = settingsState.set?.[providerId];
+  const currentDefault = settingsState.defaultModel || "";
+
+  settingsBody.innerHTML = `
+    <div class="field">
+      <label>AI Provider</label>
+      <select id="providerSelect" class="big">${Object.entries(PROVIDERS)
+        .map(
+          ([id, pv]) =>
+            `<option value="${id}" ${id === providerId ? "selected" : ""}>${pv.label}${settingsState.set?.[id] ? "  ✓" : ""}</option>`,
+        )
+        .join("")}</select>
+    </div>
+    <div class="field">
+      <label>API key ${isSet ? '<span class="pill">saved</span>' : `<span class="muted">get one at ${p.keyUrl}</span>`}</label>
+      <input type="password" id="keyInput" placeholder="${isSet ? "•••••••• (leave blank to keep)" : "sk-…"}">
+    </div>
+    <div class="field">
+      <label>Model</label>
+      <select id="modelSelect" class="big">
+        ${p.models
+          .map((m) => {
+            const full = `${providerId}/${m}`;
+            return `<option value="${m}" ${full === currentDefault ? "selected" : ""}>${m}</option>`;
+          })
+          .join("")}
+        <option value="__custom__">custom…</option>
+      </select>
+      <input id="customModel" placeholder="model id" hidden>
+    </div>
+    <label class="check"><input type="checkbox" id="makeDefault" checked> Use as default model</label>
+  `;
+
+  document.getElementById("providerSelect").addEventListener("change", renderSettings);
+  document.getElementById("modelSelect").addEventListener("change", (e) => {
+    document.getElementById("customModel").hidden = e.target.value !== "__custom__";
+  });
+}
+
+function showSettings(state) {
+  settingsState = state;
+  renderSettings();
   settingsPanel.hidden = false;
 }
 
 document.getElementById("settingsClose").addEventListener("click", () => (settingsPanel.hidden = true));
 document.getElementById("settingsFile").addEventListener("click", () => vscode.postMessage({ type: "openSettingsFile" }));
 document.getElementById("settingsSave").addEventListener("click", () => {
+  const providerId = document.getElementById("providerSelect").value;
+  const key = document.getElementById("keyInput").value.trim();
+  const modelSel = document.getElementById("modelSelect").value;
+  const model = modelSel === "__custom__" ? document.getElementById("customModel").value.trim() : modelSel;
   const keys = {};
-  for (const input of settingsBody.querySelectorAll("input[data-provider]")) {
-    if (input.value.trim()) keys[input.dataset.provider] = input.value.trim();
-  }
-  const defaultModel = document.getElementById("defaultModel").value.trim();
+  if (key) keys[providerId] = key;
+  const defaultModel =
+    document.getElementById("makeDefault").checked && model ? `${providerId}/${model}` : "";
   vscode.postMessage({ type: "saveProviders", keys, defaultModel });
   settingsPanel.hidden = true;
 });

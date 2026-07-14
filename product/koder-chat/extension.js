@@ -8,11 +8,11 @@ const path = require("path");
 
 // ---------- minimal ACP (JSON-RPC over ndjson/stdio) client ----------
 class AcpClient {
-  constructor(command, args, cwd, handlers) {
+  constructor(command, args, cwd, env, handlers) {
     this.nextId = 1;
     this.pending = new Map();
     this.handlers = handlers;
-    this.child = cp.spawn(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+    this.child = cp.spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
     this.child.stderr.on("data", (d) => console.log(`[koder-agent] ${d}`));
     this.child.on("exit", (code) => handlers.onExit?.(code));
     let buf = "";
@@ -72,9 +72,20 @@ function agentSpawnSpec(context) {
     path.resolve(context.extensionPath, "..", "..", "agent"),
   ];
   for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, "src", "server.ts"))) {
+    if (fs.existsSync(path.join(dir, "src", "server.ts")) && fs.existsSync(path.join(dir, "node_modules"))) {
       return { command: "npx", args: ["tsx", "src/server.ts"], cwd: dir };
     }
+  }
+  // packaged: bundled runtime, run with the app's own Electron-as-Node —
+  // works on machines with no Node.js installed
+  const bundled = path.join(context.extensionPath, "agent", "server.cjs");
+  if (fs.existsSync(bundled)) {
+    return {
+      command: process.execPath,
+      args: [bundled],
+      cwd: undefined,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    };
   }
   return null;
 }
@@ -161,7 +172,7 @@ class AgentViewProvider {
       return false;
     }
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
-    this.acp = new AcpClient(spec.command, spec.args, spec.cwd ?? cwd, {
+    this.acp = new AcpClient(spec.command, spec.args, spec.cwd ?? cwd, spec.env, {
       onExit: (code) => {
         this.post({ type: "system", text: `agent exited (${code}) — will restart on next message` });
         this.acp = null;
