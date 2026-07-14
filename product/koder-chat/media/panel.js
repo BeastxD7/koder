@@ -62,7 +62,6 @@ function showEmpty() {
   );
 }
 showEmpty();
-
 const clearEmpty = () => messagesEl.querySelector(".empty")?.remove();
 const scrollBottom = () => { messagesEl.scrollTop = messagesEl.scrollHeight; };
 
@@ -172,10 +171,13 @@ function renderCheckpointCard(promptId, card) {
   const n = files.length;
   card.el.innerHTML = `
     <div class="cp-head">Files changed (${n})</div>
-    <div class="cp-files">${files.map(() => `<div class="cp-file"><span class="cp-path"></span></div>`).join("")}</div>
+    <div class="cp-files">${files.map(() => `<div class="cp-file"><span class="cp-path"></span><button class="cp-file-undo" title="Undo this file">Undo</button></div>`).join("")}</div>
     <button class="cp-undo-all">Undo all ${n} file${n === 1 ? "" : "s"}</button>
     <div class="cp-confirm" hidden></div>`;
-  [...card.el.querySelectorAll(".cp-path")].forEach((el, i) => (el.textContent = files[i]));
+  [...card.el.querySelectorAll(".cp-file")].forEach((el, i) => {
+    el.querySelector(".cp-path").textContent = files[i];
+    el.querySelector(".cp-file-undo").addEventListener("click", () => requestUndoFile(promptId, files[i]));
+  });
   card.el.querySelector(".cp-undo-all").addEventListener("click", () => requestUndoPrompt(promptId, card));
 }
 
@@ -199,13 +201,21 @@ function requestUndoPrompt(promptId, force) {
   vscode.postMessage({ type: "undoPrompt", promptId, force: force === true });
 }
 
+function requestUndoFile(promptId, path, force) {
+  vscode.postMessage({ type: "undoFile", promptId, path, force: force === true });
+}
+
 function handleUndoConflict(m) {
   const card = checkpointCards.get(m.promptId);
   if (!card) return;
-  const message = m.overlap
+  const message = m.path
+    ? `${m.path} has been edited since the agent last changed it. Undo will overwrite that edit. Continue?`
+    : m.overlap
     ? `A later prompt also changed ${Object.keys(m.overlap).join(", ")} after this one. Undoing will discard those changes too. Continue?`
     : `${m.conflict?.paths?.join(", ") || "One or more files"} have been edited since the agent last changed them. Undo will overwrite that edit. Continue?`;
-  showUndoConfirm(card, message, () => requestUndoPrompt(m.promptId, true));
+  showUndoConfirm(card, message, () =>
+    m.path ? requestUndoFile(m.promptId, m.path, true) : requestUndoPrompt(m.promptId, true),
+  );
 }
 
 function setBusy(b) {

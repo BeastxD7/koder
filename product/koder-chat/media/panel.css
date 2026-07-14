@@ -207,13 +207,30 @@ html, body {
 }
 .checkpoint .cp-head { color: var(--muted); margin-bottom: 4px; }
 .checkpoint .cp-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+}
+.checkpoint .cp-file .cp-path {
+  flex: 1;
+  min-width: 0;
   font-family: var(--mono);
   color: var(--faint);
-  padding: 1px 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.checkpoint .cp-file-undo {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 10.5px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+.checkpoint .cp-file-undo:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
 .checkpoint .cp-undo-all {
   margin-top: 6px;
   background: rgba(255, 255, 255, 0.08);

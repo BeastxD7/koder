@@ -965,6 +965,30 @@ class AgentViewProvider {
         }
         break;
       }
+      case "undoFile": {
+        // Chat-panel surface (doc 11 §7): a per-file "Undo" button next to
+        // each path in the Files-changed card, alongside "Undo all". Same
+        // shared inline confirm-then-force flow as undoPrompt, scoped to one
+        // path — kept separate from undoFileWithConfirm (editor-title
+        // command, doc 11 §6), which uses native modal dialogs instead of
+        // this panel's own inline confirm UI.
+        if (!this.acp || !this.sessionId) break;
+        try {
+          const res = await this.acp.request("koder/undo_file", {
+            sessionId: this.sessionId,
+            path: m.path,
+            force: Boolean(m.force),
+          });
+          if (!res.ok && res.conflict) {
+            this.view?.webview.postMessage({ type: "undoConflict", promptId: m.promptId, path: m.path, conflict: res.conflict });
+            break;
+          }
+          this.post({ type: "system", text: `Reverted ${m.path}.` });
+        } catch (err) {
+          this.post({ type: "system", text: `undo failed: ${err.message}` });
+        }
+        break;
+      }
       case "cancel":
         this.acp?.notify("session/cancel", { sessionId: this.sessionId });
         break;
