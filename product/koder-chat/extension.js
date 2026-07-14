@@ -403,20 +403,20 @@ async function activate(context) {
   // agent-first IDE: the agent panel is part of the default layout — open it
   // on every startup unless the user turned that off
   if (vscode.workspace.getConfiguration("koder").get("agent.openOnStartup", true)) {
-    setTimeout(() => vscode.commands.executeCommand("koder.agentView.focus"), 900);
+    setTimeout(() => vscode.commands.executeCommand("koder.chatView.focus"), 900);
   }
 
   context.subscriptions.push(
     statusItem,
-    vscode.window.registerWebviewViewProvider("koder.agentView", provider, {
-      webviewOptions: { retainContextWhenHidden: true },
+    vscode.window.registerWebviewViewProvider("koder.chatView", provider, {
+      webviewOptions: { retainContextWhenHidden: false },
     }),
     vscode.commands.registerCommand("koder.openAgent", () =>
-      vscode.commands.executeCommand("koder.agentView.focus"),
+      vscode.commands.executeCommand("koder.chatView.focus"),
     ),
     vscode.commands.registerCommand("koder.newChat", () => provider.newChat()),
     vscode.commands.registerCommand("koder.configureProviders", async () => {
-      await vscode.commands.executeCommand("koder.agentView.focus");
+      await vscode.commands.executeCommand("koder.chatView.focus");
       provider.post({ type: "showSettings", providers: readProviderState() });
     }),
     vscode.commands.registerCommand("koder.openProviderSettings", async () => {

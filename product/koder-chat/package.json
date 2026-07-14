@@ -26,7 +26,7 @@
       "koder": [
         {
           "type": "webview",
-          "id": "koder.agentView",
+          "id": "koder.chatView",
           "name": "Agent",
           "icon": "media/koder.svg"
         }
@@ -64,12 +64,12 @@
       "view/title": [
         {
           "command": "koder.newChat",
-          "when": "view == koder.agentView",
+          "when": "view == koder.chatView",
           "group": "navigation@1"
         },
         {
           "command": "koder.configureProviders",
-          "when": "view == koder.agentView",
+          "when": "view == koder.chatView",
           "group": "navigation@2"
         }
       ],

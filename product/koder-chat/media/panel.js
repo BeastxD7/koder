@@ -281,11 +281,11 @@ window.addEventListener("message", (e) => {
         if (o === selected) opt.selected = true;
         modelEl.appendChild(opt);
       }
+      // chat UI first, always — the sheet only opens when the user asks
       if (m.models.providers.length === 0) {
-        // BYOK front and center: open the provider sheet automatically
-        vscode.postMessage({ type: "openSettings" });
+        addMsg("system", "No API keys yet — click ⚙ below to add one (BYOK).");
       } else {
-        addMsg("system", `Ready — ${m.models.providers.length} provider(s) configured.`);
+        addMsg("system", `Ready — ${modelEl.value || m.models.defaultModel}`);
       }
       break;
     }
