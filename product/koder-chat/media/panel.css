@@ -276,6 +276,19 @@ html, body {
   padding: 8px;
   animation: rise 0.15s var(--ease);
 }
+.feedback-form-top { display: flex; justify-content: flex-end; margin: -2px -2px -2px 0; }
+.feedback-form-top .fb-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--muted);
+}
+.feedback-form-top .fb-close:hover { background: rgba(255, 255, 255, 0.12); color: var(--fg); }
 .feedback-form input[type="text"], .feedback-form textarea {
   width: 100%;
   background: rgba(0, 0, 0, 0.25);

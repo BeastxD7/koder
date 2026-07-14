@@ -540,7 +540,12 @@ function openFeedbackForm(wrap, kind) {
   form = document.createElement("div");
   form.className = "feedback-form";
   form.dataset.kind = kind;
-  form.innerHTML = kind === "up"
+  const closeRow = `<div class="feedback-form-top">
+       <button class="ghost fb-close" type="button" title="Dismiss" aria-label="Dismiss feedback form">
+         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+       </button>
+     </div>`;
+  form.innerHTML = closeRow + (kind === "up"
     ? `<input type="text" class="fb-comment" placeholder="Anything you want to add? (optional)">
        <div class="feedback-form-actions"><div class="spacer"></div><button class="fb-submit">Submit</button></div>`
     : `<textarea class="fb-expected" rows="2" placeholder="What did you expect?"></textarea>
@@ -549,8 +554,9 @@ function openFeedbackForm(wrap, kind) {
          <button class="ghost fb-viewlog">View log for this response</button>
          <div class="spacer"></div>
          <button class="fb-submit">Submit</button>
-       </div>`;
+       </div>`);
   wrap.appendChild(form);
+  form.querySelector(".fb-close").addEventListener("click", () => { form.hidden = true; });
   form.querySelector(".fb-viewlog")?.addEventListener("click", () =>
     vscode.postMessage({ type: "openFeedbackLog" }),
   );
