@@ -28,6 +28,29 @@ for (const ext of ["koder-ui", "koder-chat", "theme-koder-carbon", "theme-koder-
 rmSync(join(upstream, "extensions", "copilot"), { recursive: true, force: true });
 console.log("removed extensions/copilot");
 
+// 1c. build/npm/postinstall.ts still lists 'extensions/copilot' as an
+// npm-install target (build/npm/dirs.ts) — it doesn't know we just deleted
+// that directory. When its concurrency-limited install pool reaches that
+// entry, child_process.spawn gets a nonexistent cwd, and Node/libuv
+// mis-report the failure as "spawn /bin/sh ENOENT" instead of a missing-
+// directory error, which crashes `npm ci` in upstream/ 3/3 times,
+// deterministically, on every install (confirmed via CI log evidence —
+// raising the fd ulimit had zero effect, ruling out resource exhaustion).
+// Drop the entry so postinstall never tries to install into it.
+{
+  const dirsFile = join(upstream, "build", "npm", "dirs.ts");
+  const dirsSrc = readFileSync(dirsFile, "utf8");
+  const patched = dirsSrc.replace(/^\t'extensions\/copilot',\n/m, "");
+  if (patched === dirsSrc) {
+    console.error(
+      "upstream/build/npm/dirs.ts: expected to find and remove the 'extensions/copilot' entry, but it wasn't there — upstream's dirs.ts format may have changed. Fix scripts/apply-ui.mjs's regex."
+    );
+    process.exit(1);
+  }
+  writeFileSync(dirsFile, patched);
+  console.log("patched build/npm/dirs.ts (dropped extensions/copilot install target)");
+}
+
 // 2. CSS injection
 const css = readFileSync(join(root, "product", "koder-ui", "koder.css"), "utf8");
 const OPEN = "<!-- KODER-UI-BEGIN -->";
