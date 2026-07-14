@@ -174,16 +174,20 @@ inputEl.addEventListener("keydown", (e) => {
 });
 modelEl.addEventListener("change", () => vscode.postMessage({ type: "setModel", model: modelEl.value }));
 
-// copy buttons in code blocks (delegated)
+// copy buttons + safe links in rendered markdown (delegated)
 messagesEl.addEventListener("click", (e) => {
   const btn = e.target.closest("button.copy");
-  if (!btn) return;
-  const code = codeStore[btn.dataset.codeId];
-  if (code !== undefined) {
-    navigator.clipboard.writeText(code);
-    btn.textContent = "Copied";
-    setTimeout(() => (btn.textContent = "Copy"), 1200);
+  if (btn) {
+    const code = codeStore[btn.dataset.codeId];
+    if (code !== undefined) {
+      navigator.clipboard.writeText(code);
+      btn.textContent = "Copied";
+      setTimeout(() => (btn.textContent = "Copy"), 1200);
+    }
+    return;
   }
+  const link = e.target.closest("[data-href]");
+  if (link) vscode.postMessage({ type: "openLink", href: link.dataset.href });
 });
 
 // ---------- history ----------

@@ -412,6 +412,20 @@ class AgentViewProvider {
       case "openSettingsFile":
         vscode.commands.executeCommand("koder.openProviderSettings");
         break;
+      case "openLink": {
+        const href = String(m.href ?? "");
+        if (/^https?:/.test(href)) vscode.env.openExternal(vscode.Uri.parse(href));
+        else if (href && !href.includes("..")) {
+          const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          if (root) {
+            vscode.workspace.openTextDocument(path.join(root, href)).then(
+              (doc) => vscode.window.showTextDocument(doc),
+              () => {},
+            );
+          }
+        }
+        break;
+      }
       case "boot":
         this.ensureAgent();
         break;
