@@ -21,6 +21,12 @@ let thoughtRaw = "";
 let busy = false;
 let codeStore = {};
 let codeSeq = 0;
+// The permission currently shown in permissionBar, if any — lets a
+// "permissionResolved" event (fired when a paired phone answers a prompt
+// this panel is also showing, docs/research/10 Phase B) hide the bar ONLY
+// if it's still showing that same permission, so a resolve for an older,
+// already-superseded prompt can't wrongly hide a freshly-shown newer one.
+let currentPermissionId = null;
 
 // ---------- feedback (thumbs / retry) turn tracking ----------
 // Tracks the most recently rendered agent message bubble and whether the
@@ -710,6 +716,7 @@ window.addEventListener("message", (e) => {
     case "toolUpdate": applyEvent(m, false); break;
     case "modeChanged": applyEvent(m, false); break;
     case "permission": {
+      currentPermissionId = m.id;
       permissionBar.hidden = false;
       permissionBar.innerHTML = `<span class="title"></span>`;
       permissionBar.querySelector(".title").textContent = m.title;
@@ -719,12 +726,25 @@ window.addEventListener("message", (e) => {
         b.textContent = o.name;
         b.addEventListener("click", () => {
           permissionBar.hidden = true;
+          currentPermissionId = null;
           vscode.postMessage({ type: "permissionChoice", id: m.id, optionId: o.id });
         });
         permissionBar.appendChild(b);
       }
       break;
     }
+    // Fired when this permission was resolved from elsewhere — a paired
+    // phone's Allow/Deny tap (docs/research/10 Phase B), or, in principle,
+    // this same panel a moment ago (already a no-op there since the click
+    // handler above already hid the bar and cleared currentPermissionId).
+    // Only hide if it's still THIS permission showing — a resolve for an
+    // older prompt must never hide a newer one already on screen.
+    case "permissionResolved":
+      if (m.id === currentPermissionId) {
+        permissionBar.hidden = true;
+        currentPermissionId = null;
+      }
+      break;
     case "turnStart":
       setBusy(true);
       turnHasText = false;
@@ -734,6 +754,7 @@ window.addEventListener("message", (e) => {
       endStream();
       setBusy(false);
       permissionBar.hidden = true;
+      currentPermissionId = null;
       maybeAttachFeedback();
       break;
     case "showSettings": showSettings(m.providers); break;
