@@ -1,0 +1,42 @@
+{
+  "name": "koder-ui",
+  "displayName": "Koder UI",
+  "description": "Koder's visual identity: Koder Dark theme and modern editor defaults.",
+  "version": "0.0.1",
+  "publisher": "koder",
+  "license": "MIT",
+  "engines": { "vscode": "^1.128.0" },
+  "categories": ["Themes"],
+  "contributes": {
+    "themes": [
+      {
+        "label": "Koder Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/koder-dark-color-theme.json"
+      }
+    ],
+    "configurationDefaults": {
+      "workbench.colorTheme": "Koder Dark",
+      "workbench.startupEditor": "none",
+      "workbench.list.smoothScrolling": true,
+      "workbench.tree.indent": 14,
+      "workbench.tree.renderIndentGuides": "onHover",
+      "workbench.layoutControl.enabled": false,
+      "breadcrumbs.enabled": false,
+      "editor.fontFamily": "'JetBrains Mono', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
+      "editor.fontLigatures": true,
+      "editor.fontSize": 13,
+      "editor.lineHeight": 1.7,
+      "editor.padding.top": 12,
+      "editor.smoothScrolling": true,
+      "editor.cursorSmoothCaretAnimation": "on",
+      "editor.cursorBlinking": "smooth",
+      "editor.minimap.enabled": false,
+      "editor.scrollBeyondLastLine": false,
+      "editor.renderLineHighlight": "none",
+      "editor.guides.indentation": false,
+      "terminal.integrated.smoothScrolling": true,
+      "window.commandCenter": true
+    }
+  }
+}

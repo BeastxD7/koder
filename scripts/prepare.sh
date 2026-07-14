@@ -29,4 +29,7 @@ for p in patches/*.patch; do
   git -C upstream apply --3way "../$p"
 done
 
+# Koder UI layer: built-in theme extension + CSS injection
+node scripts/apply-ui.mjs
+
 echo "upstream/ prepared for Koder"
