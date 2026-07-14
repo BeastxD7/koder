@@ -6,6 +6,7 @@
  */
 import { envBlock, loadRules, scrubSecrets } from "./context.js";
 import { loadConfig, resolveModel } from "./config.js";
+import { floorCheck } from "./floor.js";
 import { AnthropicAdapter } from "./providers/anthropic.js";
 import { OpenAICompatAdapter } from "./providers/openai-compat.js";
 import type { ChatAdapter, ChatMessage, ContentBlock } from "./providers/types.js";
@@ -196,16 +197,25 @@ export async function runPrompt(
       }
       cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
 
+      // Destructive-command floor: deterministic, code-enforced, checked
+      // BEFORE the mode/permission branch below, unconditionally, in every
+      // mode — including approve mode even after a user would click Allow.
+      // This is a safety floor, not a permission that can be granted away;
+      // see floor.ts for exactly what it covers and why.
       let allowed = true;
-      if (spec.dangerous && session.mode === "review") {
+      let denyMsg = "User declined this action. Adjust your approach or ask what they'd prefer.";
+      const floor = floorCheck(tc.name, tc.input ?? {}, session.cwd);
+      if (floor.blocked) {
+        allowed = false;
+        denyMsg = `Blocked by safety floor: ${floor.reason}`;
+      } else if (spec.dangerous && session.mode === "review") {
         allowed = false; // hard gate: review mode never modifies anything
       } else if (spec.dangerous && session.mode !== "auto") {
         allowed = await cb.onPermission({ id: tc.id, name: tc.name, input: tc.input, title, kind: spec.kind });
       }
       if (!allowed) {
-        const msg = "User declined this action. Adjust your approach or ask what they'd prefer.";
-        cb.onToolEnd({ id: tc.id, output: msg, isError: true });
-        results.push({ type: "tool_result", tool_use_id: tc.id, content: msg, is_error: true });
+        cb.onToolEnd({ id: tc.id, output: denyMsg, isError: true });
+        results.push({ type: "tool_result", tool_use_id: tc.id, content: denyMsg, is_error: true });
         continue;
       }
 

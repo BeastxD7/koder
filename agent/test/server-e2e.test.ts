@@ -249,6 +249,33 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
               assert.equal(r.response.stopReason, "refusal");
               assert.match(messageText(r.updates), /Unknown provider "nope"/);
             });
+
+            await t2.test("auto mode: destructive-command floor hard-blocks force-push — no permission prompt, no execution", async () => {
+              await ctx.request("koder/set_model", { sessionId: session.sessionId, model: "fake/test-model" });
+              const permsBefore = permissionRequests.length;
+              fake.enqueue(
+                toolTurn("call_floor1", "bash", { command: "git push --force origin main" }),
+                textTurn("Understood, I will not force-push."),
+              );
+              const { updates, response } = await runTurn(session, "force push my branch");
+              assert.equal(response.stopReason, "end_turn");
+
+              // the floor fires before the mode branch — auto mode still asks for
+              // no permission, but this time because it's unconditionally blocked,
+              // not because it's silently allowed
+              assert.equal(permissionRequests.length, permsBefore, "floor block must not go through onPermission");
+
+              // the model sees our deterministic floor message, not real `git`
+              // output — proof the command never actually executed
+              const toolMsg = lastToolMessage(fake, "call_floor1")!.content;
+              assert.match(toolMsg, /Blocked by safety floor/);
+              assert.match(toolMsg, /force-push is never allowed/);
+              assert.doesNotMatch(toolMsg, /fatal:|Everything up-to-date|remote:/); // would appear if git actually ran
+
+              const upd = updates.find((u) => u.sessionUpdate === "tool_call_update" && u.toolCallId === "call_floor1");
+              assert.equal(upd.status, "failed");
+              assert.match(upd.content[0].content.text, /Blocked by safety floor/);
+            });
           }),
         );
       });
