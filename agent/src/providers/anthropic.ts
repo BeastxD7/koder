@@ -53,6 +53,8 @@ export class AnthropicAdapter implements ChatAdapter {
           if (ev.delta?.type === "text_delta") {
             text += ev.delta.text;
             req.onText?.(ev.delta.text);
+          } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+            req.onThinking?.(ev.delta.thinking);
           } else if (ev.delta?.type === "input_json_delta" && partialJson[ev.index]) {
             partialJson[ev.index].json += ev.delta.partial_json;
           }

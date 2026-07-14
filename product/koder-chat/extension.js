@@ -161,6 +161,15 @@ function saveProviderState(keys, defaultModel) {
 }
 
 // ---------- webview view ----------
+// transcript events that get replayed when the webview is rebuilt
+const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "system", "modeChanged", "turnEnd"]);
+
+function chatsDir() {
+  const dir = path.join(os.homedir(), ".koder", "chats");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 class AgentViewProvider {
   constructor(context) {
     this.context = context;
@@ -168,6 +177,10 @@ class AgentViewProvider {
     this.sessionId = null;
     this.permissionWaiters = new Map();
     this.log = vscode.window.createOutputChannel("Koder Agent");
+    this.transcript = [];
+    this.chatId = `chat-${Date.now()}`;
+    this.chatTitle = null;
+    this.mode = "review";
   }
 
   resolveWebviewView(view) {
@@ -178,7 +191,39 @@ class AgentViewProvider {
   }
 
   post(msg) {
+    if (REPLAYABLE.has(msg.type)) {
+      this.transcript.push(msg);
+      this.persistSoon();
+    }
     this.view?.webview.postMessage(msg);
+  }
+
+  persistSoon() {
+    clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => {
+      if (this.transcript.length === 0) return;
+      const file = path.join(chatsDir(), `${this.chatId}.json`);
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ id: this.chatId, title: this.chatTitle ?? "Untitled chat", updatedAt: Date.now(), mode: this.mode, events: this.transcript }),
+      );
+    }, 400);
+  }
+
+  listChats() {
+    try {
+      return fs.readdirSync(chatsDir())
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => {
+          try {
+            const j = JSON.parse(fs.readFileSync(path.join(chatsDir(), f), "utf8"));
+            return { id: j.id, title: j.title, updatedAt: j.updatedAt };
+          } catch { return null; }
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 50);
+    } catch { return []; }
   }
 
   async ensureAgent() {
@@ -205,6 +250,7 @@ class AgentViewProvider {
       },
       onNotification: (method, params) => {
         if (method === "session/update") this.onSessionUpdate(params.update);
+        if (method === "koder/plan_saved") this.onPlanSaved(params.path);
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -224,6 +270,13 @@ class AgentViewProvider {
       case "agent_message_chunk":
         if (u.content?.type === "text") this.post({ type: "chunk", text: u.content.text });
         break;
+      case "agent_thought_chunk":
+        if (u.content?.type === "text") this.post({ type: "thought", text: u.content.text });
+        break;
+      case "current_mode_update":
+        this.mode = u.currentModeId;
+        this.post({ type: "modeChanged", mode: u.currentModeId, auto: true });
+        break;
       case "tool_call":
         this.post({ type: "tool", id: u.toolCallId, title: u.title, kind: u.kind, status: u.status });
         break;
@@ -231,6 +284,14 @@ class AgentViewProvider {
         this.post({ type: "toolUpdate", id: u.toolCallId, status: u.status });
         break;
     }
+  }
+
+  async onPlanSaved(planPath) {
+    this.post({ type: "system", text: `Plan saved: ${path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", planPath)}` });
+    try {
+      const doc = await vscode.workspace.openTextDocument(planPath);
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.One });
+    } catch {}
   }
 
   onPermissionRequest(params) {
@@ -252,6 +313,8 @@ class AgentViewProvider {
     switch (m.type) {
       case "send": {
         if (!(await this.ensureAgent())) return;
+        this.post({ type: "user", text: m.text });
+        if (!this.chatTitle) this.chatTitle = m.text.slice(0, 48);
         this.post({ type: "turnStart" });
         try {
           const res = await this.acp.request("session/prompt", {
@@ -277,6 +340,37 @@ class AgentViewProvider {
         if (this.acp && this.sessionId) {
           await this.acp.request("koder/set_model", { sessionId: this.sessionId, model: m.model });
         }
+        break;
+      case "setMode":
+        this.mode = m.mode;
+        if (this.acp && this.sessionId) {
+          await this.acp.request("session/set_mode", { sessionId: this.sessionId, modeId: m.mode });
+        }
+        this.post({ type: "modeChanged", mode: m.mode, auto: false });
+        break;
+      case "history":
+        this.view?.webview.postMessage({ type: "historyList", chats: this.listChats() });
+        break;
+      case "loadChat": {
+        try {
+          const j = JSON.parse(fs.readFileSync(path.join(chatsDir(), `${m.id}.json`), "utf8"));
+          this.chatId = j.id;
+          this.chatTitle = j.title;
+          this.transcript = j.events ?? [];
+          this.view?.webview.postMessage({ type: "replay", events: this.transcript });
+          this.view?.webview.postMessage({ type: "system", text: "Restored chat (view only — the agent's working memory starts fresh)." });
+          if (this.acp) {
+            const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+            const s = await this.acp.request("session/new", { cwd, mcpServers: [] });
+            this.sessionId = s.sessionId;
+          }
+        } catch (err) {
+          this.view?.webview.postMessage({ type: "system", text: `could not load chat: ${err.message}` });
+        }
+        break;
+      }
+      case "replayRequest":
+        if (this.transcript.length) this.view?.webview.postMessage({ type: "replay", events: this.transcript });
         break;
       case "cancel":
         this.acp?.notify("session/cancel", { sessionId: this.sessionId });
@@ -325,12 +419,16 @@ class AgentViewProvider {
   }
 
   async newChat() {
+    this.transcript = [];
+    this.chatId = `chat-${Date.now()}`;
+    this.chatTitle = null;
+    this.mode = "review";
     if (this.acp) {
       const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
       const s = await this.acp.request("session/new", { cwd, mcpServers: [] });
       this.sessionId = s.sessionId;
     }
-    this.post({ type: "clear" });
+    this.view?.webview.postMessage({ type: "clear" });
   }
 
   html(webview) {
@@ -342,38 +440,59 @@ class AgentViewProvider {
     };
     const css = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "panel.css")) + "?v=" + stamp("panel.css");
     const js = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "panel.js")) + "?v=" + stamp("panel.js");
+    const mdjs = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "markdown.js")) + "?v=" + stamp("markdown.js");
+    const mdcss = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "markdown.css")) + "?v=" + stamp("markdown.css");
+    const hasMd = fs.existsSync(path.join(this.context.extensionPath, "media", "markdown.js"));
     return `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src ${webview.cspSource}; font-src ${webview.cspSource};">
 <link rel="stylesheet" href="${css}">
+${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
 </head><body>
 <div id="app">
   <div id="settingsPanel" hidden>
     <div class="settings-head">
-      <span>AI Providers · BYOK</span>
-      <button id="settingsClose" class="ghost">✕</button>
+      <span>AI Providers</span>
+      <button id="settingsClose" class="ghost" title="Close">&#10005;</button>
     </div>
     <div class="settings-body" id="settingsBody"></div>
     <div class="settings-foot">
       <button id="settingsFile" class="ghost">Edit JSON</button>
       <div class="spacer"></div>
-      <button id="settingsSave">Save keys</button>
+      <button id="settingsSave">Save</button>
     </div>
+  </div>
+  <div id="historyPanel" hidden>
+    <div class="settings-head">
+      <span>Chat history</span>
+      <button id="historyClose" class="ghost" title="Close">&#10005;</button>
+    </div>
+    <div class="settings-body" id="historyBody"></div>
+  </div>
+  <div id="topbar">
+    <div id="modes" role="tablist">
+      <button data-mode="review" class="mode active" title="Read-only: research and produce a plan">Review</button>
+      <button data-mode="approve" class="mode" title="Edits ask for approval">Approve</button>
+      <button data-mode="auto" class="mode" title="Agent acts without asking">Auto</button>
+    </div>
+    <div class="spacer"></div>
+    <button id="historyBtn" class="ghost" title="Chat history">&#9776;</button>
   </div>
   <div id="messages"></div>
   <div id="composer">
     <div id="permissionBar" hidden></div>
-    <textarea id="input" rows="3" placeholder="Ask Koder to build, fix, or explain anything…"></textarea>
+    <textarea id="input" rows="3" placeholder="Describe a task. Review mode plans first; Approve executes with your OK."></textarea>
     <div id="toolbar">
       <select id="model" title="Model"></select>
       <div class="spacer"></div>
-      <button id="settings" class="ghost" title="Configure providers (BYOK)">⚙</button>
+      <button id="settings" class="ghost" title="Configure providers">&#8942;</button>
       <button id="stop" class="ghost" hidden>Stop</button>
       <button id="send">Send</button>
     </div>
   </div>
 </div>
+${hasMd ? `<script src="${mdjs}"></script>` : ""}
 <script src="${js}"></script>
 </body></html>`;
   }

@@ -10,8 +10,11 @@ import { OpenAICompatAdapter } from "./providers/openai-compat.js";
 import type { ChatAdapter, ChatMessage, ContentBlock } from "./providers/types.js";
 import { TOOLS, toolByName, type ToolSpec } from "./tools.js";
 
+export type AgentMode = "review" | "approve" | "auto";
+
 export interface LoopCallbacks {
   onText(text: string): void;
+  onThinking(text: string): void;
   onToolStart(call: { id: string; name: string; input: any; kind: ToolSpec["kind"]; title: string }): void;
   onToolEnd(call: { id: string; output: string; isError: boolean }): void;
   /** Ask the client whether a dangerous tool may run. */
@@ -21,13 +24,13 @@ export interface LoopCallbacks {
 export interface AgentSession {
   cwd: string;
   model?: string;
+  mode: AgentMode;
   history: ChatMessage[];
 }
 
 const MAX_ITERATIONS = 60;
 
-function systemPrompt(cwd: string): string {
-  return `You are Koder, the agent inside the Koder IDE — an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.
+const BASE_PROMPT = (cwd: string) => `You are Koder, the agent inside the Koder IDE — an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.
 
 Workspace: ${cwd}
 
@@ -37,9 +40,25 @@ Operating principles:
 3. VERIFY before declaring done — this is non-negotiable. If the project has a typecheck/lint/test/build command (check package.json scripts, Makefile, etc.), run the fastest relevant one after your edits and fix what breaks. Never claim something works without having checked.
 4. Report honestly: if a check fails or you skipped verification, say so plainly.
 5. Prefer edit_file for surgical changes; write_file only for new files or full rewrites.
-6. Keep responses tight: lead with what you did/found; no filler.
+6. Keep responses tight: lead with what you did/found; no filler. Never use emoji.`;
 
-You have: read_file, write_file, edit_file, list_dir, grep, bash. bash runs zsh in the workspace.`;
+function systemPrompt(cwd: string, mode: AgentMode): string {
+  const base = BASE_PROMPT(cwd);
+  if (mode === "review") {
+    return `${base}
+
+CURRENT MODE: REVIEW-FIRST (read-only). You may ONLY read, list, and search — write_file, edit_file, and bash are disabled. Your job this turn:
+1. Research the codebase thoroughly for the user's request.
+2. End your reply with a complete implementation plan in markdown under the heading "# Plan" — files to touch, ordered steps, risks, and how to verify.
+Do not attempt any modification; the plan will be saved automatically and the session moves to Approve mode next.
+
+You have: read_file, list_dir, grep.`;
+  }
+  return `${base}
+
+You have: read_file, write_file, edit_file, list_dir, grep, bash. bash runs zsh in the workspace.${
+    mode === "auto" ? "\nCURRENT MODE: AUTO — your actions are pre-approved; still follow the verify principle rigorously." : ""
+  }`;
 }
 
 function makeAdapter(providerKind: "anthropic" | "openai", providerCfg: any): ChatAdapter {
@@ -68,6 +87,9 @@ export async function runPrompt(
   const { provider, model } = resolveModel(cfg, session.model);
   const adapter = makeAdapter(provider.kind, provider);
 
+  const allowedTools =
+    session.mode === "review" ? TOOLS.filter((t) => !t.dangerous) : TOOLS;
+
   session.history.push({ role: "user", content: [{ type: "text", text: userText }] });
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
@@ -75,11 +97,12 @@ export async function runPrompt(
 
     const result = await adapter.runTurn({
       model,
-      system: systemPrompt(session.cwd),
+      system: systemPrompt(session.cwd, session.mode),
       messages: session.history,
-      tools: TOOLS.map(({ name, description, input_schema }) => ({ name, description, input_schema })),
+      tools: allowedTools.map(({ name, description, input_schema }) => ({ name, description, input_schema })),
       signal,
       onText: cb.onText,
+      onThinking: cb.onThinking,
     });
 
     const assistantBlocks: ContentBlock[] = [];
@@ -105,7 +128,9 @@ export async function runPrompt(
       cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
 
       let allowed = true;
-      if (spec.dangerous) {
+      if (spec.dangerous && session.mode === "review") {
+        allowed = false; // hard gate: review mode never modifies anything
+      } else if (spec.dangerous && session.mode !== "auto") {
         allowed = await cb.onPermission({ id: tc.id, name: tc.name, input: tc.input, title, kind: spec.kind });
       }
       if (!allowed) {

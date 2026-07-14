@@ -53,6 +53,9 @@ export class OpenAICompatAdapter implements ChatAdapter {
         text += delta.content;
         req.onText?.(delta.content);
       }
+      // DeepSeek-style reasoning_content / OpenRouter-style reasoning deltas
+      const thinking = delta.reasoning_content ?? delta.reasoning;
+      if (typeof thinking === "string" && thinking) req.onThinking?.(thinking);
       for (const tc of delta.tool_calls ?? []) {
         const slot = (calls[tc.index] ??= { id: "", name: "", args: "" });
         if (tc.id) slot.id = tc.id;

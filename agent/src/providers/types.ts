@@ -37,6 +37,8 @@ export interface TurnRequest {
   signal?: AbortSignal;
   /** streamed text deltas for live UI */
   onText?: (text: string) => void;
+  /** streamed reasoning/thinking deltas, when the model emits them */
+  onThinking?: (text: string) => void;
 }
 
 export interface ChatAdapter {

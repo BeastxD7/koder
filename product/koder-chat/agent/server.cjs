@@ -8,6 +8,8 @@ var __export = (target, all) => {
 
 // src/server.ts
 var import_node_crypto = require("node:crypto");
+var import_node_fs2 = require("node:fs");
+var import_node_path3 = require("node:path");
 var import_node_stream = require("node:stream");
 
 // node_modules/@agentclientprotocol/sdk/dist/schema/index.js
@@ -18167,6 +18169,8 @@ var AnthropicAdapter = class {
           if (ev.delta?.type === "text_delta") {
             text += ev.delta.text;
             req.onText?.(ev.delta.text);
+          } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+            req.onThinking?.(ev.delta.thinking);
           } else if (ev.delta?.type === "input_json_delta" && partialJson[ev.index]) {
             partialJson[ev.index].json += ev.delta.partial_json;
           }
@@ -18257,6 +18261,8 @@ var OpenAICompatAdapter = class {
         text += delta.content;
         req.onText?.(delta.content);
       }
+      const thinking = delta.reasoning_content ?? delta.reasoning;
+      if (typeof thinking === "string" && thinking) req.onThinking?.(thinking);
       for (const tc of delta.tool_calls ?? []) {
         const slot = calls[tc.index] ??= { id: "", name: "", args: "" };
         if (tc.id) slot.id = tc.id;
@@ -18478,8 +18484,7 @@ var toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // src/loop.ts
 var MAX_ITERATIONS = 60;
-function systemPrompt(cwd) {
-  return `You are Koder, the agent inside the Koder IDE \u2014 an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.
+var BASE_PROMPT = (cwd) => `You are Koder, the agent inside the Koder IDE \u2014 an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.
 
 Workspace: ${cwd}
 
@@ -18489,9 +18494,22 @@ Operating principles:
 3. VERIFY before declaring done \u2014 this is non-negotiable. If the project has a typecheck/lint/test/build command (check package.json scripts, Makefile, etc.), run the fastest relevant one after your edits and fix what breaks. Never claim something works without having checked.
 4. Report honestly: if a check fails or you skipped verification, say so plainly.
 5. Prefer edit_file for surgical changes; write_file only for new files or full rewrites.
-6. Keep responses tight: lead with what you did/found; no filler.
+6. Keep responses tight: lead with what you did/found; no filler. Never use emoji.`;
+function systemPrompt(cwd, mode) {
+  const base = BASE_PROMPT(cwd);
+  if (mode === "review") {
+    return `${base}
 
-You have: read_file, write_file, edit_file, list_dir, grep, bash. bash runs zsh in the workspace.`;
+CURRENT MODE: REVIEW-FIRST (read-only). You may ONLY read, list, and search \u2014 write_file, edit_file, and bash are disabled. Your job this turn:
+1. Research the codebase thoroughly for the user's request.
+2. End your reply with a complete implementation plan in markdown under the heading "# Plan" \u2014 files to touch, ordered steps, risks, and how to verify.
+Do not attempt any modification; the plan will be saved automatically and the session moves to Approve mode next.
+
+You have: read_file, list_dir, grep.`;
+  }
+  return `${base}
+
+You have: read_file, write_file, edit_file, list_dir, grep, bash. bash runs zsh in the workspace.${mode === "auto" ? "\nCURRENT MODE: AUTO \u2014 your actions are pre-approved; still follow the verify principle rigorously." : ""}`;
 }
 function makeAdapter(providerKind, providerCfg) {
   return providerKind === "anthropic" ? new AnthropicAdapter(providerCfg) : new OpenAICompatAdapter(providerCfg);
@@ -18518,16 +18536,18 @@ async function runPrompt(session, userText, cb, signal) {
   const cfg = loadConfig();
   const { provider, model } = resolveModel(cfg, session.model);
   const adapter = makeAdapter(provider.kind, provider);
+  const allowedTools = session.mode === "review" ? TOOLS.filter((t) => !t.dangerous) : TOOLS;
   session.history.push({ role: "user", content: [{ type: "text", text: userText }] });
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     if (signal?.aborted) return "cancelled";
     const result = await adapter.runTurn({
       model,
-      system: systemPrompt(session.cwd),
+      system: systemPrompt(session.cwd, session.mode),
       messages: session.history,
-      tools: TOOLS.map(({ name, description, input_schema }) => ({ name, description, input_schema })),
+      tools: allowedTools.map(({ name, description, input_schema }) => ({ name, description, input_schema })),
       signal,
-      onText: cb.onText
+      onText: cb.onText,
+      onThinking: cb.onThinking
     });
     const assistantBlocks = [];
     if (result.text) assistantBlocks.push({ type: "text", text: result.text });
@@ -18549,7 +18569,9 @@ async function runPrompt(session, userText, cb, signal) {
       }
       cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
       let allowed = true;
-      if (spec.dangerous) {
+      if (spec.dangerous && session.mode === "review") {
+        allowed = false;
+      } else if (spec.dangerous && session.mode !== "auto") {
         allowed = await cb.onPermission({ id: tc.id, name: tc.name, input: tc.input, title, kind: spec.kind });
       }
       if (!allowed) {
@@ -18605,14 +18627,34 @@ async function probeProvider(providerId, overrideKey) {
 
 // src/server.ts
 var sessions = /* @__PURE__ */ new Map();
+var MODES = [
+  { id: "review", name: "Review", description: "Read-only: research the codebase and produce an implementation plan" },
+  { id: "approve", name: "Approve", description: "Edits and commands ask for your approval" },
+  { id: "auto", name: "Auto", description: "The agent acts without asking" }
+];
+function savePlan(cwd, text) {
+  const dir = (0, import_node_path3.join)(cwd, ".koder", "plans");
+  (0, import_node_fs2.mkdirSync)(dir, { recursive: true });
+  const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  const file2 = (0, import_node_path3.join)(dir, `plan-${stamp}.md`);
+  (0, import_node_fs2.writeFileSync)(file2, text.trim() + "\n");
+  return file2;
+}
 agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
   protocolVersion: PROTOCOL_VERSION,
   agentCapabilities: { loadSession: false }
 })).onRequest("authenticate", async () => ({})).onRequest("session/new", async (ctx) => {
   const sessionId = (0, import_node_crypto.randomUUID)();
-  sessions.set(sessionId, { cwd: ctx.params.cwd, history: [] });
-  return { sessionId };
-}).onRequest("session/set_mode", async () => ({})).onRequest("koder/models", (v) => v, async () => {
+  sessions.set(sessionId, { cwd: ctx.params.cwd, history: [], mode: "review" });
+  return {
+    sessionId,
+    modes: { currentModeId: "review", availableModes: MODES }
+  };
+}).onRequest("session/set_mode", async (ctx) => {
+  const s = sessions.get(ctx.params.sessionId);
+  if (s && MODES.some((m) => m.id === ctx.params.modeId)) s.mode = ctx.params.modeId;
+  return {};
+}).onRequest("koder/models", (v) => v, async () => {
   const cfg = loadConfig();
   return { defaultModel: cfg.defaultModel, providers: availableProviders(cfg) };
 }).onRequest(
@@ -18636,12 +18678,17 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
   session.pending = abort;
   const text = prompt.filter((b) => b.type === "text").map((b) => b.text).join("\n");
   const notify = (update) => ctx.client.notify(methods.client.session.update, { sessionId, update });
+  let finalText = "";
   try {
     const stop = await runPrompt(
       session,
       text,
       {
-        onText: (t) => void notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } }),
+        onText: (t) => {
+          finalText += t;
+          void notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } });
+        },
+        onThinking: (t) => void notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: t } }),
         onToolStart: (c) => void notify({
           sessionUpdate: "tool_call",
           toolCallId: c.id,
@@ -18670,6 +18717,12 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
       },
       abort.signal
     );
+    if (session.mode === "review" && !abort.signal.aborted && finalText.trim()) {
+      const planPath = savePlan(session.cwd, finalText);
+      session.mode = "approve";
+      await notify({ sessionUpdate: "current_mode_update", currentModeId: "approve" });
+      await ctx.client.notify("koder/plan_saved", { sessionId, path: planPath });
+    }
     return { stopReason: abort.signal.aborted ? "cancelled" : stop };
   } catch (err) {
     if (abort.signal.aborted) return { stopReason: "cancelled" };
@@ -18677,7 +18730,7 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: `
 
-\u26A0\uFE0F ${err?.message ?? err}` }
+Error: ${err?.message ?? err}` }
     });
     return { stopReason: "refusal" };
   } finally {
