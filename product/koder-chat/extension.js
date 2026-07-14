@@ -201,7 +201,11 @@ class AgentViewProvider {
   persistSoon() {
     clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
-      if (this.transcript.length === 0) return;
+      // never persist a chat that has no real user message yet — a session
+      // spawned/opened but never prompted (or one that only hit a "system"
+      // error/notice before the user typed anything) must not show up in
+      // history as an "Untitled chat"
+      if (!this.transcript.some((e) => e.type === "user")) return;
       const title =
         this.chatTitle ??
         this.transcript.find((e) => e.type === "user")?.text?.slice(0, 48) ??
@@ -228,10 +232,13 @@ class AgentViewProvider {
         .map((f) => {
           try {
             const j = JSON.parse(fs.readFileSync(path.join(chatsDir(), f), "utf8"));
+            const userEvent = j.events?.find((e) => e.type === "user");
+            // stale/leftover chats with no real prompt (e.g. from before this
+            // fix, or a system-error-only session) shouldn't show up at all
+            if (!userEvent) return null;
             let title = j.title;
             if (!title || title === "Untitled chat") {
-              // backfill titles for chats saved before title derivation existed
-              title = j.events?.find((e) => e.type === "user")?.text?.slice(0, 48) ?? "Untitled chat";
+              title = userEvent.text?.slice(0, 48) ?? "Untitled chat";
             }
             return { id: j.id, title, updatedAt: j.updatedAt };
           } catch { return null; }
@@ -508,9 +515,23 @@ class AgentViewProvider {
         }
         break;
       }
-      case "boot":
-        this.ensureAgent();
+      case "boot": {
+        // Do NOT spawn the agent runtime just because the panel loaded —
+        // that used to call ensureAgent() unconditionally on every webview
+        // boot, which spun up the runtime process and issued session/new
+        // before the user had typed anything. If that spawn (or the
+        // session it opened) ever emitted so much as a "system" notice, it
+        // would land in the transcript and get persisted as a titleless
+        // "Untitled chat". Instead, populate the model dropdown from a
+        // cheap local read of ~/.koder/providers.json (no process spawn),
+        // and defer the real runtime connection + live model list to the
+        // first actual "send" (which already calls ensureAgent()) or to
+        // opening the settings sheet.
+        const state = readProviderState();
+        const providers = PROVIDER_IDS.filter((id) => state.set[id]);
+        this.post({ type: "ready", models: { defaultModel: state.defaultModel, providers } });
         break;
+      }
     }
   }
 
