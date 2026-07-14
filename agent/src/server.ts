@@ -26,6 +26,12 @@ const MODES = [
   { id: "review", name: "Review", description: "Read-only: research the codebase and produce an implementation plan" },
   { id: "approve", name: "Approve", description: "Edits and commands ask for your approval" },
   { id: "auto", name: "Auto", description: "The agent acts without asking" },
+  {
+    id: "royal",
+    name: "Royal",
+    description:
+      "Full autonomy, full machine access, no restrictions — no safety floor, no permission prompts. Actions are logged and checkpointed, not blocked.",
+  },
 ];
 
 /** Save the review-mode output as a plan file; returns its path. */

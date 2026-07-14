@@ -1,5 +1,5 @@
 /** Koder agent tool set v1 — minimal composable surface (mini-SWE-agent lesson). */
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -22,6 +22,134 @@ function resolveShell(): string | undefined {
   return undefined; // falls back to /bin/sh, always present on POSIX
 }
 const SHELL = resolveShell();
+
+/**
+ * Kill-switch hardening for `bash`: plain `exec({ signal })` sends exactly
+ * one SIGTERM to the direct child and never escalates — a child that ignores
+ * SIGTERM (or a grandchild it spawned itself, e.g. a dev server a build
+ * script starts) survives `session/cancel` indefinitely.
+ *
+ * This uses `child_process.spawn` directly (NOT `exec`) with `detached:
+ * true`, which makes the child its own process-GROUP leader so
+ * cancellation/timeout can target the whole group via `process.kill(-pid,
+ * sig)`, then escalates SIGTERM → SIGKILL after a short grace period if
+ * anything in that group is still alive. This is what makes `session/cancel`
+ * (`server.ts`) an actual kill switch rather than a best-effort request,
+ * regardless of mode — Royal mode being the hardest one to stop unattended
+ * would be exactly backwards.
+ *
+ * `spawn`, not `exec`, is load-bearing here, verified empirically before
+ * committing to this design: `exec(cmd, { detached: true })` does NOT
+ * actually give the child its own process group — `exec` builds a fixed set
+ * of options for the underlying `spawn` call and does not forward arbitrary
+ * extra keys through, so `detached` is silently dropped and the child stays
+ * in the parent's group (confirmed via `ps -o pid,pgid` on the running
+ * child: PGID matched the parent, not the child's own PID). `spawn(shell,
+ * ["-c", command], { detached: true })` gives the correct PGID-equals-PID
+ * group-leader shape. This is the reason a hand-rolled shell invocation
+ * (`spawn(shellPath, ["-c", command], ...)`) replaces `execAsync` here
+ * instead of trying to coerce more options into `exec`.
+ */
+const KILL_GRACE_MS = 2000;
+
+function execWithKillEscalation(
+  command: string,
+  opts: { cwd: string; signal?: AbortSignal; timeoutMs: number; maxBuffer: number; shell?: string },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const isWin = process.platform === "win32";
+    const shellPath = opts.shell ?? (isWin ? undefined : "/bin/sh"); // matches resolveShell()'s own POSIX fallback comment
+    const child = isWin
+      ? spawn(command, { cwd: opts.cwd, shell: true, windowsHide: true })
+      : spawn(shellPath!, ["-c", command], { cwd: opts.cwd, detached: true });
+
+    let stdout = "";
+    let stderr = "";
+    let overBuffer = false;
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+
+    function killGroup(signal: NodeJS.Signals) {
+      if (!child.pid) return;
+      try {
+        // Negative pid = "the whole process group" on POSIX (requires the
+        // detached:true group-leader spawn above). Windows has no equivalent
+        // via process.kill, so fall back to killing the direct child only —
+        // matches this tool's pre-existing Windows behavior, not a regression.
+        if (isWin) child.kill(signal);
+        else process.kill(-child.pid, signal);
+      } catch {
+        // already exited, or the group is already gone — nothing to do
+      }
+    }
+
+    function escalate() {
+      killGroup("SIGTERM");
+      killTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS);
+    }
+
+    function cleanup() {
+      if (killTimer) clearTimeout(killTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (onAbort && opts.signal) opts.signal.removeEventListener("abort", onAbort);
+    }
+
+    function trackOutput(chunk: Buffer, stream: "stdout" | "stderr") {
+      if (overBuffer) return;
+      const s = chunk.toString("utf8");
+      if (stream === "stdout") stdout += s;
+      else stderr += s;
+      // Matches Node's own `exec` maxBuffer semantics: a PER-STREAM cap, not combined.
+      if (stdout.length > opts.maxBuffer || stderr.length > opts.maxBuffer) {
+        overBuffer = true;
+        escalate(); // stop the process instead of buffering unbounded output
+      }
+    }
+    child.stdout?.on("data", (c) => trackOutput(c, "stdout"));
+    child.stderr?.on("data", (c) => trackOutput(c, "stderr"));
+
+    child.on("error", (err: any) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      err.stdout = stdout;
+      err.stderr = stderr;
+      reject(err);
+    });
+
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (overBuffer) {
+        const err: any = new Error(`stdout/stderr maxBuffer (${opts.maxBuffer} bytes) exceeded`);
+        err.code = code;
+        err.signal = signal;
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+      } else if (code === 0) {
+        resolvePromise({ stdout, stderr });
+      } else {
+        const err: any = new Error(signal ? `command killed by ${signal}` : `command failed with exit code ${code}`);
+        err.code = code ?? undefined;
+        err.signal = signal ?? undefined;
+        err.stdout = stdout;
+        err.stderr = stderr;
+        reject(err);
+      }
+    });
+
+    if (opts.signal) {
+      onAbort = () => escalate();
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    timeoutTimer = setTimeout(escalate, opts.timeoutMs);
+  });
+}
 
 /**
  * Head+tail truncation instead of pure head truncation: build/test output
@@ -194,10 +322,10 @@ export const TOOLS: ToolSpec[] = [
     },
     async run(input, cwd, signal) {
       try {
-        const { stdout, stderr } = await execAsync(input.command, {
+        const { stdout, stderr } = await execWithKillEscalation(input.command, {
           cwd,
           signal,
-          timeout: input.timeout_ms ?? 120_000,
+          timeoutMs: input.timeout_ms ?? 120_000,
           maxBuffer: 4 * 1024 * 1024,
           shell: SHELL,
         });

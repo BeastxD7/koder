@@ -2,6 +2,7 @@
 // a minimal ndjson JSON-RPC client speaks ACP to the Koder Agent Runtime.
 const vscode = require("vscode");
 const cp = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -282,6 +283,92 @@ function feedbackFile(date = new Date()) {
   return path.join(feedbackDir(), `${ym}.jsonl`);
 }
 
+// ---------- Royal mode informed-consent gate (per workspace, not per session) ----------
+// Royal mode bypasses the destructive-command floor entirely (agent/src/floor.ts,
+// agent/src/loop.ts) — no blocking, no permission prompts, full machine access.
+// The one thing standing between that and a silent surprise is this one-time
+// confirmation, shown once per workspace (not once per app install, not once
+// per chat session — switching machines or projects re-asks). The ack is
+// stored outside the workspace tree (~/.koder/, not <workspace>/.koder/) for
+// the same reason royal-audit/checkpoints live outside it: a marker the agent
+// itself could edit via a Royal-mode tool call would defeat the point of
+// "informed consent" being a human's decision, not the agent's.
+function royalConsentDir() {
+  const dir = path.join(os.homedir(), ".koder", "royal-consent");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function royalConsentPath(cwd) {
+  const hash = crypto.createHash("sha256").update(cwd || "").digest("hex").slice(0, 16);
+  return path.join(royalConsentDir(), `${hash}.json`);
+}
+
+function hasRoyalConsent(cwd) {
+  try {
+    return fs.existsSync(royalConsentPath(cwd));
+  } catch {
+    return false;
+  }
+}
+
+function grantRoyalConsent(cwd) {
+  try {
+    fs.writeFileSync(royalConsentPath(cwd), JSON.stringify({ cwd, consentedAt: new Date().toISOString() }, null, 2));
+  } catch {
+    // best-effort — a write failure here shouldn't hard-block enabling Royal;
+    // worst case the user is asked to confirm again next time
+  }
+}
+
+// ---------- Remote Access (LAN mobile view, view-only — docs/research/10) ----------
+// Off by default; only ever starts from the "Koder: Enable Remote Access"
+// command below. The server itself lives in remote-server.js (plain Node
+// http, no vscode dependency, independently unit-testable); this file's only
+// job is the VS Code-side plumbing: the command, the one-time warning, and
+// the QR/pairing-info panel.
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function remoteAccessQrHtml(info, workspaceName) {
+  const { renderQrSvg } = require("./remote-qr.js");
+  const svg = renderQrSvg(info.url, 5);
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0e1116; color: #c8cede;
+    padding: 32px 24px; text-align: center; }
+  h2 { font-size: 15px; margin: 0 0 6px; color: #fff; }
+  .ws { color: #8a93a8; font-size: 12px; margin-bottom: 18px; }
+  .qr { background: #fff; display: inline-block; padding: 16px; border-radius: 14px; }
+  .qr svg { display: block; }
+  .url { font-family: "SF Mono", Menlo, monospace; font-size: 12px; word-break: break-all; margin-top: 18px;
+    background: rgba(255,255,255,0.06); padding: 10px 12px; border-radius: 8px; user-select: all; display: inline-block; }
+  .warn { color: #ffb454; font-size: 12px; margin: 20px auto 0; max-width: 380px; line-height: 1.5; }
+  .stop { color: #8a93a8; font-size: 11.5px; margin-top: 10px; }
+</style></head><body>
+  <h2>Scan to view and control this chat from your phone</h2>
+  <div class="ws">${escapeHtml(workspaceName)} &middot; same WiFi network required &middot; full control</div>
+  <div class="qr">${svg}</div>
+  <div class="url">${escapeHtml(info.url)}</div>
+  <div class="warn">Anyone who scans this code or gets this link can watch this chat live — including file paths and
+    tool output — AND send prompts, approve/deny permission requests, and switch modes, exactly as if they were
+    sitting at this keyboard, until you turn Remote Access off. Don't share it outside a network you trust.</div>
+  <div class="stop">Run &ldquo;Koder: Disable Remote Access&rdquo; from the command palette to stop and invalidate this link.</div>
+</body></html>`;
+}
+
+function showRemoteAccessPanel(info, workspaceName) {
+  const panel = vscode.window.createWebviewPanel(
+    "koderRemoteAccess",
+    "Koder Remote Access",
+    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+    { enableScripts: false },
+  );
+  panel.webview.html = remoteAccessQrHtml(info, workspaceName);
+  return panel;
+}
+
 /** Best-effort text extraction from a tool_call_update's ACP `content` array. */
 function extractToolOutputText(u) {
   try {
@@ -304,6 +391,19 @@ class AgentViewProvider {
     this.chatTitle = null;
     this.mode = "review";
     this.currentModel = null; // best-effort, for feedback-log context only
+    this.remote = null; // RemoteServer instance, only set while "Koder: Enable Remote Access" is on
+    this.turnInProgress = false; // set for the duration of a session/prompt turn — see sendPrompt(); the one guard
+    // shared by the desktop composer and the phone's POST /control/send so the two can't race each other into two
+    // concurrent session/prompt calls (docs/research/10-remote-control.md Phase B, race-handling item).
+  }
+
+  /** Snapshot handed to a freshly (re)connecting phone — see remote-server.js's GET /state. */
+  remoteSnapshot() {
+    return {
+      workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? "Koder",
+      mode: this.mode,
+      transcript: this.transcript,
+    };
   }
 
   resolveWebviewView(view) {
@@ -319,6 +419,7 @@ class AgentViewProvider {
       this.persistSoon();
     }
     this.view?.webview.postMessage(msg);
+    this.remote?.broadcast(msg); // Remote Access mirror — see remote-server.js
   }
 
   persistSoon() {
@@ -526,23 +627,37 @@ class AgentViewProvider {
    * pure text-assembly step — no protocol/runtime changes.
    */
   async sendPrompt(text, attachments = []) {
+    // Race guard (docs/research/10 Phase B): the desktop composer and the
+    // phone's POST /control/send both funnel through here. Whichever call
+    // gets here first wins the turn; the other is a silent no-op rather than
+    // a second overlapping session/prompt call corrupting turn state. The
+    // remote server also checks this flag before dispatching (returns 409
+    // to the phone without ever reaching this method), but the check is
+    // repeated here too since this is the one choke point both the webview
+    // and the HTTP handler actually call.
+    if (this.turnInProgress) return;
     if (!(await this.ensureAgent())) return;
     const displayText = text || (attachments.length ? attachments.map((a) => `@${a.path}`).join(" ") : "");
     if (!displayText) return;
-    this.post({ type: "user", text: displayText });
-    if (!this.chatTitle) this.chatTitle = displayText.slice(0, 48);
-    this.post({ type: "turnStart" });
-    const blocks = attachments.map(buildFileBlock).filter(Boolean);
-    const promptText = blocks.length ? `${blocks.join("\n\n")}\n\n${displayText}` : displayText;
+    this.turnInProgress = true;
     try {
-      const res = await this.acp.request("session/prompt", {
-        sessionId: this.sessionId,
-        prompt: [{ type: "text", text: promptText }],
-      });
-      this.post({ type: "turnEnd", stopReason: res.stopReason });
-    } catch (err) {
-      this.post({ type: "system", text: `error: ${err.message}` });
-      this.post({ type: "turnEnd", stopReason: "error" });
+      this.post({ type: "user", text: displayText });
+      if (!this.chatTitle) this.chatTitle = displayText.slice(0, 48);
+      this.post({ type: "turnStart" });
+      const blocks = attachments.map(buildFileBlock).filter(Boolean);
+      const promptText = blocks.length ? `${blocks.join("\n\n")}\n\n${displayText}` : displayText;
+      try {
+        const res = await this.acp.request("session/prompt", {
+          sessionId: this.sessionId,
+          prompt: [{ type: "text", text: promptText }],
+        });
+        this.post({ type: "turnEnd", stopReason: res.stopReason });
+      } catch (err) {
+        this.post({ type: "system", text: `error: ${err.message}` });
+        this.post({ type: "turnEnd", stopReason: "error" });
+      }
+    } finally {
+      this.turnInProgress = false;
     }
   }
 
@@ -616,6 +731,12 @@ class AgentViewProvider {
         if (w) {
           this.permissionWaiters.delete(m.id);
           w(m.optionId);
+          // Tell BOTH the desktop webview and any paired phone that this
+          // permission is now resolved — whichever side answered it first.
+          // Without this, the side that didn't click keeps showing a live
+          // (now-stale) Allow/Deny bar until the next turnEnd. post() fans
+          // out to both (extension.js:post()), so one call covers both UIs.
+          this.post({ type: "permissionResolved", id: m.id });
         }
         break;
       }
@@ -625,13 +746,31 @@ class AgentViewProvider {
           await this.acp.request("koder/set_model", { sessionId: this.sessionId, model: m.model });
         }
         break;
-      case "setMode":
+      case "setMode": {
+        if (m.mode === "royal") {
+          const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+          if (!hasRoyalConsent(cwd)) {
+            const confirmLabel = "I understand — enable Royal mode";
+            const choice = await vscode.window.showWarningMessage(
+              "Royal mode gives the agent full, unrestricted access to this machine: no safety floor, no permission prompts — force-push, deleting files anywhere, running any command all run exactly as issued. Every action is still logged and checkpointed in the background (never blocked) so you have a record and an undo path if something goes wrong, but nothing stops it in the moment.",
+              { modal: true },
+              confirmLabel,
+            );
+            if (choice !== confirmLabel) {
+              // the panel's mode button already flipped optimistically on click — reset it
+              this.post({ type: "modeChanged", mode: this.mode, auto: false });
+              break;
+            }
+            grantRoyalConsent(cwd);
+          }
+        }
         this.mode = m.mode;
         if (this.acp && this.sessionId) {
           await this.acp.request("session/set_mode", { sessionId: this.sessionId, modeId: m.mode });
         }
         this.post({ type: "modeChanged", mode: m.mode, auto: false });
         break;
+      }
       case "history":
         this.view?.webview.postMessage({ type: "historyList", chats: this.listChats() });
         break;
@@ -644,6 +783,12 @@ class AgentViewProvider {
           this.transcript = j.events ?? [];
           this.view?.webview.postMessage({ type: "replay", events: this.transcript });
           this.view?.webview.postMessage({ type: "modeChanged", mode: this.mode, auto: false });
+          // these two bypass post() (they don't go through the transcript-push
+          // path), so mirror them to Remote Access explicitly — otherwise a
+          // paired phone would keep showing the previous chat after the
+          // desktop user switches to a different saved one (doc 10 §0/§5).
+          this.remote?.broadcast({ type: "replay", events: this.transcript });
+          this.remote?.broadcast({ type: "modeChanged", mode: this.mode, auto: false });
           const resumed = await this.ensureAgent(j.sessionId);
           this.view?.webview.postMessage({
             type: "system",
@@ -817,6 +962,7 @@ class AgentViewProvider {
       this.sessionId = s.sessionId;
     }
     this.view?.webview.postMessage({ type: "clear" });
+    this.remote?.broadcast({ type: "clear" }); // bypasses post() — mirror explicitly, see loadChat above
   }
 
   html(webview) {
@@ -863,6 +1009,7 @@ ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
       <button data-mode="review" class="mode active" title="Read-only: research and produce a plan">Review</button>
       <button data-mode="approve" class="mode" title="Edits ask for approval">Approve</button>
       <button data-mode="auto" class="mode" title="Agent acts without asking">Auto</button>
+      <button data-mode="royal" class="mode" title="Full autonomy, full machine access — no floor, no restrictions. Logged and checkpointed, not blocked.">Royal</button>
     </div>
     <div class="spacer"></div>
     <button id="historyBtn" class="ghost" title="Chat history">&#9776;</button>
@@ -919,8 +1066,91 @@ async function activate(context) {
     setTimeout(() => vscode.commands.executeCommand("koder.chatView.focus"), 900);
   }
 
+  // ---------- Remote Access status bar toggle (off by default) ----------
+  const remoteStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 999);
+  const updateRemoteStatus = () => {
+    if (provider.remote?.isRunning) {
+      remoteStatusItem.text = `$(radio-tower) Remote: ${provider.remote.port}`;
+      remoteStatusItem.tooltip = `Koder Remote Access is ON (view + control) — ${provider.remote.info().url}\nClick to show the QR code again.`;
+      remoteStatusItem.command = "koder.showRemoteAccessQr";
+    } else {
+      remoteStatusItem.text = "$(radio-tower) Remote: off";
+      remoteStatusItem.tooltip = "Koder Remote Access — view and control this chat from your phone over WiFi (off by default)";
+      remoteStatusItem.command = "koder.enableRemoteAccess";
+    }
+  };
+  updateRemoteStatus();
+  remoteStatusItem.show();
+
+  let remoteQrPanel = null;
+
+  async function startRemoteAccess() {
+    if (provider.remote?.isRunning) {
+      remoteQrPanel?.dispose();
+      remoteQrPanel = showRemoteAccessPanel(provider.remote.info(), vscode.workspace.workspaceFolders?.[0]?.name ?? "Koder");
+      return;
+    }
+    // This warning was strengthened for Phase B (docs/research/10 §2.4/§3):
+    // a paired phone can now approve/deny permission prompts and send new
+    // prompts, not just watch — full blast radius of the desktop panel
+    // itself, minus BYOK key management. It is re-shown once even to users
+    // who already acked the older view-only wording (distinct globalState
+    // key), because the risk it describes materially changed.
+    if (!context.globalState.get("koder.remoteAccess.controlWarningAcked")) {
+      const choice = await vscode.window.showWarningMessage(
+        "Remote Access starts a small server on your WiFi/LAN so you can view AND control this chat from your " +
+          "phone: a paired phone can watch the conversation live, send new prompts, approve or deny permission " +
+          "requests, and switch modes — exactly as if it were sitting at this keyboard. Anyone who scans the QR " +
+          "code or gets the link gets that full access until you turn Remote Access off — treat it like a " +
+          "password on shared or public WiFi, and only enable this on a network you trust.",
+        { modal: true },
+        "Enable Remote Access",
+      );
+      if (choice !== "Enable Remote Access") return;
+      await context.globalState.update("koder.remoteAccess.controlWarningAcked", true);
+    }
+    const { RemoteServer } = require("./remote-server.js");
+    provider.remote = new RemoteServer({
+      getSnapshot: () => provider.remoteSnapshot(),
+      isBusy: () => provider.turnInProgress,
+      // The phone is just another caller of the exact same dispatch the
+      // desktop webview's postMessage already drives — see remote-server.js
+      // header and docs/research/10-remote-control.md Phase B.
+      onControl: (msg) => provider.onWebviewMessage(msg),
+    });
+    try {
+      const info = await provider.remote.start();
+      updateRemoteStatus();
+      remoteQrPanel?.dispose();
+      remoteQrPanel = showRemoteAccessPanel(info, vscode.workspace.workspaceFolders?.[0]?.name ?? "Koder");
+      remoteQrPanel.onDidDispose(() => { remoteQrPanel = null; });
+      vscode.window.showInformationMessage(`Koder Remote Access is on: ${info.url}`);
+    } catch (err) {
+      provider.remote = null;
+      vscode.window.showErrorMessage(`Could not start Koder Remote Access: ${err.message}`);
+    }
+  }
+
+  function stopRemoteAccess() {
+    if (!provider.remote) {
+      vscode.window.showInformationMessage("Koder Remote Access is already off.");
+      return;
+    }
+    provider.remote.stop();
+    provider.remote = null;
+    updateRemoteStatus();
+    remoteQrPanel?.dispose();
+    remoteQrPanel = null;
+    vscode.window.showInformationMessage("Koder Remote Access is off.");
+  }
+
   context.subscriptions.push(
     statusItem,
+    remoteStatusItem,
+    { dispose: () => provider.remote?.stop() },
+    vscode.commands.registerCommand("koder.enableRemoteAccess", startRemoteAccess),
+    vscode.commands.registerCommand("koder.showRemoteAccessQr", startRemoteAccess),
+    vscode.commands.registerCommand("koder.disableRemoteAccess", stopRemoteAccess),
     vscode.window.registerWebviewViewProvider("koder.chatView", provider, {
       webviewOptions: { retainContextWhenHidden: false },
     }),

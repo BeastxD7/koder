@@ -1,297 +1,244 @@
 # Design: "Royal" Mode — Full Autonomy, OS + Browser Access, Self-Healing (July 2026)
 
-Scope: design only, no implementation. Grounded in `agent/src/loop.ts`, `server.ts`, `tools.ts`, `product/koder-chat/extension.js`, and research docs 01–08 (sandboxing options actually live in `03-oss-building-blocks.md` §5, not 01 — corrected pointer, cited accordingly below). External grounding: Devin (Cognition), OpenHands, Anthropic's Claude Code Auto Mode engineering post, Claude in Chrome's permission model, and the kill-switch/self-healing-memory literature — all fetched fresh for this pass (sources §8).
+Scope: design + Phase A implementation (this revision). Grounded in `agent/src/loop.ts`, `floor.ts`, `checkpoint.ts`, `audit.ts`, `server.ts`, `tools.ts`, `product/koder-chat/extension.js`, and research docs 01–08 (sandboxing options actually live in `03-oss-building-blocks.md` §5, not 01 — corrected pointer, cited accordingly below). External grounding: Devin (Cognition), OpenHands, Anthropic's Claude Code Auto Mode engineering post, Claude in Chrome's permission model, and the kill-switch/self-healing-memory literature — all fetched fresh for the original pass (sources §8).
+
+**Revision note (July 2026, same day): the core thesis below is reversed from the first draft.** The first draft of this doc argued "Royal needs the same restrictions as Auto, enforced as code instead of prompt text, plus more" — i.e. more autonomy demands *stricter* deterministic rails. The product direction is the opposite, and explicit: **Auto is the locked mode. Royal is the dangerous one.** In the user's own words: *"Auto mode should be locked. Royal should be fully bypassable — full machine/OS-level access. Royal should be dangerous, not Auto."* Asked to clarify exactly how far "fully bypassable" goes — zero safety net at all, including no logging/undo? — the answer was a specific, narrower thing: *"Nothing is blocked, nothing asks permission, nothing slows the agent down — but every action is still logged and checkpointed in the background, so if something goes wrong you have a record and an undo button. This costs zero restriction, it's purely a recorder."*
+
+That single sentence is now this doc's spec for Royal mode. Sections §0–§2 are rewritten to state the reversed thesis directly. §3.1 (floor), §3.3 (checkpoint), §3.4 (audit log) are rewritten to describe what Phase A actually built (`agent/src/floor.ts`'s `royalTamperCheck`, `agent/src/checkpoint.ts`, `agent/src/audit.ts`), not what a stricter Royal would have needed. §3.2 (sandboxing tiers) and §4 (OS/browser tools) are kept as *research*, not as Royal's design — see the callouts in each for exactly how they're now scoped (mostly: rejected for Royal, still possibly useful for a future, different, *more* restricted mode this doc does not propose). §5 (self-healing), §8 (sources), and the external-grounding material are unaffected by the reversal and kept as-is. §6 (phased plan) and §7 (pushback) are rewritten to match.
 
 ---
 
-## 0. The core tension, resolved
+## 0. The core tension, resolved — reversed from the original draft
 
-"Zero human intervention during execution" and "safe, trustworthy autonomy" only look contradictory if you conflate two different things:
+The original framing: "zero human intervention" and "safe, trustworthy autonomy" only look contradictory if you conflate two different things — (a) real-time permission blocking, and (b) passive safety rails (logging, checkpointing, a kill switch). The original draft's conclusion was that removing (a) means (b) has to get *stricter*: more logging, mandatory sandboxing, a broader floor, off-device execution by default. That conclusion is not what's being built. The reversal doesn't change the (a)/(b) distinction — it changes which modes get which:
 
-- **(a) Real-time interruption for permission** — a synchronous `await cb.onPermission(...)` that blocks the loop until a human clicks. Royal mode removes this. Full stop.
-- **(b) Safety rails that operate without blocking execution** — sandboxing, audit logging, automatic checkpointing, hard-coded floors, a kill switch, async notification. Royal mode does **not** remove these. It depends on them more than any other mode, because (a) is gone.
+- **Auto is where (a) stays gone but (b) gets load-bearing and strict.** Auto already ran with no permission prompts (`spec.dangerous && session.mode !== "auto"` was always false for auto). What was missing, and now exists (`agent/src/floor.ts`, shipped in commit `9349319`, before this revision), is a deterministic, code-enforced, unconditional floor: `floorCheck()` runs before the mode branch in `loop.ts`'s `runPrompt()`, in `review`/`approve`/`auto` alike, and blocks force-push, history rewrites, `rm -rf` outside the workspace, package publishes, disk-destructive commands, and piped-remote-script execution — regardless of what the model reasons its way into or what a prompt-injected tool output tells it to do. **This is what "Auto is locked" means concretely: `floorCheck()` is unconditional and Auto cannot opt out of it.**
+- **Royal is a new, distinct mode where (a) AND the floor from (b) are both gone.** Royal does not call `floorCheck()` at all — not a looser version of it, not the same rules with more exceptions, *not called*. No permission prompts (matches Auto). No pre-execution blocking of any kind on the user's project. Force-push, `rm -rf` anywhere on disk, history rewrites, package publishes, arbitrary destructive commands: these all run exactly as issued. This is the literal meaning of "fully bypassable — full machine/OS-level access" and "Royal should be dangerous."
+- **What Royal keeps from (b) is deliberately narrow and entirely passive**, per the accepted design: an audit log (§3.4) and a pre-mutation checkpoint (§3.3), both of which *record*, never *block*. Plus a kill switch (§3.5) — not a rail on individual actions, but a way to stop the whole loop. None of these slow the agent down or ask it anything; they run alongside/before the action, not instead of it.
+- **The one narrow exception** is self-tamper protection on the passive net's own storage (§3.1) — not a restriction on what Royal can do to the user's project, but what keeps the audit log and checkpoint history honest. Argued in full in §3.1; it is deliberately not implemented via `floorCheck()`, to keep "Royal does not call `floorCheck()`" a literally, testably true statement.
 
-**The one-line thesis for this whole document: removing the human backstop means the deterministic rails have to get stricter, not looser.** Every design decision below follows from that. Where the user's framing implies "Royal should have fewer restrictions because it's more trusted," the correct engineering answer is usually "Royal needs the same restrictions as Auto, enforced as code instead of prompt text, plus a few new ones that only make sense once there's no human watching."
+**The one-line thesis for this revision: Auto's safety is what makes Royal's danger acceptable to ship at all** — a user who wants zero friction has Auto with a real floor underneath it; Royal is the explicit, consent-gated escape hatch from that floor for people who want the friction gone entirely and are told, plainly, what that costs.
 
 ---
 
-## 1. Where today's floor actually lives — and why it doesn't hold
+## 1. Where today's floor lives now — and what changed since the first draft
 
-This is the load-bearing fact for the whole design. Read `loop.ts:199–210`:
+The load-bearing fact from the first draft was that `auto` mode's floor was prompt text only: `spec.dangerous && session.mode !== "auto"` stayed false, so nothing checked `tc.input.command`, and the "no force-push, no rm -rf outside the workspace" language in `modeBlock()` was just something the model was asked nicely to honor. That gap is closed. `agent/src/floor.ts` now exists (landed independently of this doc, commit `9349319`, before this revision), exporting `floorCheck(name, input, cwd): { blocked, reason? }`, and `loop.ts`'s `runPrompt()` calls it unconditionally, before the mode/permission branch, for `review`, `approve`, and `auto` alike. This is real, tested (`agent/test/floor.test.ts`), and unchanged by this revision — Auto's floor was already correct under the *old* thesis and remains correct, indeed becomes the anchor, under the *new* one.
+
+What this revision adds is the fourth branch: `royal`. In `loop.ts`'s tool-call loop, the allow/deny decision is now two disjoint paths:
 
 ```ts
-let allowed = true;
-if (spec.dangerous && session.mode === "review") {
-  allowed = false; // hard gate: review mode never modifies anything
-} else if (spec.dangerous && session.mode !== "auto") {
-  allowed = await cb.onPermission({ id: tc.id, name: tc.name, input: tc.input, title, kind: spec.kind });
+if (session.mode === "royal") {
+  // No floorCheck(). No onPermission(). Only the narrow tamper guard.
+  const tamper = royalTamperCheck(tc.name, tc.input ?? {});
+  if (tamper.blocked) { allowed = false; /* ... */ }
+  else if (spec.dangerous) { checkpointSha = (await checkpointBeforeMutation(session.cwd, ...)).sha; }
+} else {
+  // Unchanged from before this revision: floorCheck() unconditional, then
+  // review's hard gate, then approve's onPermission(), then auto's silent-allow.
+  const floor = floorCheck(tc.name, tc.input ?? {}, session.cwd);
+  /* ... exactly the logic floor.ts's original comment describes ... */
 }
 ```
 
-In `auto` mode, `spec.dangerous && session.mode !== "auto"` is false, so `allowed` stays `true` unconditionally. **Nothing inspects `tc.input.command`.** The "no force-push, no history rewrites, no rm -rf outside the workspace, no package publishes" floor (`loop.ts:74–77`, inside `modeBlock()`) is a **system-prompt string handed to the model**, not code the harness enforces. The model is trusted to self-censor.
-
-This is the exact failure mode the codebase already names as a threat elsewhere: `ANTI_INJECTION` (`loop.ts:60`) exists precisely because tool output — file contents, command output, a cloned dependency's README — can carry "ignore previous instructions" payloads that override prompt-level rules. A prompt-level floor is bypassable by the same injection vector the prompt already warns about. In `approve` mode this is survivable because a human still sees the `bash $ rm -rf /` permission prompt and says no (`extension.js` permission bar, `onPermissionRequest` at `extension.js:376–389`). In `auto` mode today it is already a soft spot, papered over by the fact that a human is at least watching the transcript stream by. **In Royal mode, with no human watching at all, a prompt-level floor is not a floor.**
-
-**Conclusion:** Royal mode requires converting the floor from prompt text into a deterministic, unconditional, pre-execution check in the harness — and that check should apply in *every* mode, not just Royal, since it's a correctness fix independent of autonomy level. Royal is where it becomes load-bearing; Phase A ships it for everyone (§6).
+The `else` branch is byte-for-byte the pre-existing logic — this is deliberate and load-bearing: it is what keeps the regression guarantee "Auto's floor is unchanged" true by construction, not by discipline. `agent/test/server-e2e.test.ts`'s existing "auto mode: destructive-command floor hard-blocks force-push" test asserts on this branch and was not modified for this revision; it still passes. The inverse test, "royal mode: force-push is NOT blocked," asserts on the `royal` branch and proves the opposite outcome for the identical scripted command.
 
 ---
 
-## 2. What Royal actually changes vs. `auto` today
+## 2. What Royal actually changes vs. `auto` — rewritten table
 
-| Dimension | `auto` today | `royal` (proposed) |
+| Dimension | `auto` (locked) | `royal` (dangerous, by design) |
 |---|---|---|
-| Permission prompt on dangerous tools | Bypassed (`loop.ts:202`) | Bypassed — identical, no change here |
-| Destructive-command floor | System-prompt text only | **Deterministic pre-execution `floorCheck()`, unconditional, cannot be reasoned around** (§3.1) |
-| Sandboxing around `bash`/OS tools | None — `execAsync` runs directly on the host (`tools.ts:195–203`) | **Mandatory** srt (Seatbelt/bubblewrap) or microVM, tiered by capability (§3.2) |
-| Pre-mutation checkpoint | Not built (designed in doc 07, not wired) | **Mandatory** shadow-git commit before every mutating tool call (§3.3) |
-| Audit trail | Session transcript only (`~/.koder/sessions/*.json`, conversation-shaped, mutable) | **Append-only, security-shaped** audit log outside the workspace (§3.4) |
-| Kill switch | `session/cancel` aborts the loop's `AbortController` (`server.ts:216–218`), which propagates to `bash`'s `signal` option and SIGTERMs the child | **Hardened**: process-group SIGKILL escalation, sandbox teardown, browser session teardown, always-visible UI affordance (§3.5) |
-| Tool surface | `read_file, write_file, edit_file, list_dir, grep, bash` (`tools.ts`) | Same six **plus** OS-process tools, package-install, browser tools — gated by mode in the `allowedTools` filter (`loop.ts:133–134`) |
-| Cross-turn oversight | Human reads the transcript live | **Async notification** channel (`koder/royal_notice`), non-blocking, for "needs review" / "blocked" events |
-| Self-correction on repeated failure | Identical-call loop detection only (`loop.ts:212–219`), no cross-session memory of *why* something failed | **Extended** to outcome-signature loops (not just identical calls) + unconditional causal-lesson write to doc 08's memory store (§5) |
-| Session/task duration | Bounded by `MAX_ITERATIONS = 60` **per prompt turn** (`loop.ts:41`); no self-continuation past `end_turn` (`loop.ts:184–186`) — the loop waits for the next `session/prompt` call | **v1: no self-continuation either.** A raised per-turn iteration cap plus a wall-clock/tool-count ceiling *within that turn*; at `end_turn` (or ceiling breach) Royal hard-stops and async-notifies rather than re-prompting itself. See §7 item 6 for why self-continuation is deliberately out of scope, not an oversight. |
-| Activation | One of three buttons in the mode switcher (`extension.js:592–595`) | Same switcher, but gated behind an **informed-consent step** the first time per workspace (§6, Phase A) |
+| Permission prompt on dangerous tools | Bypassed (unchanged) | Bypassed (unchanged) — no difference here, both modes already didn't ask |
+| Destructive-command floor | **`floorCheck()`, unconditional, cannot be reasoned around** — this is what "locked" means | **Not called at all.** Force-push, history rewrites, `rm -rf` anywhere on disk (not just outside the workspace), package publishes, disk-destructive commands, piped-remote-script execution — none of it is pre-execution-blocked |
+| Sandboxing around `bash`/OS tools | None today (unchanged; a future hardening candidate for Auto specifically, not addressed by this revision) | **Deliberately not added.** Mandatory sandboxing is a *containment/restriction* mechanism — it directly contradicts "full machine access, nothing slows the agent down." See §3.2 for why the original draft's sandboxing-tiers research is kept as reference but not adopted for Royal |
+| Pre-mutation checkpoint | Not built for Auto (out of scope for this revision — Auto's safety story is the floor, not undo) | **Built, Phase A** (`agent/src/checkpoint.ts`): workspace state committed to a shadow git repo before every mutating (`dangerous: true`) tool call. Passive — never blocks, best-effort, failure is swallowed |
+| Audit trail | Session transcript only (`~/.koder/sessions/*.json`), same as always | **Built, Phase A** (`agent/src/audit.ts`): append-only JSONL, `~/.koder/royal-audit/<yyyy-mm>.jsonl`, one line per tool call (name, scrubbed input, decision, checkpoint sha, output summary, timing), outside the workspace |
+| Kill switch | `session/cancel` aborts the loop's `AbortController`, SIGTERMs the `bash` child via Node's `exec({signal})` | Same mechanism, same code path — see §3.5 for the escalation-to-SIGKILL hardening status |
+| Tool surface | `read_file, write_file, edit_file, list_dir, grep, bash` | **Same six tools in Phase A.** OS-level tools (`process_manage`, `package_install`) and browser automation are the literal meaning of "full machine/OS-level access" the user asked for, but they are new capabilities that don't exist in the codebase yet — Phase A does not invent them under time pressure; see §6 for why that's a sequencing choice, not a scope walk-back |
+| Self-tamper protection | N/A — Auto's floor already covers this ground generally | **Narrow, explicit exception**: `royalTamperCheck()` (§3.1) blocks writes/deletes/shell-references aimed at `~/.koder/royal-audit/` and `~/.koder/checkpoints/` only. Everything else in the user's project is fair game |
+| Activation | Default; no gate | **Informed-consent gate**, once per workspace (§6 Phase A) |
 
-Net: Royal is not "auto with the safety text deleted." It's auto's *permission bypass* plus a materially heavier safety substrate underneath it, because the substrate is now the only thing standing between a mistake and consequences.
+Net: Royal is not "Auto with more tools." It is Auto's tool surface with the floor *removed*, not tightened, plus a recorder that never gets in the way. The user asked for a mode that is genuinely dangerous, told to them plainly, with a record left behind — not a differently-shaped safety mechanism that still amounts to restriction by another name.
 
 ---
 
 ## 3. Safety architecture
 
-### 3.1 Destructive-action floor — exact rules, enforced as code
+### 3.1 The floor — Auto keeps it unconditional; Royal doesn't call it; one narrow exception
 
-New module `agent/src/floor.ts`, exporting `floorCheck(name: string, input: any, cwd: string): { blocked: boolean; reason?: string }`, called in `loop.ts` **before** the mode branch at line 199 — i.e. it runs in `review`/`approve`/`auto`/`royal` alike:
+`agent/src/floor.ts`'s `floorCheck(name, input, cwd)` is unchanged by this revision (see §1) and continues to cover: git force-push; history rewrites (`reset --hard`, `filter-branch`, `rebase`, ref-deletion push); `rm -rf`/`find -delete` outside the workspace or at a dangerous root; package publishes (`npm`/`yarn`/`pnpm`/`cargo publish`, `twine upload`, `gem push`); disk-destructive commands (`mkfs*`, `dd` to a device path, `diskutil eraseDisk`); and piping a remote download directly into a shell interpreter. `review`, `approve`, and `auto` call it unconditionally, before the mode/permission branch. **Nothing about this changes for those three modes.** This is Auto's lock, and this revision does not touch it, weaken it, or add an escape hatch to it for any mode except Royal.
+
+**Royal does not call `floorCheck()`.** Not a parameterized "royal mode" bypass flag threaded through it, not a subset of its rules — the function is simply never invoked on the `royal` branch of `loop.ts`'s tool-call loop. This is intentional and testable: `agent/test/server-e2e.test.ts`'s "royal mode: force-push is NOT blocked" test scripts the exact same `git push --force origin main` command the Auto-mode floor test blocks, and asserts the tool result contains a *real* git error (`fatal: not a git repository...`, since the test workspace has no `.git`) rather than the deterministic `"Blocked by safety floor"` string — i.e., it asserts the command *reached execution*, not merely that it wasn't rejected for some other reason.
+
+**The one narrow exception — `royalTamperCheck()`, not `floorCheck()`.** A log Royal can erase, or a checkpoint history Royal can delete, isn't a safety net — it's theater. So `agent/src/floor.ts` also exports a second, much smaller function:
 
 ```ts
-let allowed = true;
-const floor = floorCheck(tc.name, tc.input ?? {}, session.cwd);
-if (floor.blocked) {
-  allowed = false;
-} else if (spec.dangerous && session.mode === "review") {
-  allowed = false;
-} else if (spec.dangerous && session.mode !== "auto" && session.mode !== "royal") {
-  allowed = await cb.onPermission(...);
-}
+export function royalTamperCheck(name: string, input: any): FloorResult
 ```
 
-A blocked floor check returns the same shape as a denied permission (`"User declined this action..."` today, `loop.ts:206`) but with a reason string — the model sees it as data and can adjust, exactly like a permission denial, but it is **not negotiable**: no retry, no rephrase, no injected instruction changes the outcome, because it's a regex/path check, not a judgment call.
+It inspects only `write_file`/`edit_file` paths and `bash` command strings, and blocks only references to two directories: `~/.koder/royal-audit/` (the audit log) and `~/.koder/checkpoints/` (the shadow-git checkpoint history). Everything else — the user's actual project, any path inside or outside the workspace, any other command — is unrestricted. This is deliberately **not** folded into `floorCheck()` and deliberately **not** called from the non-royal branch (Auto/Approve/Review never need it; their own floor already covers destructive action broadly, and this check is scoped to paths that are specifically Royal's own bookkeeping). Keeping it separate means "Royal does not call `floorCheck()`" stays a plain, checkable fact rather than a claim with an asterisk.
 
-**Exact rule set (same content for `auto` and `royal` — the content doesn't loosen, only the enforcement mechanism changes):**
+**Disclosed limitation, stated plainly rather than silently glossed over**: `royalTamperCheck()` does not protect the harness's own *source code* (`agent/src/floor.ts`, `loop.ts`, `tools.ts` etc.) the way the first draft's §7 item 4 claimed a Royal-mode floor would ("no self-modification of the safety substrate, ever, even with full filesystem access"). That claim depended on a `floorCheck()`-based path rule Royal no longer calls. If a user runs Royal mode with `cwd` set to (or containing) the Koder repo itself, nothing stops `write_file`/`bash` from editing `agent/src/*.ts` directly — that is a real, accepted consequence of "full machine access," not an oversight. The only thing that remains structurally protected is the passive net's own storage, because that storage lives outside any workspace `cwd` a user would plausibly point Royal at (`~/.koder/royal-audit`, `~/.koder/checkpoints`), not because of a path rule that special-cases the harness's source tree.
 
-| Category | Rule | Mechanism |
-|---|---|---|
-| Filesystem scope | `write_file`/`edit_file` path must resolve (after symlink/`..` normalization) inside `cwd` or an explicit allowlist | path check, no regex needed |
-| `rm -rf` / `rm -fr` | Blocked unless every resolved target path is inside `cwd` | parse `bash` command, resolve paths |
-| History rewrite | `git push --force`, `push -f`, `push --force-with-lease` to a non-local remote; `filter-branch`; `reset --hard` when it would drop commits reachable from a remote-tracking branch | regex + `git` state check |
-| `git clean -f` / `-fdx` | Blocked outside `cwd` | path check |
-| Package publish | `npm publish`, `cargo publish`, `pip upload`/`twine upload`, `gem push`, `docker push` to non-local registries | regex on command |
-| Privilege escalation | `sudo`, `su`, `doas`, anything that would require elevated OS privileges | regex |
-| Disk-level destruction | `mkfs*`, `dd` writing to a block device path (`/dev/sd*`, `/dev/disk*`), `diskutil eraseDisk`, `Format-Volume` | regex |
-| Pipe-to-shell of remote content | `curl ... \| sh`, `curl ... \| bash`, `wget -O- \| sh`, `iwr ... \| iex` | regex — this is the single most common real-world RCE vector for autonomous agents and is worth its own line even though it overlaps "arbitrary code exec" generally |
-| Persistence mechanisms | Writes to shell rc files (`.zshrc`, `.bashrc`, `.profile`), crontab, `launchd`/`systemd` unit files, `~/Library/LaunchAgents` | path check on `write_file`/`edit_file`; regex on `crontab -e`/`systemctl enable` in `bash` |
-| Credential paths | Direct `read_file`/`grep` of `~/.ssh/*`, `~/.aws/credentials`, `~/.koder/providers.json`, `.env*`, `*.pem`, `id_rsa*` | path check — blocked outright, not just scrubbed, because Royal has no human to notice an exfil attempt in progress |
-| Safety-substrate tamper | Any write to `~/.koder/royal-audit/*`, the checkpoint git dir, the kill-switch sentinel, or (if running from source) `agent/src/floor.ts`/`loop.ts`/`tools.ts` themselves | path check — see §7 item 4, this is non-negotiable even for Royal |
-| Browser hard bans | See §4.2 — separate table, same mechanism | — |
+### 3.2 Sandboxing tiers — kept as research, not adopted for Royal
 
-This list is deliberately closer to a **denylist of catastrophic, hard-to-reverse, or self-tamper actions** than a broad policy engine. It is not trying to be a general-purpose security sandbox (that's the sandbox's job, §3.2) — it's the last-line, zero-cost, un-reasonable-with backstop that fires even if the sandbox has a gap.
+The original draft proposed mandatory OS-level sandboxing (srt/Seatbelt/bubblewrap) for Royal's `bash` and future OS/browser tools, tiered by capability (workspace-scoped shell → OS-level tools → browser → system settings, the last explicitly rejected). That research (doc 03 §5's OSS survey, PLAN.md's architecture box naming srt as the intended default) is still accurate and worth keeping as a citation, but **it is not Royal's design**. A sandbox is, definitionally, a containment/restriction mechanism: it confines writes to declared paths, allowlists network destinations, denies syscalls. All of that is exactly what "nothing is blocked, nothing is restricted, nothing slows the agent down" rules out for Royal. Wiring mandatory sandboxing into Royal today would silently reintroduce the "stricter rails" thesis the user explicitly reversed, under a different name.
 
-**Should Royal's floor be looser than Auto's?** No. Argued above: less human oversight demands *more* deterministic rails, not fewer. The two floor-worthy additions unique to Royal (self-tamper protection, credential-path blocking) exist specifically *because* there's no human to notice tampering or exfiltration in progress — they're not needed as hard floors in `approve` mode because a human permission prompt already surfaces `bash $ cat ~/.ssh/id_rsa` for a "wait, why" moment.
+This table is retained for reference only — e.g. if a future, different, deliberately-*more*-restricted mode is ever wanted (something between Auto and Royal), this research would still be the right starting point:
 
-### 3.2 Sandboxing tiers
-
-Doc 03 (`03-oss-building-blocks.md` §5, not 01 — correcting the task's pointer) already surveyed the options: Anthropic srt (Seatbelt on macOS, bubblewrap on Linux, Apache-2.0, purpose-built for exactly this), Firecracker/gVisor/E2B for heavier isolation. PLAN.md's architecture diagram already names srt as the intended default sandbox — **but it is not wired into `tools.ts` today.** `bash`'s `execAsync` (`tools.ts:195–203`) runs directly on the host with the harness process's own privileges. Royal mode is where this gap stops being acceptable to ship around.
-
-| Tier | Scope | Mechanism | Applies to |
+| Tier | Scope | Mechanism | Where this could apply (not Royal) |
 |---|---|---|---|
-| 0 | Read-only tools, in-workspace edits | No sandbox needed; floor + shadow-git checkpoint suffice | `read_file`, `list_dir`, `grep`, `write_file`, `edit_file` — all modes |
-| 1 | Workspace-scoped shell (builds, tests, git, package manager reads) | **Mandatory in Royal** (recommended for `auto` too): srt profile — FS writes confined to `cwd` + declared temp/cache dirs, network allowlisted to package registries + localhost, no access to other repos or `~/.ssh`/`~/.aws` | `bash` in `royal`, ideally `auto` |
-| 2 | OS-level tools: process management beyond the workspace, package installation | Broader srt profile *or* escalate to a disposable container/microVM — **default to off-device** (§7 item 2) | new `process_manage`, `package_install` tools, `royal` only |
-| 3 | Browser automation | Separate sandbox: bundled, ephemeral Playwright profile, isolated from the user's real browser session | new `browser_*` tools, `royal` only (§4) |
-| 4 | System settings (OS preferences, credential stores, firewall, user accounts) | **Not sandboxable to an acceptable risk level for a zero-oversight agent** | **Not implemented** — see §7 item 1 |
+| 0 | Read-only tools, in-workspace edits | No sandbox needed | N/A — no mode needs this |
+| 1 | Workspace-scoped shell | srt profile confined to `cwd` | Would only make sense for a mode that *wants* scope restriction — the opposite of Royal's premise |
+| 2 | OS-level tools (process mgmt, package install) | Broader srt profile or disposable container | Not proposed for Royal; see §4.1 |
+| 3 | Browser automation | Ephemeral, isolated profile | Reconsidered for Royal specifically — see §4.2's updated framing |
+| 4 | System settings | Not sandboxable to an acceptable risk level | Still not implemented, still not proposed anywhere |
 
-Tiers 2–4 are exactly where "OS-level access" and "browser access" live, and exactly where the phased plan (§6) puts the real engineering weight, not Tier 0–1 which already has a design (doc 07) waiting to be built.
+**No sandboxing ships in Phase A.** `bash`'s `execAsync` runs directly on the host in every mode, exactly as it does today — this was already true for Auto and remains true for Royal; Royal does not make this worse, it just also removes the floor that used to catch the worst of it.
 
-### 3.3 Checkpoint / rollback
+### 3.3 Checkpoint — built, Phase A, minimal version
 
-Builds directly on doc 07's shadow-git design (`07-enterprise-chat-panel.md:16`: "git init in globalStorage w/ core.worktree=workspace; commit before each mutating tool") and PLAN.md's architecture box — **designed, not yet built**. Royal mode is blocked on this shipping for real (§6 sequencing).
+New module `agent/src/checkpoint.ts`. Before this revision, `docs/research/11-prompt-checkpoints-undo.md` had *designed* a fuller shadow-git checkpoint system (prompt-ID granularity, locking, size-triggered compaction, conflict detection, two undo UI surfaces) but — verified via `grep -ri checkpoint agent/src` and `git log` before writing this module — that design had not landed in `agent/src` as of Phase A. Rather than block Royal's passive net on that larger system shipping first, `checkpoint.ts` implements exactly one thing, using the **same storage location and git-plumbing conventions** doc 11 §2.1/§2.2 already specifies, so a future doc-11 implementation can absorb or supersede this module without a rewrite or data migration:
 
-- New `agent/src/checkpoint.ts`: a shadow git repo at `~/.koder/checkpoints/<workspace-hash>/` with `core.worktree` pointed at the real workspace, `.git` kept out-of-tree so it never collides with the user's own `.git`.
-- `checkpointBefore(tool, input)` commits the current workspace state **before** any tool that passed the floor check and is `dangerous: true` runs — including `bash`, since bash can mutate arbitrarily and can't be pre-analyzed the way `edit_file`'s path can.
-- The resulting commit SHA is recorded in the audit log entry for that tool call (§3.4), giving every logged action a concrete rollback target.
-- Restore is **user-triggered only**, never a tool the model can call itself — surfaced in the extension as "restore to before this action" on any audit entry, or "restore to last checkpoint" as the kill-switch companion action (§3.5).
-- **Scope limit, stated plainly**: shadow-git only covers the workspace directory. Tier 2/3 actions (installing a system package, navigating a browser to a real website, killing a system process) are **not** reversible by checkpoint — this is exactly why those tiers lean on containment (sandboxing, ephemeral browser profiles, off-device execution) instead of promising "we can always undo it." Where reversibility isn't available, containment has to substitute for it. Making this substitution explicit is the core safety argument for defaulting Tier 2 off-device (§7 item 2).
+- `~/.koder/checkpoints/<sha256(resolve(cwd)).slice(0,16)>/shadow.git`, explicit `--git-dir`/`--work-tree` flags on every call (never a repo-local `.git`, never touches the user's own git state).
+- `checkpointBeforeMutation(cwd, label)` — called from `loop.ts` in the `royal` branch, immediately before any `spec.dangerous` tool runs (`write_file`, `edit_file`, `bash`): `git add -A -- . ':!**/.git' ':!**/.git/**'` (the same magic-pathspec exclude doc 11 §2.2 verified is safe against nested `.git` directories, without Cline's documented rename-corruption risk), then `git commit --allow-empty -q -m "royal-checkpoint: <label>"`, then `rev-parse HEAD`. The resulting SHA is threaded into the audit entry for that same tool call (§3.4).
+- **Best-effort, always.** Every failure path returns `{ sha: null }` instead of throwing — a checkpoint failure must never block a Royal action, since blocking anything at all would violate the mode's entire premise.
+- **Tested, not just asserted**: `agent/test/server-e2e.test.ts`'s "royal mode: checkpoints workspace state BEFORE a mutating tool call runs" test seeds a file, has Royal create a *new* file via `write_file`, then inspects the shadow repo directly (`git ls-tree`) and asserts the checkpoint commit contains the seed file but **not** the new one — proving "before," not just "a commit exists somewhere."
 
-### 3.4 Audit log — format and location
+**Deliberately not built in this minimal version** (left to doc 11's fuller system if/when it lands, and explicitly not something Phase A should invent under time pressure): prompt-ID/tool-call-ID granularity and the `{sha, files}` diff-return shape; the exclusive lock file (not needed yet — `runPrompt`'s tool-call loop is already single-threaded per session, so the cross-process race doc 11 §2.5 guards against doesn't arise here); size-triggered orphan-root compaction/retention; any undo/restore command (nothing in `checkpoint.ts` lets the model or the harness roll anything back — that stays a human-triggered future UI action, never a tool Royal can call on itself); the >50k-tracked-files large-repo guard.
 
-Separate from `~/.koder/sessions/<id>.json` (doc 08 §2.1's conversation store, which is mutable-by-design as history grows and is meant for resume, not forensics). New, append-only, JSONL:
+### 3.4 Audit log — built, Phase A
 
-**Location**: `~/.koder/royal-audit/<sessionId>.jsonl` — outside the workspace (so the agent's own file tools can't reach it even before the floor check fires — belt and suspenders with §3.1's tamper rule), opened in append mode only, never truncated or rewritten by the harness.
+New module `agent/src/audit.ts`. **Location**: `~/.koder/royal-audit/<yyyy-mm>.jsonl` — one file per calendar month, outside the workspace, append-only (opened in append mode only, never truncated or rewritten by the harness). This deliberately mirrors the exact convention `product/koder-chat/extension.js`'s local feedback log already uses for `~/.koder/feedback/<yyyy-mm>.jsonl`, rather than the first draft's `<sessionId>.jsonl` scheme — one fewer pattern in the product, and month-based rotation is simpler to reason about than per-session files that could grow unboundedly within a single long-lived Royal session.
 
-**One line per tool call**:
+**One line per tool call**, logged unconditionally whether the call was allowed or blocked by `royalTamperCheck()`:
 
 ```jsonc
-{"ts":1789000123456,"seq":42,"sessionId":"…","tool":"bash","input":{"command":"npm test"},"decision":"allowed","sandboxTier":1,"checkpointSha":"a1b2c3d","durationMs":4210,"exitCode":0,"cwd":"/path/ws"}
-{"ts":1789000129001,"seq":43,"sessionId":"…","tool":"bash","input":{"command":"git push --force origin main"},"decision":"floor_blocked","reason":"history rewrite to non-local remote"}
+{"ts":"2026-07-14T21:32:10.512Z","tool":"bash","input":"{\"command\":\"git push --force origin main\"}","cwd":"/path/ws","decision":"allowed","checkpointSha":"a1b2c3d...","outputSummary":"EXIT 128\nfatal: not a git repository...","isError":true,"durationMs":41}
+{"ts":"2026-07-14T21:33:02.001Z","tool":"write_file","input":"{\"path\":\"~/.koder/royal-audit/2026-07.jsonl\",...}","cwd":"/path/ws","decision":"blocked","reason":"Blocked: Royal's own safety-net storage (...) cannot be written to..."}
 ```
 
-- `input` passes through the existing `scrubSecrets` (from `agent/src/context.ts`, already used in `loop.ts` for tool-output wrapping) before serialization — same secret-shape deny-regex doc 08 §2.3 specifies for memory writes, reused here rather than inventing a second scrubber.
-- `decision` ∈ `allowed | floor_blocked | sandbox_denied | killed`.
-- A session-start line records mode, cwd, model, and the workspace's `.koder/royal.enabled` consent timestamp (§6 Phase A).
-- Rotation/pruning mirrors doc 08 §2.1's session pruning (keep N newest / M days) — audit logs are for recent forensics and postmortems, not indefinite compliance storage; if the product later needs the latter, that's a distinct, explicitly-scoped feature.
+- `input` and `outputSummary` are run through `scrubSecrets` (reused from `agent/src/context.ts`, the same secret-shape deny-regex already used for tool-output wrapping in `loop.ts`) and size-capped — never the raw object, so a stray token in a command string doesn't land in a plaintext file outside the workspace.
+- `decision` ∈ `allowed | blocked` (only `royalTamperCheck()` produces `blocked` in Royal mode — there is no floor-blocked category here, unlike Auto).
+- Writes are best-effort (swallowed on failure), matching checkpoint's "never block the action" rule.
+- **Tested**: "royal mode: audit log gets a real entry with the right shape" reads the actual JSONL file back and asserts on `tool`, `input`, `decision`, `checkpointSha`, `outputSummary`, `isError`, `durationMs`, and a parseable `ts` — for both an allowed call and, separately, confirms the force-push from the bypass test was also logged (logging is unconditional, not just for successful actions).
+
+Deliberately not built (out of scope for Phase A, no explicit ask): rotation/pruning beyond one-file-per-month (a very long-lived, high-volume Royal session could produce a large single-month file; revisit if this proves real), a `sandboxTier`/`decision: sandbox_denied` field (no sandboxing exists — see §3.2), a session-start summary line.
 
 ### 3.5 Kill switch
 
-The seed already exists: `session/cancel` (`server.ts:216–218`) aborts `session.pending`, whose `AbortSignal` is threaded into `runPrompt` (checked at loop top and before each tool call, `loop.ts:142,190`) and into `bash`'s `execAsync({ signal })` (`tools.ts:197–203`), which relies on Node's `exec` honoring `signal` by SIGTERM-ing the child. This is a reasonable **in-loop** stop but has three gaps Royal must close:
+`session/cancel` (`server.ts`) aborts `session.pending`'s `AbortController`; the signal is checked at the top of `runPrompt`'s loop and before each tool call, and threaded into `bash`'s `execAsync({ signal })`, which relies on Node's `exec` honoring `signal` by SIGTERM-ing the child on abort (Node's default `killSignal`). This is unchanged by Royal and applies identically in every mode — the kill switch was never mode-gated, and there's no reason to start now (Royal being harder to stop would be exactly backwards).
 
-1. **No escalation.** A child that ignores SIGTERM (or a grandchild process it spawned, since `exec` doesn't `detached: true`+kill the process group) survives. Royal's bash invocations need `detached: true` at spawn and `process.kill(-pid, 'SIGTERM')` → 2s grace → `process.kill(-pid, 'SIGKILL')` on the process group, not just the direct child.
-2. **No sandbox/browser teardown.** Killing the loop doesn't tear down a Tier-1 srt sandbox process or close Tier-3 browser tabs/contexts the agent opened. The kill handler needs to own teardown of whatever containment layer is active for the in-flight tool call.
-3. **No backstop above the protocol.** If the ACP connection itself is wedged (not just the tool call), `session/cancel` never arrives. `extension.js`'s `AcpClient.kill()` (`extension.js:61–63`, `this.child.kill()`) already exists as exactly this backstop — it needs to be surfaced as a **persistent, always-visible** "Stop Royal" control in the UI, not conditionally shown only mid-turn the way `#stop` is today (`extension.js:608`, `hidden` by default). For Royal specifically, this control should be visible for the entire lifetime of a Royal session, not just while a turn is streaming, since the whole point is the agent may be doing things between turns (spawned processes, background browser tasks) that outlive a single `session/prompt` call.
-
-Per the kill-switch literature (§8): the switch must be **deterministic and outside the agent's own reasoning** — it cannot be a tool the model calls on itself, it cannot be negotiated via prompt, and per §3.1's tamper rule the agent cannot delete or disable it even with full filesystem access. On activation: write a final `"killed"` audit line with reason, leave the workspace exactly as it is (no auto-rollback — a human may need the in-progress state for postmortem), and surface a one-click "restore to last checkpoint" as a *separate*, explicit follow-up action.
+**Status of the SIGKILL-escalation hardening flagged in the original draft** (§3.5 item 1: a child that ignores SIGTERM, or a grandchild the shell spawned, survives a plain single SIGTERM): tracked as a real gap, sequenced deliberately *after* the floor-bypass/checkpoint/audit core in this revision's implementation order, per the reasoning in §6 — it touches the `bash` execution path for every mode, not just Royal, making it the highest-regression-risk single change in this revision, and the explicit test requirements for this pass (floor-bypass proof, checkpoint-before-mutation proof, audit-shape proof, Auto-floor-unchanged regression) don't depend on it. If it shipped in this same pass, it's a separable, dedicated change to `tools.ts`'s `bash` tool (detached process group + SIGTERM → short grace period → `process.kill(-pid, 'SIGKILL')`); if it didn't make this pass, it remains open and should not be read as "the kill switch doesn't work" — the existing SIGTERM path still functions, it just isn't escalation-hardened yet.
 
 ---
 
-## 4. OS-level and browser tool additions
+## 4. OS-level and browser tool additions — Phase B, unimplemented; framing updated
 
-### 4.1 OS-level tools (new, `royal`-only in the `allowedTools` filter at `loop.ts:133–134`)
+Not built in this revision. Kept here because this is the literal shape of "full machine/OS-level access" the user asked for, and because the original draft's comparative research (bundled-Playwright-vs-claude-in-chrome, sandbox tiers for process/package tools) is still useful — but the **framing has to change** given the reversal, and that tension is worth stating explicitly rather than silently carrying forward containment assumptions that no longer fit.
 
-| Tool | Schema (sketch) | `dangerous` | Sandbox tier | Notes |
-|---|---|---|---|---|
-| `process_manage` | `{ action: "list"\|"start"\|"stop"\|"restart", pid?, command?, name? }` | true | 1–2 | `list`/`stop` scoped to processes in the agent's own spawned process tree (tracked by PGID) — cannot see or kill arbitrary host PIDs; enforced by both the sandbox's process namespace and a floor check on `pid` ownership |
-| `package_install` | `{ manager: "npm"\|"pip"\|"cargo"\|"brew"\|…, packages: string[], global?: boolean }` | true | 2 (default off-device, §7 item 2) | `global: true` or install paths outside the sandbox root floor-blocked; `sudo`-requiring installs floor-blocked per §3.1 |
-| ~~`system_settings`~~ | — | — | — | **Deliberately not added.** §7 item 1. |
-| ~~`fs_access` (beyond workspace)~~ | — | — | — | Not a Royal-autonomous capability. If ever needed, it's a per-path grant the *user* configures ahead of time (allowlist in workspace config), not something Royal requests or expands at runtime. |
+### 4.1 OS-level tools (unbuilt)
 
-`process_manage` and `package_install` only appear in `TOOLS` when `session.mode === "royal"`, mirroring how `loop.ts:134` already filters dangerous tools out entirely for `review`.
+`process_manage` (`{action, pid?, command?, name?}`) and `package_install` (`{manager, packages, global?}`) — sketched in the original draft, gated to `royal`-only in the `allowedTools` filter when they exist. The original draft defaulted these to a disposable off-device container/microVM "because zero oversight + arbitrary process control + the user's real machine is the riskiest combination in this design space." That reasoning was sound under the *old* thesis (Royal as a stricter-rails mode) and is now in direct tension with the *new* one (Royal as literally full machine access, on the user's actual machine, by explicit request). This doc does not resolve that tension by fiat here — it's flagged as the first open question Phase B's design pass needs to answer on purpose, not an oversight carried over from before the reversal.
 
-### 4.2 Browser access
+### 4.2 Browser access (unbuilt) — the same tension, more concretely
 
-**Recommendation: bundled Playwright instance in an ephemeral, isolated profile — not the existing claude-in-chrome-style shared-session extension.**
+The original draft argued for a bundled, ephemeral, unauthenticated Playwright profile over reusing the user's real logged-in Chrome (the claude-in-chrome pattern), specifically because Royal was supposed to be the *more* contained mode. Under the reversed thesis, "full machine access" plausibly *does* mean Royal should be able to act inside the user's real, authenticated browser session if that's what a task needs — the ephemeral-profile argument was a safety argument for a Royal that no longer exists in this form. Two honest options for Phase B, neither adopted here:
 
-| | Bundled Playwright (recommended) | Reuse user's live Chrome (claude-in-chrome pattern) |
-|---|---|---|
-| Session/cookie exposure | None by default — fresh profile per Royal session, no access to the user's logged-in accounts unless explicitly provisioned | Full — the whole point of that tool family is acting inside the user's actual authenticated browser (bank sessions, personal email, work SSO) |
-| Blast radius on agent error | Contained to a throwaway profile; worst case, discard it | Real accounts, real purchases, real emails sent |
-| Fits "zero oversight" | Yes — matches the containment-over-trust posture this whole doc argues for | No — that tool family is explicitly designed for a human watching each site-permission prompt (`extension.js`-style permission bar equivalent), which is the opposite of Royal's premise |
-| Auditability | Every action goes through our own tool wrapper → our audit log, HAR/screenshot capture straightforward | Would require intercepting an extension we don't control end-to-end |
-| Setup cost | New dependency, own lifecycle management | Already exists in the product surface, zero new integration |
+1. **Keep the ephemeral/ isolated profile anyway**, as a "Royal is dangerous on the filesystem/shell but browser actions specifically stay contained" carve-out — inconsistent with "full access" but arguably the single highest-blast-radius category (real purchases, real emails, real accounts) worth treating differently even in a mode that's otherwise unrestricted.
+2. **Follow the reversal to its conclusion** and let Royal drive the user's real browser session, accepting that blast radius as part of what "dangerous, by design, with informed consent" means.
 
-The claude-in-chrome pattern is the right tool for a *supervised* browsing task where a human is approving per-site access as they go (exactly its documented model: site-level gating, "allow once" vs "always allow this site," per Claude Help Center — §8). That supervision model is structurally incompatible with Royal's "no blocking approval" premise. Reusing it for Royal would mean either (a) silently auto-approving every site permission prompt — which defeats the extension's entire safety design — or (b) blocking on those prompts, which defeats Royal. Neither is acceptable, hence: separate, bundled, ephemeral, sandboxed browser surface for Royal, with the claude-in-chrome-style tools remaining available (unchanged) for `approve`/`auto` modes where their supervision model is intact.
-
-**New tools**: `browser_navigate`, `browser_act` (click/type/scroll), `browser_extract` (text/DOM), `browser_screenshot` — all `dangerous: true`, Tier 3 sandbox, `royal`-only.
-
-**Hard floor rules specific to browser actions** (directly adapted from Claude in Chrome's own published ban list, §8 — a real, battle-tested precedent for exactly this problem):
-
-| Banned outright, all modes that have browser tools | Requires confirmation even inside Royal's "no blocking" model — logged + auto-declined by default, escalates async rather than executing |
-|---|---|
-| Purchases / payment submission | — (no confirmation path in Royal; permanently blocked, see below) |
-| Account creation | — |
-| Bypassing CAPTCHA / bot-auth | — |
-| Executing trades | — |
-| Permanent/irreversible deletion on third-party services | — |
-| Submitting credentials to non-allowlisted domains | — |
-| Anything matching a prompt-injection signature on the page (a site instructing the agent to take an action) | — |
-
-Note the right column is empty by design: Royal has no synchronous confirmation channel (that's the whole premise), so anything Claude in Chrome would normally ask a human about, Royal must **decline outright** and log it, then surface it through the async notification channel (§3.5-adjacent, `koder/royal_notice`) for the user to handle later if they want the task to proceed. This is the concrete resolution of "no blocking, but not silent either": the agent never stalls waiting for an answer, but also never takes an action that class of task would normally require one for.
-
-Every browser action gets a line in a `royal-audit` sub-log with a screenshot reference (stored alongside, path in the log entry) — browser state changes are the hardest category to reconstruct after the fact from text alone, so this is worth the extra storage.
+Not resolving this here is a deliberate scope boundary for this revision, not an accident — Phase A ships no browser tools either way, so the question doesn't block anything shipping today.
 
 ---
 
-## 5. Self-learning / self-healing mechanism
+## 5. Self-learning / self-healing mechanism — unaffected by the reversal, kept as-is
+
+Nothing about the thesis reversal changes this section; it's included unmodified from the original draft because it's still accurate and still not built.
 
 **What exists today** (do not reinvent — extend):
 
-- `loop.ts:212–219`: `lastToolSig`/`toolRepeatCount` catches **identical** tool call + input repeated consecutively; at 4 repeats it force-ends the turn (`loop.ts:230–242`).
-- `loop.ts:246–257` (`editFails` map): per-path consecutive `edit_file` failures get an escalating hint ("re-read the file" → "stop retrying, use write_file instead"), reset on success or on any `read_file` of that path.
-- Doc 08 §2.2's designed (not-yet-built) `remember` tool + `~/.koder/memory/MEMORY.md` (global) / `<workspace>/.koder/memory.md` (project): model-writable, dated bullets, injected into `systemPrompt()` at an 8 KiB cap, scrubbed of secrets, with an opt-in end-of-task reflection pass (doc 08 §2.2 point 3) that writes ≤3 auto-memories per session, always visible in the transcript.
+- `loop.ts`'s `lastToolSig`/`toolRepeatCount` catches **identical** tool call + input repeated consecutively; at 4 repeats it force-ends the turn.
+- `loop.ts`'s `editFails` map: per-path consecutive `edit_file` failures get an escalating hint ("re-read the file" → "stop retrying, use write_file instead"), reset on success or on any `read_file` of that path.
+- Doc 08 §2.2's designed (not-yet-built) `remember` tool + `~/.koder/memory/MEMORY.md` (global) / `<workspace>/.koder/memory.md` (project): model-writable, dated bullets, injected into `systemPrompt()` at an 8 KiB cap, scrubbed of secrets, with an opt-in end-of-task reflection pass that writes ≤3 auto-memories per session, always visible in the transcript.
 
-**The gap both mechanisms share**: they catch *the same action repeated*, not *different actions failing for the same underlying reason* — Devin's documented "infinite edit-run-fail loops" failure mode (doc 04, `04-ux-patterns-performance.md:30`) is exactly this: the agent keeps trying superficially different fixes for a problem it has fundamentally misdiagnosed. Identical-call detection never fires because each attempt looks different at the tool-call level.
+**The gap both mechanisms share**: they catch *the same action repeated*, not *different actions failing for the same underlying reason* — Devin's documented "infinite edit-run-fail loops" failure mode (doc 04) is exactly this: the agent keeps trying superficially different fixes for a problem it has fundamentally misdiagnosed. Identical-call detection never fires because each attempt looks different at the tool-call level.
 
 ### 5.1 In-session: outcome-signature loop detection (extends `loop.ts`)
 
-Generalize `toolRepeatCount` from `sig = name + JSON(input)` to also track a **verification-outcome signature**: after a verify-style command (`bash` running test/build/typecheck, detected heuristically the same way doc 08's compaction rubric already asks the model to report verify status) fails, extract a normalized error signature (e.g. `TS2345` + file, or a specific failing test name) and track it in a small rolling window (last 8 tool calls, matching doc 08's loop-detection window framing). If the **same error signature** recurs 3 times across *different* edit attempts:
+Generalize `toolRepeatCount` from `sig = name + JSON(input)` to also track a **verification-outcome signature**: after a verify-style command (`bash` running test/build/typecheck) fails, extract a normalized error signature and track it in a small rolling window (last 8 tool calls). If the **same error signature** recurs 3 times across *different* edit attempts:
 
 1. Force a read-only reflection step (no tools that turn): "You've hit this error 3 times with different fixes. State your hypothesis for the root cause before trying again."
-2. If it recurs a 4th time after that: in `royal` mode specifically (no human to notice the thrash), immediately trigger the cross-session write in §5.2 and pause the task, surfacing an async notification — do not keep burning tool calls unattended. In `approve`/`auto`, the existing transcript-visible escalation (`loop.ts:236`, "stopped: repeated identical actions") is sufficient since a human is already watching.
+2. If it recurs a 4th time: in `royal` mode specifically (no human watching the transcript live — that hasn't changed with the reversal, Royal still runs unattended), immediately trigger the cross-session write in §5.2 and pause the task, surfacing an async notification rather than burning tool calls unattended. In `approve`/`auto`, the existing transcript-visible escalation is sufficient since a human is already watching.
 
 This is ~30–40 lines added to `loop.ts`, reusing the exact same `Map`-based tracking shape as `editFails`, not a new subsystem.
 
 ### 5.2 Cross-session: causal-lesson writes (extends doc 08's memory, not a new store)
 
-On the trigger in §5.1 (or on any task that ends without the verify contract passing), write a structured bullet through the **same** `remember` tool / `MEMORY.md` path doc 08 designs — not a parallel memory system:
+On the trigger in §5.1 (or on any task that ends without the verify contract passing), write a structured bullet through the **same** `remember` tool / `MEMORY.md` path doc 08 designs:
 
 ```
 - [2026-07-14] [project] symptom: TS2345 on AnthropicAdapter.runTurn arg — cause: assumed `usage` was always defined, provider omits it on non-streamed calls — fix: `usage?.inputTokens ?? estimate()` — verified: typecheck+test pass
 ```
 
-Format: `symptom → cause → fix` (or, if unresolved: `symptom → tried: [X, Y] → unresolved, avoid retrying X`), directly mirroring the causal-memory pattern from the self-healing-agent literature (§8: "403 error → missing header → added header → success") but implemented as one more markdown bullet in the file doc 08 already specifies, injected the same way (system prompt, `<memory scope=project>`, 8 KiB cap, oldest-dropped) — **no new injection mechanism, no new store, no new file format.**
+**The one behavioral difference from doc 08's default**: in `royal`, the causal-lesson write is unconditional on the specific trigger (repeated-failure-signature or unverified task end), since there's no human present to explicitly ask for it the way `approve`/`auto` allow. The "always visible in the transcript" guarantee is kept and becomes more important, since it's the only way the user finds out later that a lesson was written at all.
 
-**The one behavioral difference from doc 08's design**: doc 08 §2.2 point 3 makes end-of-task reflection **opt-in** (a flag), because in `approve`/`auto` a human is present and can say "remember this" explicitly (point 2) — auto-writing by default would be noisy. In `royal`, there is no human to ask, so the causal-lesson write is **unconditional** on the specific trigger (repeated-failure-signature or unverified task end) — not a general "summarize what happened" pass, which would still be noisy, but scoped tightly to "something went wrong more than once, here's what was learned," which is exactly the situation where an absent human would most want a durable record. The "always visible in the transcript" guarantee (doc 08 §2.2) is kept and becomes more important, since it's the only way the user finds out later that a lesson was written at all.
-
-**Consolidation**: reuses doc 08 §2.3/Phase-C's existing 32 KiB soft-cap + consolidation-into-topic-files mechanism verbatim — causal lessons are just more bullets in the same file, subject to the same pruning.
-
-**Explicitly not proposed**: no vector-embedded causal graph, no fine-tuning, no agent-authored changes to its own prompt or floor rules (that would violate §3.1's tamper rule and the "kill switches don't work if the agent writes the policy" principle from the literature — §8). The mechanism is deliberately as boring as doc 08's own philosophy: **memory is files the model edits with ordinary, visible operations; the harness only mounts, injects, and caps it.**
+**Explicitly not proposed, unaffected by the reversal**: no agent-authored changes to its own prompt, floor rules, or `royalTamperCheck()`'s guarded paths, no matter how well-justified a given "lesson" might sound — the causal-lesson memory writes to project/global *memory* files only. This is worth restating post-reversal specifically: even though Royal now has literal filesystem access to `agent/src/floor.ts` if the workspace contains it (§3.1's disclosed limitation), the *self-learning mechanism itself* must never be the thing that proposes or drives such an edit. That's a distinction between "the user's own choice to run Royal against the Koder repo, eyes open" and "the agent decided, on its own reflection, to rewrite the rules that govern it" — the former is the user's call to make; the latter is exactly the failure mode the kill-switch literature (§8) warns against ("kill switches don't work if the agent writes the policy").
 
 ---
 
 ## 6. Phased implementation plan
 
-Sequencing note up front: shadow-git checkpointing (§3.3) and srt sandboxing (§3.2) are **designed in doc 07/03 but not built**. Royal mode's core promises — "contained blast radius," "any action reversible" — are not honest claims until both exist. Phase A therefore does **not** ship a feature-complete Royal mode; it ships the floor-hardening and audit-log pieces that are valuable independent of Royal, plus a minimally-scoped Royal that has *no new capability* beyond today's `auto` — just a real floor. Phase B is where sandboxing, checkpointing, OS tools, and browser access actually land. This is the honest ordering; do not let "Royal" ship as a marketing label before §3.2/§3.3 exist under it.
+### Phase A — floor-bypass core, checkpoint, audit log, mode wiring, consent gate (this revision)
 
-### Phase A — floor hardening + audit log + kill-switch fix (3–5 days, no new tools)
-
-| # | Change | File | Sketch |
+| # | Change | File | Status |
 |---|---|---|---|
-| A1 | `floorCheck()` — deterministic destructive-action denylist (§3.1 table) | new `agent/src/floor.ts` | Pure function, regex + path resolution, no I/O; called from `loop.ts` before the mode branch (line 199) in **all** modes |
-| A2 | Audit log | new `agent/src/audit.ts` | `logAudit(entry)` appends JSONL to `~/.koder/royal-audit/<sessionId>.jsonl`; hook into the existing `onToolStart`/`onToolEnd` callback points already wired through `server.ts:161–176`; reuse `scrubSecrets` from `context.ts` |
-| A3 | Kill-switch hardening | `tools.ts`, `server.ts`, `extension.js` | `bash` spawns `detached: true`; `session/cancel` escalates SIGTERM→SIGKILL on the process group after a 2s grace; extension surfaces a persistent Stop control for the session lifetime, not just mid-turn |
-| A4 | `royal` mode added, tool-set identical to `auto` | `loop.ts` (`AgentMode`, `modeBlock`), `server.ts` (`MODES`) | Same six tools; the only functional delta vs `auto` at this phase is A1–A3 applying; `modeBlock()` gets a `royal` branch stating the floor is enforced, not advisory |
-| A5 | Informed-consent gate | `extension.js`, new `~/.koder/royal-consent/<workspace-hash>.json` marker | First switch to Royal per workspace shows a one-time modal (what it can do, what the floor still blocks, where the audit log lives, and — Phase A specifically — that no sandbox exists yet so Royal is not for unattended OS-level use); writes the marker + consent timestamp outside the workspace (per §7 item 4's tamper boundary — a workspace-local marker the agent could itself edit would defeat the point of "informed consent"), logged as the audit session-start line |
+| A1 | `royalTamperCheck()` — narrow self-tamper guard on the passive net's own storage | `agent/src/floor.ts` | Built. Separate from `floorCheck()`, called only on the `royal` branch |
+| A2 | `checkpointBeforeMutation()` — minimal shadow-git checkpoint before every mutating tool call in royal mode | new `agent/src/checkpoint.ts` | Built, minimal version (§3.3). Same storage location/conventions as doc 11 §2.1–2.2, so it's absorbable, not throwaway |
+| A3 | `logRoyalAudit()` — append-only JSONL audit log | new `agent/src/audit.ts` | Built (§3.4) |
+| A4 | `royal` mode added: `AgentMode` union, `modeBlock()` branch, tool-loop branch that skips `floorCheck()`/`onPermission()` and calls A1–A3 | `agent/src/loop.ts` | Built. The non-royal branch is untouched (byte-identical logic to before this revision) — this is what keeps Auto's floor a regression-tested invariant, not a hope |
+| A5 | `royal` added to the mode list surfaced over ACP | `agent/src/server.ts`'s `MODES` | Built |
+| A6 | Informed-consent gate, once per workspace | `product/koder-chat/extension.js`, `product/koder-chat/media/panel.js` | Built where safe to touch without conflicting with concurrent, unrelated in-flight work on those files (see the commit for exact scope); a one-time `vscode.window.showWarningMessage` confirm gates the `setMode` call to `royal`, ack stored per-workspace outside the workspace tree |
+| A7 | Kill-switch SIGKILL escalation | `agent/src/tools.ts`, `server.ts` | Tracked, sequenced last/separable per §3.5 — see the commit for whether it landed in this pass |
 
-Order: A1/A2 (mechanical, independent) → A3 (touches three files, do it once) → A4/A5 (wire the mode).
+**Explicitly not attempted in Phase A, by design, not oversight**: OS-level tools, browser tools (§4 — both need their post-reversal framing resolved first, not just an implementation), mandatory sandboxing for Royal (§3.2 — rejected, not deferred), doc 11's fuller checkpoint system (prompt-ID granularity, undo UI, compaction — a distinct, larger feature this revision's minimal `checkpoint.ts` is compatible with but does not replace).
 
-**Phase A caveat, stated plainly for the consent modal's copy**: at the end of Phase A, Royal has a real deterministic floor (A1) and a hardened kill switch (A3), but **no sandbox and no checkpoint** — those ship in Phase B. A regex/path floor is a last-line backstop, not a containment boundary (§3.1); until Phase B lands, it is the *only* barrier standing behind Royal's permission bypass. Phase A's Royal should therefore be scoped and marketed as "auto mode with a real floor and an audit trail," safe for the same class of tasks `auto` is safe for today — not as "unattended OS-level autonomy," which only becomes an honest claim once Phase B's sandboxing and checkpointing exist.
+### Phase B — OS tools, browser tools, doc-11 checkpoint convergence (unscheduled)
 
-### Phase B — sandboxing, checkpointing, OS tools, browser (2–3 weeks)
+1. Resolve §4.1/§4.2's open tension (real machine/real browser vs. some residual containment for the highest-blast-radius categories) as an explicit design decision, not a default.
+2. `process_manage`, `package_install` — `royal`-only in the `allowedTools` filter, each still passing through `royalTamperCheck()` (protecting the net's own storage) but nothing else.
+3. Browser tools per whichever framing §4.2 resolves to.
+4. If/when doc 11's fuller checkpoint system lands, migrate `royal`'s `checkpointBeforeMutation()` call site onto it (same storage location, so this should be closer to a swap than a rewrite) and gain prompt-scoped undo for Royal actions as a byproduct.
 
-1. **Wire srt around `bash`** (§3.2 Tier 1) — `tools.ts`'s bash tool gains a sandbox wrapper (Seatbelt profile on macOS, bubblewrap on Linux) confining writes to `cwd` + declared temp dirs, network allowlisted to package registries. Ship for `royal` first; evaluate promoting to `auto` once proven.
-2. **Shadow-git checkpoint, for real** (§3.3) — implement doc 07's design: `agent/src/checkpoint.ts`, `~/.koder/checkpoints/<hash>/`, commit-before-mutation, SHA recorded in the A2 audit log, restore surfaced in the extension as a user action (never a model tool).
-3. **OS-level tools** (§4.1) — `process_manage`, `package_install`; added to `TOOLS` only under `session.mode === "royal"` in the `loop.ts:133–134` filter; each floor-checked (A1) and sandboxed (Tier 2, defaulting off-device per §7 item 2 — this likely means Phase B's *local* implementation ships Tier-2 tools gated behind a separate "run on this machine" opt-in, with the off-device path as a fast-follow).
-4. **Browser tools** (§4.2) — bundled Playwright, ephemeral profile per session, `browser_navigate/act/extract/screenshot`, hard-ban table enforced in the tool implementations themselves (belt-and-suspenders with A1's floor), screenshot-referenced audit sub-log.
-5. **Async notification channel** — new ACP notification `koder/royal_notice` (`{level: "info"|"needs_review"|"blocked", text, auditRef}`), extension surfaces as an OS-level notification (not a blocking dialog) and a persistent "needs review" badge, matching the triage-inbox pattern doc 04 already recommends for multi-agent (`04-ux-patterns-performance.md` §3).
+### Phase C — self-healing loop (depends on doc 08 Phase C shipping first)
 
-### Phase C — self-healing loop (1 week, depends on doc 08 Phase C shipping first)
-
-1. Outcome-signature loop detection (§5.1) — extend `loop.ts`'s repeat-tracking `Map`s.
-2. Unconditional causal-lesson write on trigger (§5.2) — routes through doc 08's `remember` tool/`MEMORY.md`, so **this phase has a hard dependency on doc 08 Phase C shipping first** (the memory store, injection, and consolidation mechanism must already exist; Royal only adds a new, stricter write-trigger to it).
-3. Consolidation — no new work; doc 08 §2.3's existing 32 KiB cap/consolidation absorbs the extra volume.
-4. Optional, human-facing (not agent-autonomous): a periodic rollup of `royal-audit` logs surfacing repeat floor-blocks as product-facing suggestions ("Royal has been blocked from force-pushing 4 times this week — enable it explicitly?") — this is a UX feedback loop for the *user*, deliberately kept out of the agent's own loop per §7 item 7.
+Unaffected by the reversal — see §5.
 
 ---
 
-## 7. What should NOT be in Royal mode — explicit pushback
+## 7. What should NOT be in Royal mode — rewritten pushback, post-reversal
 
-The user asked for zero intervention, OS access, and browser access. Building all of that as asked, without pushback, would be a mistake. Here is where the line sits and why:
+The first draft's §7 was pushback against building Royal exactly as a naive reading of "zero intervention, OS access, browser access" would suggest, under a thesis where more autonomy demanded more restriction. Several of those items were themselves restrictions-on-Royal that the reversal directly overturns; keeping them unchanged here would quietly reintroduce the old thesis. Restated per-item:
 
-1. **No `system_settings` tool.** OS preferences, credential-store access (Keychain/Credential Manager), firewall rules, user/permission management. This tier can't be meaningfully sandboxed (changing system settings *is* escaping containment by definition) and isn't required by "shipped software quality," Koder's actual mission (PLAN.md §1). If a real use case emerges, it routes through async-approval, never silent Royal autonomy.
-2. **OS-level tools (Tier 2) should default to a disposable off-device sandbox, not the user's real machine.** "Zero human oversight" + "arbitrary process/package control" + "the user's actual laptop" is the single riskiest combination in this design space. Running Tier 2 in a throwaway container/microVM (E2B/Firecracker, already in doc 02/03's toolkit) converts "trust the sandbox to be perfect" into "worst case, discard a VM and inspect the checkpoint diff." Local execution should require a separate, explicit opt-in beyond just enabling Royal mode.
-3. **No reuse of the user's live, authenticated browser.** Argued in full in §4.2. A zero-oversight agent should never inherit the user's real logged-in sessions (bank, personal email, work SSO). Bundled + ephemeral + unauthenticated-by-default only; if a task genuinely needs authentication, that's a user-provisioned, scoped credential the agent uses without being able to read or exfiltrate it raw — not a handoff of the user's actual browser.
-4. **No self-modification of the safety substrate, ever, even with full filesystem access.** The floor rules (`floor.ts`), the audit log, the kill-switch code, the mode/permission config, and the checkpoint mechanism must stay outside what Royal can edit or delete — enforced both by the path rule in §3.1's floor table and, ideally, by keeping these files genuinely outside the workspace tree (`~/.koder/`, not `<workspace>/.koder/`). This is the direct engineering answer to "kill switches don't work if the agent writes the policy" (§8) — it has to be true structurally, not by convention.
-5. **No purchases, payments, account creation, or contractual actions (accepting ToS, signing up for paid services) — anywhere, any mode with browser or OS access.** Matches Claude in Chrome's own published ban list (§8) almost exactly; there's no reason Royal should be more permissive than a tool built for supervised use.
-6. **No self-continuation across turns, v1.** `runPrompt` already stops issuing tool calls and returns `"end_turn"` when the model has nothing left to do (`loop.ts:184–186`), and `session/prompt` then waits for the next human-sent message — there is currently no mechanism for the agent to re-prompt itself into a new turn. Royal must **not** add one in v1: self-re-prompting is itself the runaway-process vector this item exists to prevent, and it composes badly with everything else in this doc (a self-continuing agent burns through checkpoints, audit volume, and sandbox lifetime unattended, exactly the scenario with the least oversight). So: Royal v1 is a single enriched turn — a raised `MAX_ITERATIONS`, plus a wall-clock/tool-count ceiling *within that turn* — that hard-stops and async-notifies at `end_turn` or ceiling breach, the same as any other mode, just with more headroom and no permission prompts along the way. A future multi-task queue is a distinct, explicitly-scoped feature with its own review, not an implicit consequence of "zero intervention."
-7. **No agent-authored changes to its own policy, even via the "self-learning" mechanism.** The causal-lesson memory in §5.2 writes to project/global *memory* files only — it must never be permitted to propose or apply edits to the floor rules, the system prompt template, or its own permission/sandbox config, no matter how well-justified a given "lesson" might sound. This is the same tamper boundary as item 4, restated for the specific case where the mechanism generating the edit is the agent's own reflection rather than a direct tool call — the boundary has to hold regardless of which code path is trying to cross it.
+1. ~~No `system_settings` tool.~~ **Still true, but no longer because Royal needs restricting** — this is unchanged because no real use case has emerged for it (doc's original reasoning: it isn't required by "shipped software quality," Koder's actual mission), not because Royal specifically can't be trusted with it. If a real use case emerges, it's a normal feature-scoping decision like any other new tool, not a special Royal carve-out.
+2. ~~OS-level tools should default to off-device.~~ **Superseded — flagged as unresolved in §4.1, not asserted.** The old reasoning ("zero oversight + real machine is the riskiest combination") is exactly the stricter-rails thesis the user reversed. Phase B has to make this call explicitly, not inherit the old default.
+3. ~~No reuse of the user's live, authenticated browser.~~ **Superseded — flagged as unresolved in §4.2, not asserted**, for the same reason as item 2.
+4. **No self-modification of the passive safety net's own storage — kept, narrowed, honestly scoped.** This is the one item that survives the reversal essentially intact, but restated accurately: `royalTamperCheck()` protects `~/.koder/royal-audit/` and `~/.koder/checkpoints/` only. It does **not** protect the harness's own source code from a Royal session pointed at a workspace that contains it (§3.1's disclosed limitation) — the first draft's broader claim ("no self-modification of the safety substrate, ever, even with full filesystem access") no longer holds and this doc says so plainly rather than leaving stale language that overclaims.
+5. ~~No purchases, payments, account creation, or contractual actions.~~ **Superseded — folded into §4.2's unresolved question.** These were Claude-in-Chrome-derived hard bans specifically for the browser tool family that doesn't exist yet; whether Royal keeps any of them is part of the same open design question, not a settled floor rule.
+6. **No self-continuation across turns — kept, unaffected by the reversal.** This was never a trust restriction on Royal specifically; it's a runaway-process/resource-exhaustion concern that applies regardless of permission model. `runPrompt` still stops at `end_turn` and waits for the next `session/prompt` call in every mode, Royal included. A self-continuing agent composes badly with an unattended, unblocked mode particularly badly (burns through checkpoints and audit volume unattended) — if anything, this item matters *more* post-reversal, not less.
+7. **No agent-authored changes to its own policy via the self-learning mechanism — kept, restated in §5.2.** Also not a trust restriction on Royal's capability; it's a boundary on what the *reflection/memory-writing mechanism specifically* is allowed to do, independent of what the user themselves chooses to let Royal touch via ordinary tool calls.
 
-None of these are "temporary until v2" hedges. They're the shape of the product's answer to "how autonomous is too autonomous" — Royal mode should be sold as *maximally autonomous within a hard containment boundary*, not *unrestricted*, and the marketing/UX (the informed-consent modal in Phase A, item A5) should say so explicitly rather than implying zero limits.
+Items 2, 3, and 5 are the ones this revision genuinely changes — they're not soft-pedaled into "still mostly true" language, because they were load-bearing parts of the old thesis and pretending otherwise would misrepresent what "Royal is dangerous, not Auto" actually commits the design to.
 
 ---
 
 ## 8. Sources
 
-- **This codebase**: `agent/src/loop.ts`, `agent/src/server.ts`, `agent/src/tools.ts`, `product/koder-chat/extension.js`, `docs/research/01-editor-foundation.md`, `02-agent-intelligence.md`, `03-oss-building-blocks.md` §5, `04-ux-patterns-performance.md` §2–3, `07-enterprise-chat-panel.md`, `08-memory-context-engineering.md`, `PLAN.md`.
-- **Anthropic, "How we built Claude Code auto mode: a safer way to skip permissions"** — two-stage classifier (Stage 1 single-token, 8.5% FP tuned for recall; Stage 2 chain-of-thought, reduces to 0.4% FP), reasoning-blind design (strips the agent's own messages/tool outputs before judging), three-tier allowlist (safe ops bypass entirely; in-project edits bypass the classifier as git-reviewable; shell/network/out-of-project hits the classifier), escalation after 3 consecutive or 20 total blocked actions, **17% false-negative rate on documented overeager actions** (the number that justifies not leaning on the classifier alone as Royal's safety mechanism) — `anthropic.com/engineering/claude-code-auto-mode`.
-- **Cognition (Devin)** — plan-then-execute with dynamic re-planning, sandboxed cloud environment (shell/browser/editor/subagents), custom `blockdiff` VM snapshot format (30 min → ~200ms → ~15s snapshot time), checkpoint restore rolls back files *and* memory, streaming updates with in-flight correction (bidirectional but non-blocking) — Cognition product-update blog posts, `docs.devin.ai`.
-- **OpenHands** — Docker-container-per-task runtime, action/observation protocol over a controller↔sandbox socket/REST boundary, bind-mount/overlay filesystem control, port-allocation isolation; notably **no explicit dangerous-action policy at the runtime layer** — confirms that containment (sandboxing) and policy (a floor) are separate concerns neither Devin's nor OpenHands' public docs conflate, which this design also keeps separate (§3.1 vs §3.2) — `docs.openhands.dev/openhands/usage/architecture/runtime`.
-- **Claude in Chrome permissions** — site-level gating ("allow this action" vs "always allow actions on this site"), site blocklists, action confirmations for high-risk actions (downloads, sensitive-info entry), and a hard ban list (no purchases, no account creation, no bypassing bot-auth, no trades, no permanent deletion, refuses actions resembling prompt injection) — the direct precedent for §4.2's browser floor table — `support.claude.com/en/articles/12902446-claude-in-chrome-permissions-guide`, `support.claude.com/en/articles/12902428-use-claude-in-chrome-safely`.
-- **Kill-switch design literature** — infrastructure-level, deterministic, outside the agent's own reasoning ("cannot ignore it, override it, or negotiate with it through prompts"), state-capture + immutable logging, rollback-and-quarantine, cooperative stopping over forceful kills, watchdog/sidecar patterns — general survey across `miniorange.com/blog/ai-kill-switch-architecture`, `93days.me`, `theproductjourney.substack.com`; **"Kill Switches Don't Work If the Agent Writes the Policy"** (Stanford CodeX, Berkeley Agentic AI Profile analysis) — the direct source for §7 item 7's framing, `law.stanford.edu/2026/03/07/kill-switches-dont-work-if-the-agent-writes-the-policy...`.
-- **Self-healing/causal memory literature** — episodic/semantic/procedural memory layering, causal chains ("symptom → cause → fix"), reflect→extract→store→retrieve lesson loops, and Claude Code's own leaked three-layer `memory.md`-as-pointer-index architecture (which doc 08 already independently converges on) — `mindstudio.ai/blog/claude-code-source-leak-memory-architecture`, `blog.gopenai.com` (self-healing agents with causal memory), `medium.com/@kumaran.isk` ("your AI agent makes the same mistake twice").
+- **This codebase**: `agent/src/loop.ts`, `agent/src/floor.ts`, `agent/src/checkpoint.ts`, `agent/src/audit.ts`, `agent/src/server.ts`, `agent/src/tools.ts`, `product/koder-chat/extension.js`, `docs/research/01-editor-foundation.md`, `02-agent-intelligence.md`, `03-oss-building-blocks.md` §5, `04-ux-patterns-performance.md` §2–3, `07-enterprise-chat-panel.md`, `08-memory-context-engineering.md`, `11-prompt-checkpoints-undo.md`, `PLAN.md`.
+- **Anthropic, "How we built Claude Code auto mode: a safer way to skip permissions"** — two-stage classifier (Stage 1 single-token, 8.5% FP tuned for recall; Stage 2 chain-of-thought, reduces to 0.4% FP), reasoning-blind design, three-tier allowlist, escalation after 3 consecutive or 20 total blocked actions, 17% false-negative rate on documented overeager actions — `anthropic.com/engineering/claude-code-auto-mode`.
+- **Cognition (Devin)** — plan-then-execute with dynamic re-planning, sandboxed cloud environment, custom `blockdiff` VM snapshot format, checkpoint restore rolls back files *and* memory, streaming updates with in-flight correction — Cognition product-update blog posts, `docs.devin.ai`.
+- **OpenHands** — Docker-container-per-task runtime, action/observation protocol, bind-mount/overlay filesystem control, port-allocation isolation; notably no explicit dangerous-action policy at the runtime layer — confirms containment and policy are separate concerns, which this design also keeps separate (§3.1 vs §3.2) — `docs.openhands.dev/openhands/usage/architecture/runtime`.
+- **Claude in Chrome permissions** — site-level gating, site blocklists, action confirmations for high-risk actions, and a hard ban list — the reference point for §4.2's still-open browser-tool question — `support.claude.com/en/articles/12902446-claude-in-chrome-permissions-guide`, `support.claude.com/en/articles/12902428-use-claude-in-chrome-safely`.
+- **Kill-switch design literature** — infrastructure-level, deterministic, outside the agent's own reasoning, state-capture + immutable logging, rollback-and-quarantine; **"Kill Switches Don't Work If the Agent Writes the Policy"** (Stanford CodeX, Berkeley Agentic AI Profile analysis) — the direct source for §5.2/§7 item 7's framing — `law.stanford.edu/2026/03/07/kill-switches-dont-work-if-the-agent-writes-the-policy...`, general survey across `miniorange.com/blog/ai-kill-switch-architecture`, `93days.me`, `theproductjourney.substack.com`.
+- **Self-healing/causal memory literature** — episodic/semantic/procedural memory layering, causal chains, reflect→extract→store→retrieve lesson loops — `mindstudio.ai/blog/claude-code-source-leak-memory-architecture`, `blog.gopenai.com`, `medium.com/@kumaran.isk`.

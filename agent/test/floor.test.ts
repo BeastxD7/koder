@@ -6,10 +6,10 @@
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { floorCheck } from "../src/floor.js";
+import { floorCheck, royalTamperCheck } from "../src/floor.js";
 
 async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "koder-floor-"));
@@ -213,3 +213,40 @@ test("sudo/doas/env/absolute-path prefixes don't neutralize a rule", () =>
       assert.equal(bash("sudo npm publish", workspace).blocked, true);
     }),
   ));
+
+/* ---------------- royalTamperCheck: the ONE narrow exception for royal mode ----------------
+ * Royal mode does not call floorCheck() at all (see loop.ts) — this is a
+ * separate, much smaller function that protects only the passive safety
+ * net's own storage (~/.koder/royal-audit, ~/.koder/checkpoints), not a
+ * restriction on the user's project. Everything else Royal does is
+ * unrestricted; these tests only cover this one guarded exception. */
+
+test("royalTamperCheck blocks write_file/edit_file targeting the royal-audit or checkpoints directories", () => {
+  const auditPath = join(homedir(), ".koder", "royal-audit", "2026-07.jsonl");
+  const checkpointPath = join(homedir(), ".koder", "checkpoints", "abc123", "shadow.git", "HEAD");
+  assert.equal(royalTamperCheck("write_file", { path: auditPath, content: "tampered" }).blocked, true);
+  assert.equal(royalTamperCheck("edit_file", { path: checkpointPath, old_string: "x", new_string: "y" }).blocked, true);
+});
+
+test("royalTamperCheck blocks bash commands that reference the guarded paths", () => {
+  const auditDir = join(homedir(), ".koder", "royal-audit");
+  const checkpointsDir = join(homedir(), ".koder", "checkpoints");
+  assert.equal(royalTamperCheck("bash", { command: `rm -rf ${auditDir}` }).blocked, true);
+  assert.equal(royalTamperCheck("bash", { command: `echo pwned > ${join(auditDir, "2026-07.jsonl")}` }).blocked, true);
+  assert.equal(royalTamperCheck("bash", { command: `rm -rf ${checkpointsDir}` }).blocked, true);
+});
+
+test("royalTamperCheck does NOT block anything else — this is the whole point of royal mode", () => {
+  // the user's actual project: unrestricted, including paths that would be
+  // floor-blocked in every other mode
+  assert.equal(royalTamperCheck("bash", { command: "rm -rf /" }).blocked, false);
+  assert.equal(royalTamperCheck("bash", { command: "git push --force origin main" }).blocked, false);
+  assert.equal(royalTamperCheck("write_file", { path: "/etc/passwd", content: "x" }).blocked, false);
+  assert.equal(royalTamperCheck("write_file", { path: join(homedir(), "Desktop", "notes.txt"), content: "x" }).blocked, false);
+  // a path that merely shares a prefix with a guarded directory is not the guarded directory
+  assert.equal(
+    royalTamperCheck("write_file", { path: join(homedir(), ".koder", "royal-audit-backup", "x.txt"), content: "x" })
+      .blocked,
+    false,
+  );
+});

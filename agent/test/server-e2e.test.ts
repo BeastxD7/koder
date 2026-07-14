@@ -6,13 +6,15 @@
  * to a scripted OpenAI-compatible SSE server on localhost. No real API keys.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import * as acp from "@agentclientprotocol/sdk";
 import { PRESETS } from "../src/config.js";
 import {
@@ -23,6 +25,27 @@ import {
   textTurn,
   toolTurn,
 } from "./helpers/fake-openai.js";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Recompute the shadow-git dir the SAME way `checkpoint.ts`'s `shadowPaths()`
+ * does, against the given fake HOME (not this test process's own HOME —
+ * the server child runs with HOME overridden, see `env` below).
+ */
+function shadowGitDirFor(fakeHome: string, worktree: string): string {
+  const hash = createHash("sha256").update(resolve(worktree)).digest("hex").slice(0, 16);
+  return join(fakeHome, ".koder", "checkpoints", hash, "shadow.git");
+}
+
+/** Run a shadow-git plumbing command against the checkpoint repo for `worktree`, same explicit --git-dir/--work-tree shape checkpoint.ts uses. */
+async function shadowGit(fakeHome: string, worktree: string, args: string[]): Promise<string> {
+  const gitDir = shadowGitDirFor(fakeHome, worktree);
+  const { stdout } = await execFileAsync("git", [`--git-dir=${gitDir}`, `--work-tree=${worktree}`, ...args], {
+    cwd: worktree,
+  });
+  return stdout;
+}
 
 const agentDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tsxBin = join(agentDir, "node_modules", ".bin", "tsx");
@@ -275,6 +298,87 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
               const upd = updates.find((u) => u.sessionUpdate === "tool_call_update" && u.toolCallId === "call_floor1");
               assert.equal(upd.status, "failed");
               assert.match(upd.content[0].content.text, /Blocked by safety floor/);
+            });
+          }),
+        );
+
+        await t.test("royal mode: bypasses the floor entirely; keeps a passive checkpoint + audit net", (t3) =>
+          ctx.buildSession(workspace).withSession(async (session: any) => {
+            await ctx.request(acp.methods.agent.session.setMode, {
+              sessionId: session.sessionId,
+              modeId: "royal",
+            });
+
+            await t3.test("royal mode: force-push is NOT blocked — the inverse of the auto-mode floor test", async () => {
+              const permsBefore = permissionRequests.length;
+              fake.enqueue(
+                toolTurn("call_royal_fp", "bash", { command: "git push --force origin main" }),
+                textTurn("Pushed (or tried to)."),
+              );
+              const { updates, response } = await runTurn(session, "force push my branch");
+              assert.equal(response.stopReason, "end_turn");
+
+              // no floor, no permission prompt — same "don't ask" shape as auto,
+              // but this time nothing pre-execution-blocked it either
+              assert.equal(permissionRequests.length, permsBefore, "royal mode must not ask for permission");
+
+              const toolMsg = lastToolMessage(fake, "call_royal_fp")!.content;
+              // the discriminator: NOT the deterministic floor message, and a
+              // REAL git error (this workspace has no .git) — proof the
+              // command actually reached execution instead of being floored
+              assert.doesNotMatch(toolMsg, /Blocked by safety floor/);
+              assert.match(toolMsg, /fatal:|not a git repository/i);
+
+              const upd = updates.find((u) => u.sessionUpdate === "tool_call_update" && u.toolCallId === "call_royal_fp");
+              assert.equal(upd.status, "completed"); // ran (and then failed on its own merits), not denied
+            });
+
+            await t3.test("royal mode: checkpoints workspace state BEFORE a mutating tool call runs", async () => {
+              await writeFile(join(workspace, "seed.txt"), "seed-content");
+
+              fake.enqueue(
+                toolTurn("call_royal_wf", "write_file", { path: "new.txt", content: "hello-royal" }),
+                textTurn("Wrote it."),
+              );
+              const { response } = await runTurn(session, "create new.txt");
+              assert.equal(response.stopReason, "end_turn");
+
+              // the real mutation happened on disk...
+              assert.equal(await readFile(join(workspace, "new.txt"), "utf8"), "hello-royal");
+
+              // ...but the checkpoint commit taken immediately BEFORE that write
+              // captures pre-mutation state: seed.txt is in it, new.txt is not.
+              const tree = await shadowGit(home, workspace, ["ls-tree", "-r", "--name-only", "HEAD"]);
+              const files = tree.trim().split("\n");
+              assert.ok(files.includes("seed.txt"), "checkpoint must include the pre-existing file");
+              assert.ok(!files.includes("new.txt"), "checkpoint must NOT include the file the tool was about to create");
+              const seedInCheckpoint = await shadowGit(home, workspace, ["show", "HEAD:seed.txt"]);
+              assert.equal(seedInCheckpoint, "seed-content");
+            });
+
+            await t3.test("royal mode: audit log gets a real entry with the right shape", async () => {
+              const now = new Date();
+              const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+              const auditPath = join(home, ".koder", "royal-audit", `${ym}.jsonl`);
+              const lines = (await readFile(auditPath, "utf8")).trim().split("\n").filter(Boolean);
+              const entries = lines.map((l) => JSON.parse(l));
+
+              // the write_file call from the checkpoint test above must have logged
+              const entry = entries.find((e) => e.tool === "write_file" && e.input.includes("new.txt"));
+              assert.ok(entry, "expected a write_file audit entry mentioning new.txt");
+              assert.equal(entry.decision, "allowed");
+              assert.equal(entry.cwd, workspace);
+              assert.ok(entry.checkpointSha, "audit entry should carry the checkpoint sha taken before this call");
+              assert.ok(typeof entry.outputSummary === "string" && entry.outputSummary.length > 0);
+              assert.equal(entry.isError, false);
+              assert.ok(typeof entry.durationMs === "number");
+              assert.ok(!Number.isNaN(Date.parse(entry.ts)), "ts must be a valid timestamp");
+
+              // the force-push from the bypass test above must ALSO be logged —
+              // logging is unconditional in royal mode, blocked or not
+              const fpEntry = entries.find((e) => e.tool === "bash" && e.input.includes("--force"));
+              assert.ok(fpEntry, "expected the force-push bash call to be audited too");
+              assert.equal(fpEntry.decision, "allowed"); // allowed by the (absent) floor; failed on its own merits
             });
           }),
         );

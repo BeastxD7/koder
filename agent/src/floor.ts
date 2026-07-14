@@ -15,10 +15,14 @@
  * mode even after a human clicks "Allow", because this is a safety floor, not
  * a permission that can be granted away.
  *
- * Naming/shape matches `docs/research/09-royal-mode-autonomous.md` §3.1,
- * which designs Royal mode's safety substrate on top of this exact function
- * (`agent/src/floor.ts`, `floorCheck(name, input, cwd)`) — so this module is
- * meant to be reused, not reinvented, when Royal mode lands.
+ * `review`/`approve`/`auto` all call `floorCheck()` — this is what keeps Auto
+ * "locked." `royal` mode is the one exception: it does NOT call
+ * `floorCheck()` at all (see `loop.ts`'s `runPrompt()`), by explicit design —
+ * see `docs/research/09-royal-mode-autonomous.md`'s reversed thesis (Royal is
+ * dangerous, not Auto). Royal instead calls the separate, much narrower
+ * `royalTamperCheck()` below, which protects only the passive safety net's
+ * own storage (audit log, checkpoints) — not a restriction on the user's
+ * project, just what keeps that net honest.
  *
  * Scope, deliberately: this covers the 5 categories the existing prompt text
  * already promises (force-push, history rewrites, rm -rf outside the
@@ -61,7 +65,7 @@
  */
 
 import { homedir } from "node:os";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export interface FloorResult {
   blocked: boolean;
@@ -381,6 +385,74 @@ export function floorCheck(name: string, input: any, cwd: string): FloorResult {
     for (const c of checks) {
       if (c.blocked) return c;
     }
+  }
+  return SAFE;
+}
+
+// ---------------------------------------------------------------------------
+// Royal mode's ONE narrow exception — self-tamper protection on the passive
+// safety net's own storage, not `floorCheck()`.
+//
+// Royal mode deliberately does NOT call `floorCheck()` at all (see
+// `loop.ts`'s `runPrompt()`) — that is the entire point of the mode per
+// `docs/research/09-royal-mode-autonomous.md`'s reversed thesis: Auto is
+// locked (floorCheck fully enforced, unconditional), Royal is dangerous by
+// design (floorCheck bypassed entirely, full machine access, zero
+// pre-execution blocking, zero permission prompts).
+//
+// What Royal keeps is a *passive* net: an audit log (`audit.ts`) and
+// pre-mutation checkpoints (`checkpoint.ts`), so a human always has a record
+// and an undo path after the fact even though nothing was blocked in the
+// moment. That net is worthless if Royal can erase it — a log you can erase
+// isn't a log. So this one check exists, separate from `floorCheck()`,
+// covering only the two directories the net itself writes to
+// (`~/.koder/royal-audit/`, `~/.koder/checkpoints/`). It is not a
+// restriction on what Royal can do to the user's project (it can still
+// force-push, rm -rf anywhere in or outside the workspace, rewrite history,
+// publish packages — none of that touches these paths) — it's what makes
+// the passive net trustworthy enough to be worth keeping at all.
+//
+// Deliberately simple, matching this module's existing style: a substring/
+// path-resolution check, not a shell parser. Known limitation: `bash`
+// detection is a substring match against the guarded roots, so an obfuscated
+// path (env var expansion, `cd` + relative reference, a symlink) can evade
+// it — same class of limitation the rest of this module already documents
+// and accepts. This is a last-line backstop against an incidental or
+// instructed-but-not-obfuscated tamper attempt, not a sandbox boundary.
+// ---------------------------------------------------------------------------
+
+function guardedRoyalRoots(): string[] {
+  return [join(homedir(), ".koder", "royal-audit"), join(homedir(), ".koder", "checkpoints")];
+}
+
+function underGuardedRoot(p: string): string | undefined {
+  const resolved = resolve(p);
+  return guardedRoyalRoots().find((root) => resolved === root || resolved.startsWith(root + sep));
+}
+
+export function royalTamperCheck(name: string, input: any): FloorResult {
+  if (name === "write_file" || name === "edit_file") {
+    const path = String(input?.path ?? "");
+    if (!path) return SAFE;
+    const hit = underGuardedRoot(path);
+    if (hit) {
+      return block(
+        `Royal's own safety-net storage (${hit}) cannot be written to or modified, even in royal mode — a log you can erase isn't a log.`,
+      );
+    }
+    return SAFE;
+  }
+  if (name === "bash") {
+    const command = String(input?.command ?? "");
+    if (!command.trim()) return SAFE;
+    for (const root of guardedRoyalRoots()) {
+      if (command.includes(root)) {
+        return block(
+          `Royal's own safety-net storage (${root}) cannot be touched by a command, even in royal mode — a log you can erase isn't a log.`,
+        );
+      }
+    }
+    return SAFE;
   }
   return SAFE;
 }
