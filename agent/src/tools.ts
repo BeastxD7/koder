@@ -1,11 +1,27 @@
 /** Koder agent tool set v1 — minimal composable surface (mini-SWE-agent lesson). */
 import { exec } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ToolDef } from "./providers/types.js";
 
 const execAsync = promisify(exec);
+
+/**
+ * Pick a real shell instead of assuming one. zsh is the macOS default but is
+ * frequently absent on Linux (including GitHub's ubuntu-latest runners) —
+ * hardcoding it there throws ENOENT. Windows keeps Node's own cmd.exe
+ * default (shell: undefined).
+ */
+function resolveShell(): string | undefined {
+  if (process.platform === "win32") return undefined;
+  for (const candidate of ["/bin/zsh", "/bin/bash"]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined; // falls back to /bin/sh, always present on POSIX
+}
+const SHELL = resolveShell();
 
 export type ToolKind = "read" | "edit" | "execute" | "search";
 
@@ -150,7 +166,7 @@ export const TOOLS: ToolSpec[] = [
     kind: "execute",
     dangerous: true,
     description:
-      "Run a shell command in the workspace (zsh on macOS/Linux, cmd on Windows). Use for builds, tests, git, and anything the other tools don't cover.",
+      "Run a shell command in the workspace. Use for builds, tests, git, and anything the other tools don't cover.",
     input_schema: {
       type: "object",
       properties: {
@@ -166,7 +182,7 @@ export const TOOLS: ToolSpec[] = [
           signal,
           timeout: input.timeout_ms ?? 120_000,
           maxBuffer: 4 * 1024 * 1024,
-          shell: process.platform === "win32" ? undefined : "/bin/zsh",
+          shell: SHELL,
         });
         const out = [stdout, stderr].filter(Boolean).join("\n--- stderr ---\n");
         return out.slice(0, 60_000) || "(no output)";

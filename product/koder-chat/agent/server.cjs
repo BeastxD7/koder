@@ -8,7 +8,7 @@ var __export = (target, all) => {
 
 // src/server.ts
 var import_node_crypto = require("node:crypto");
-var import_node_fs2 = require("node:fs");
+var import_node_fs3 = require("node:fs");
 var import_node_path3 = require("node:path");
 var import_node_stream = require("node:stream");
 
@@ -18321,10 +18321,19 @@ function toWire2(messages) {
 
 // src/tools.ts
 var import_node_child_process = require("node:child_process");
+var import_node_fs2 = require("node:fs");
 var import_promises = require("node:fs/promises");
 var import_node_path2 = require("node:path");
 var import_node_util = require("node:util");
 var execAsync = (0, import_node_util.promisify)(import_node_child_process.exec);
+function resolveShell() {
+  if (process.platform === "win32") return void 0;
+  for (const candidate of ["/bin/zsh", "/bin/bash"]) {
+    if ((0, import_node_fs2.existsSync)(candidate)) return candidate;
+  }
+  return void 0;
+}
+var SHELL = resolveShell();
 function abs(cwd, p) {
   return (0, import_node_path2.isAbsolute)(p) ? p : (0, import_node_path2.resolve)(cwd, p);
 }
@@ -18454,7 +18463,7 @@ var TOOLS = [
     name: "bash",
     kind: "execute",
     dangerous: true,
-    description: "Run a shell command in the workspace (zsh on macOS/Linux, cmd on Windows). Use for builds, tests, git, and anything the other tools don't cover.",
+    description: "Run a shell command in the workspace. Use for builds, tests, git, and anything the other tools don't cover.",
     input_schema: {
       type: "object",
       properties: {
@@ -18470,7 +18479,7 @@ var TOOLS = [
           signal,
           timeout: input.timeout_ms ?? 12e4,
           maxBuffer: 4 * 1024 * 1024,
-          shell: process.platform === "win32" ? void 0 : "/bin/zsh"
+          shell: SHELL
         });
         const out = [stdout, stderr].filter(Boolean).join("\n--- stderr ---\n");
         return out.slice(0, 6e4) || "(no output)";
@@ -18645,10 +18654,10 @@ var MODES = [
 ];
 function savePlan(cwd, text) {
   const dir = (0, import_node_path3.join)(cwd, ".koder", "plans");
-  (0, import_node_fs2.mkdirSync)(dir, { recursive: true });
+  (0, import_node_fs3.mkdirSync)(dir, { recursive: true });
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:T]/g, "-").slice(0, 19);
   const file2 = (0, import_node_path3.join)(dir, `plan-${stamp}.md`);
-  (0, import_node_fs2.writeFileSync)(file2, text.trim() + "\n");
+  (0, import_node_fs3.writeFileSync)(file2, text.trim() + "\n");
   return file2;
 }
 agent({ name: "koder-agent" }).onRequest("initialize", async () => ({

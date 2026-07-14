@@ -37,7 +37,7 @@ jobs:
           - os: macos-13
             target: darwin-x64
             artifact: Koder-macOS-x64
-          - os: windows-latest
+          - os: windows-2022
             target: win32-x64
             artifact: Koder-Windows-x64
           - os: ubuntu-latest
@@ -77,18 +77,34 @@ jobs:
         shell: bash
         run: ./scripts/prepare.sh
 
+      # @vscode/ripgrep's postinstall downloads a binary from GitHub releases;
+      # unauthenticated requests from shared Actions IP ranges get 403'd by
+      # GitHub's rate limiter. GITHUB_TOKEN (auto-provided) fixes that, and
+      # doubles as auth for the many other npm/GitHub calls postinstall makes.
       - name: Install upstream dependencies
         shell: bash
         working-directory: upstream
-        run: npm ci
+        # code-oss's postinstall fires ~40 parallel per-extension npm installs;
+        # on constrained CI runners this occasionally trips a transient spawn
+        # ENOENT — retry before failing the whole (expensive) job over a flake.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            echo "npm ci failed (attempt $attempt) — retrying in 15s" >&2
+            sleep 15
+          done
+          exit 1
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package
         shell: bash
         working-directory: upstream
         run: npm run gulp vscode-${{ matrix.target }}-min
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Archive (macOS)
         if: runner.os == 'macOS'
