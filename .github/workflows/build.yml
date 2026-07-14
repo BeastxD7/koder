@@ -89,19 +89,26 @@ jobs:
         shell: bash
         working-directory: upstream
         # code-oss's postinstall fires ~40-50 parallel per-extension npm
-        # installs. macOS runners default to a 256 open-file-descriptor soft
-        # limit (Linux/Windows default much higher) — that many concurrent
-        # npm child processes reliably exhausts it, and Node surfaces the
-        # failure as a misleading "spawn /bin/sh ENOENT" rather than EMFILE.
-        # Confirmed by log evidence: this reproduced identically 3/3 times
-        # at the exact point ~50+ parallel "added N packages" installs had
-        # just finished, even with NPM_CONFIG_AUDIT/FUND disabled (an earlier
-        # fix that turned out to be coincidental — audit output just happened
-        # to be the last thing printed before the real (fd-limit) crash).
-        # Raise the limit before installing; retry loop kept as
-        # defense-in-depth for genuine transient flakes.
+        # installs, which crashes with a bare (no-workspace-prefix, i.e. from
+        # npm's own top-level process, not a per-extension one) "spawn
+        # /bin/sh ENOENT" on macOS only, reproduced identically on every
+        # retry across two separate runs. Raising just the open-file soft
+        # limit (`ulimit -n 10240`, previous attempt) did NOT fix it, which
+        # rules out plain fd exhaustion as the sole cause — macOS also caps
+        # max-processes-per-user (`ulimit -u`) separately from open files,
+        # and that's the more likely fit for ~50 concurrent npm child
+        # processes each forking further children. Raise both soft limits to
+        # their hard ceiling (falling back to a fixed number if the hard
+        # limit itself is low/unlimited-unparseable) and dump the actual
+        # before/after values + kernel proc limits to the log so this is
+        # verifiable either way. Retry loop kept as defense-in-depth for
+        # genuine transient flakes.
         run: |
-          ulimit -n 10240 2>/dev/null || true
+          echo "before: nofile=$(ulimit -n) (hard $(ulimit -Hn)), nproc=$(ulimit -u 2>/dev/null || echo n/a) (hard $(ulimit -Hu 2>/dev/null || echo n/a))"
+          sysctl kern.maxproc kern.maxprocperuid 2>/dev/null || true
+          ulimit -n "$(ulimit -Hn)" 2>/dev/null || ulimit -n 10240 2>/dev/null || true
+          ulimit -u "$(ulimit -Hu)" 2>/dev/null || ulimit -u 2048 2>/dev/null || true
+          echo "after:  nofile=$(ulimit -n), nproc=$(ulimit -u 2>/dev/null || echo n/a)"
           for attempt in 1 2 3; do
             npm ci && exit 0
             echo "npm ci failed (attempt $attempt) — retrying in 15s" >&2
