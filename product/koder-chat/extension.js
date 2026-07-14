@@ -202,10 +202,14 @@ class AgentViewProvider {
     clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
       if (this.transcript.length === 0) return;
+      const title =
+        this.chatTitle ??
+        this.transcript.find((e) => e.type === "user")?.text?.slice(0, 48) ??
+        "Untitled chat";
       const file = path.join(chatsDir(), `${this.chatId}.json`);
       fs.writeFileSync(
         file,
-        JSON.stringify({ id: this.chatId, title: this.chatTitle ?? "Untitled chat", updatedAt: Date.now(), mode: this.mode, events: this.transcript }),
+        JSON.stringify({ id: this.chatId, title, updatedAt: Date.now(), mode: this.mode, events: this.transcript }),
       );
     }, 400);
   }
@@ -217,7 +221,12 @@ class AgentViewProvider {
         .map((f) => {
           try {
             const j = JSON.parse(fs.readFileSync(path.join(chatsDir(), f), "utf8"));
-            return { id: j.id, title: j.title, updatedAt: j.updatedAt };
+            let title = j.title;
+            if (!title || title === "Untitled chat") {
+              // backfill titles for chats saved before title derivation existed
+              title = j.events?.find((e) => e.type === "user")?.text?.slice(0, 48) ?? "Untitled chat";
+            }
+            return { id: j.id, title, updatedAt: j.updatedAt };
           } catch { return null; }
         })
         .filter(Boolean)
