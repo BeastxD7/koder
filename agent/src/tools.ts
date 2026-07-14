@@ -23,6 +23,22 @@ function resolveShell(): string | undefined {
 }
 const SHELL = resolveShell();
 
+/**
+ * Head+tail truncation instead of pure head truncation: build/test output
+ * puts the verdict at the TAIL (FAIL, error TS2345, exit summaries) — a
+ * naive head-only cap systematically deletes the most load-bearing bytes.
+ */
+export function clip(s: string, max = 60_000, headFrac = 0.65): string {
+  if (s.length <= max) return s;
+  const head = Math.floor(max * headFrac);
+  const tail = max - head;
+  return (
+    s.slice(0, head) +
+    `\n…[${(s.length - max).toLocaleString()} chars elided — narrow the command/pattern to see more]…\n` +
+    s.slice(-tail)
+  );
+}
+
 export type ToolKind = "read" | "edit" | "execute" | "search";
 
 export interface ToolSpec extends ToolDef {
@@ -58,7 +74,8 @@ export const TOOLS: ToolSpec[] = [
       const lines = content.replace(/\n$/, "").split("\n");
       const start = Math.max(0, (input.offset ?? 1) - 1);
       const slice = lines.slice(start, start + (input.limit ?? 800));
-      return slice.map((l, i) => `${start + i + 1}\t${l}`).join("\n") || "(offset past end of file)";
+      const out = slice.map((l, i) => `${start + i + 1}\t${l}`).join("\n");
+      return clip(out, 48_000) || "(offset past end of file)";
     },
   },
   {
@@ -154,7 +171,7 @@ export const TOOLS: ToolSpec[] = [
           `${JSON.stringify(rg)} --line-number --no-heading --max-count 200 --max-columns 300 ${globArg} -e ${JSON.stringify(input.pattern)} ${target}`,
           { cwd, signal, maxBuffer: 4 * 1024 * 1024 },
         );
-        return stdout.slice(0, 60_000) || "(no matches)";
+        return clip(stdout, 24_000) || "(no matches)";
       } catch (err: any) {
         if (err.code === 1) return "(no matches)";
         throw err;
@@ -185,9 +202,9 @@ export const TOOLS: ToolSpec[] = [
           shell: SHELL,
         });
         const out = [stdout, stderr].filter(Boolean).join("\n--- stderr ---\n");
-        return out.slice(0, 60_000) || "(no output)";
+        return clip(out, 60_000) || "(no output)";
       } catch (err: any) {
-        const out = [err.stdout, err.stderr, err.message].filter(Boolean).join("\n").slice(0, 60_000);
+        const out = clip([err.stdout, err.stderr, err.message].filter(Boolean).join("\n"), 60_000);
         return `EXIT ${err.code ?? "?"}\n${out}`;
       }
     },

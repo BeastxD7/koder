@@ -155,21 +155,22 @@ Patterns worth copying, mid-2026:
 - **Cline Memory Bank**: not a product feature — a custom-instruction methodology (confirmed still true mid-2026, `docs.cline.bot/best-practices/memory-bank`). Structured markdown directory (`projectbrief.md`, `productContext.md`, `activeContext.md`, `systemPatterns.md`, `techContext.md`, `progress.md`) that the *model* maintains on command ("update memory bank"), reading ALL files at the start of EVERY task via prompt text ("I MUST read ALL memory bank files"), not hard-coded product logic. Strength: structure. Weakness: heavyweight ceremony, easily stale, burns tokens every session.
 - **Windsurf Memories** — note the product has since moved: `docs.windsurf.com` now 307-redirects to `docs.devin.ai/desktop/cascade/memories` (Cognition absorbed Windsurf into "Devin Desktop"; `.devin/rules/` is the current primary directory, `.windsurf/rules/` kept only as legacy fallback). The mechanics carry over unchanged: auto-generated memories (Cascade decides mid-task something is worth keeping, stored locally) + user rules — `global_rules.md` capped at **6,000 chars**, workspace rule files at **12,000 chars each**, with per-rule activation modes (`always_on`, `model_decision`, `glob`, manual `@mention` — all four confirmed exact). Strength: zero-friction capture; the `model_decision` mode (only the rule's *description* rides in the system prompt, full text pulled on demand) is a smart token trick. Weakness: opaque capture; users report surprise at what got remembered.
 
-**Koder design — two files + one tool:**
+**Koder design — directory (global) + single file (project) + one tool.** We deliberately mirror Claude Code's proven directory+index shape only where unbounded growth is the real risk (global memory accumulates across every project, forever) and stay flat where it isn't (project memory is scoped to one repo's lifetime and, per §2.3, capped at 32 KiB anyway):
 
 ```
-~/.koder/memory.md            # global user memory (preferences, cross-project facts)
-<workspace>/.koder/memory.md  # project memory (build quirks, conventions, gotchas)
+~/.koder/memory/MEMORY.md       # global user memory — index, loaded every session (cap 8 KiB, §2.2 injection)
+~/.koder/memory/<topic>.md      # global topic files (e.g. providers.md, shell-quirks.md) — read on demand only, never auto-injected
+<workspace>/.koder/memory.md    # project memory — single flat file (build quirks, conventions, gotchas)
 ```
 
-Plain markdown bullet lists, one memory per bullet, `- [2026-07-14] pnpm not npm; postinstall needs KODER_SKIP_ELECTRON=1`.
+Plain markdown bullet lists, one memory per bullet, `- [2026-07-14] pnpm not npm; postinstall needs KODER_SKIP_ELECTRON=1`. Topic files exist from day one of Phase C only as an escape valve for consolidation (§2.3) — the `remember` tool writes to `MEMORY.md` by default and only the model's own consolidation step (or the user) creates topic files, exactly as Claude Code's does.
 
 **Write triggers** (in order of shipping):
 1. **Explicit tool** (`remember`): `{ scope: "project"|"global", text: string }` — appends a dated bullet. Marked `dangerous: false` but announced in the transcript (`kind: "edit"` title "Remember: …") so the user sees every write. The system prompt tells the model to use it *sparingly*: "only durable, generally useful facts you verified — never speculation, never secrets."
 2. **User-initiated**: extension surfaces "remember this" on any message → sends a hidden `remember` instruction. (Claude Code's `#`.)
 3. **End-of-task reflection** (Phase C, opt-in flag): when a turn ends with `end_turn` in approve/auto mode and >N tool calls ran, append one extra cheap-model call: "List 0–3 durable facts learned this session worth persisting (or NONE)." Auto-write only project scope, cap 3/session. This is the Windsurf pattern with a visibility guarantee: each auto-memory is posted to the transcript.
 
-**Injection**: both files into `systemPrompt()` after project rules, same delimiter pattern (`<memory scope=project>…`), **hard cap 8 KiB each at injection** (oldest bullets dropped first — the file keeps everything; only the injected view truncates; a header line tells the model "oldest entries omitted").
+**Injection**: `~/.koder/memory/MEMORY.md` and `<workspace>/.koder/memory.md` into `systemPrompt()` after project rules, same delimiter pattern (`<memory scope=global>…`/`<memory scope=project>…`), **hard cap 8 KiB each at injection** (oldest bullets dropped first — the file keeps everything; only the injected view truncates; a header line tells the model "oldest entries omitted"). Global topic files under `~/.koder/memory/*.md` are never auto-injected — the model `read_file`s one only when a bullet in `MEMORY.md` points at it (`See providers.md for the full OAuth quirk list`), same just-in-time principle as §1.2.
 
 ### 2.3 What NOT to store, caps, pruning
 
@@ -197,7 +198,7 @@ Best practice mid-2026 (Claude Code's own prompt, Anthropic context-engineering 
 9. <env> block — the ONLY per-turn-volatile section, last
 ```
 
-(With bare-string `system` both adapters get provider-side prefix caching for 1–8 automatically once ordering is fixed; adding an explicit Anthropic `cache_control` breakpoint after section 8 is a cheap follow-up that requires `system` to become a block array in `anthropic.ts`.)
+(The two providers differ here, and the doc's earlier phrasing conflated them — correcting: OpenAI-compat's automatic prefix caching benefits from stable-first ordering with zero code changes. Anthropic's prompt caching is **not** automatic — it only activates on an explicit `cache_control: { type: "ephemeral" }` breakpoint, which requires `system` to become a content-block array instead of a bare string in `anthropic.ts`. Byte-stable ordering of sections 1–8 is the precondition for *both*: it's what makes a future Anthropic `cache_control` breakpoint after section 8 pay off, and it's what OpenAI-compat's automatic caching needs today. Adding the Anthropic breakpoint is a cheap, self-contained follow-up once ordering ships.)
 
 ### 3.2 Content upgrades over the current prompt
 
@@ -306,10 +307,10 @@ Order of a day: A5/A6/A7 (mechanical) → A1/A2/A3 (one prompt rewrite) → A4 (
 
 ### Phase C — long-term memory (2–3 days)
 
-1. `remember` tool + `~/.koder/memory.md` / `<ws>/.koder/memory.md`, injection at 8 KiB caps (§2.2), scrub on write.
+1. `remember` tool + `~/.koder/memory/MEMORY.md` / `<ws>/.koder/memory.md`, injection at 8 KiB caps (§2.2), scrub on write.
 2. Extension "remember this" affordance → hidden `remember` instruction.
 3. Opt-in end-of-task reflection (cheap model, ≤3 auto-memories/session, always visible in transcript).
-4. Consolidation prompt when a memory file exceeds 32 KiB.
+4. Consolidation prompt when `MEMORY.md` (global) or the project file exceeds 32 KiB: model is asked to split stale/topic-specific bullets out into a new `~/.koder/memory/<topic>.md` file and leave a pointer bullet behind — the mechanism that keeps the global index bounded as memory accumulates across projects.
 5. Evidence-gate for Tier-2 repo map: only now evaluate web-tree-sitter + PageRank against ctags-lite on ≥3 real repos (does the model's first grep hit the right file more often?).
 
 ---

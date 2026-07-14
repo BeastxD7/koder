@@ -9,14 +9,18 @@ import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { availableProviders, loadConfig } from "./config.js";
-import { runPrompt, type AgentMode, type AgentSession } from "./loop.js";
+import { runPrompt, toolTitle, type AgentMode, type AgentSession } from "./loop.js";
 import { probeProvider } from "./providers/validate.js";
+import { loadSessionFile, pruneSessions, saveSessionSoon } from "./store.js";
 
 interface Session extends AgentSession {
   pending?: AbortController;
 }
 
 const sessions = new Map<string, Session>();
+
+// housekeeping: bound ~/.koder/sessions/ so it never grows unbounded
+pruneSessions();
 
 const MODES = [
   { id: "review", name: "Review", description: "Read-only: research the codebase and produce an implementation plan" },
@@ -38,7 +42,7 @@ acp
   .agent({ name: "koder-agent" })
   .onRequest("initialize", async () => ({
     protocolVersion: acp.PROTOCOL_VERSION,
-    agentCapabilities: { loadSession: false },
+    agentCapabilities: { loadSession: true },
   }))
   .onRequest("authenticate", async () => ({}))
   .onRequest("session/new", async (ctx) => {
@@ -48,6 +52,51 @@ acp
       sessionId,
       modes: { currentModeId: "review", availableModes: MODES },
     };
+  })
+  .onRequest("session/load", async (ctx) => {
+    const { sessionId, cwd } = ctx.params as { sessionId: string; cwd?: string };
+    const saved = loadSessionFile(sessionId);
+    if (!saved) throw new Error(`no saved session ${sessionId}`); // client falls back to session/new
+
+    sessions.set(sessionId, {
+      cwd: cwd ?? saved.cwd,
+      mode: saved.mode,
+      model: saved.model,
+      history: saved.history,
+    });
+
+    // ACP contract: replay the conversation via session/update before returning.
+    // Our own extension already renders its own local transcript and ignores
+    // these; other ACP clients (Zed, JetBrains) rely on this to rebuild their UI.
+    const notify = (update: any) => ctx.client.notify(acp.methods.client.session.update, { sessionId, update });
+    for (const msg of saved.history) {
+      for (const block of msg.content) {
+        if (block.type === "text" && block.text) {
+          void notify({
+            sessionUpdate: msg.role === "assistant" ? "agent_message_chunk" : "user_message_chunk",
+            content: { type: "text", text: block.text },
+          });
+        } else if (block.type === "tool_use") {
+          void notify({
+            sessionUpdate: "tool_call",
+            toolCallId: block.id,
+            title: toolTitle(block.name, block.input ?? {}),
+            kind: "execute",
+            status: "completed",
+            rawInput: block.input,
+          });
+        } else if (block.type === "tool_result") {
+          void notify({
+            sessionUpdate: "tool_call_update",
+            toolCallId: block.tool_use_id,
+            status: block.is_error ? "failed" : "completed",
+            content: [{ type: "content", content: { type: "text", text: block.content.slice(0, 4000) } }],
+          });
+        }
+      }
+    }
+
+    return { modes: { currentModeId: saved.mode, availableModes: MODES } };
   })
   .onRequest("session/set_mode", async (ctx) => {
     const s = sessions.get(ctx.params.sessionId);
@@ -92,6 +141,9 @@ acp
     const notify = (update: any) =>
       ctx.client.notify(acp.methods.client.session.update, { sessionId, update });
 
+    const persist = () =>
+      saveSessionSoon({ id: sessionId, cwd: session.cwd, mode: session.mode, model: session.model, history: session.history });
+
     let finalText = "";
     try {
       const stop = await runPrompt(
@@ -104,6 +156,8 @@ acp
           },
           onThinking: (t) =>
             void notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: t } }),
+          onUsage: (usage) => void ctx.client.notify("koder/usage", { sessionId, ...usage }),
+          onHistoryChanged: persist,
           onToolStart: (c) =>
             void notify({
               sessionUpdate: "tool_call",

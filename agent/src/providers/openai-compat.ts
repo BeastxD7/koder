@@ -28,6 +28,9 @@ export class OpenAICompatAdapter implements ChatAdapter {
           function: { name: t.name, description: t.description, parameters: t.input_schema },
         })),
         stream: true,
+        // without this the usage-bearing final chunk is never sent, and we
+        // silently fall back to character-based token estimates
+        stream_options: { include_usage: true },
       }),
     });
     if (!res.ok) {

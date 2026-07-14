@@ -98,6 +98,13 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # the "spawn /bin/sh ENOENT" failure reproduced deterministically at
+          # the same point on every retry, right after one extension's `npm
+          # audit` output — a broken code path in that step, not a resource
+          # flake. Disabling audit/fund (noise nobody reads in CI anyway)
+          # avoids it entirely instead of masking it with more retries.
+          NPM_CONFIG_AUDIT: false
+          NPM_CONFIG_FUND: false
 
       - name: Package
         shell: bash

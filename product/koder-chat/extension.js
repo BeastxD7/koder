@@ -209,7 +209,14 @@ class AgentViewProvider {
       const file = path.join(chatsDir(), `${this.chatId}.json`);
       fs.writeFileSync(
         file,
-        JSON.stringify({ id: this.chatId, title, updatedAt: Date.now(), mode: this.mode, events: this.transcript }),
+        JSON.stringify({
+          id: this.chatId,
+          title,
+          updatedAt: Date.now(),
+          mode: this.mode,
+          sessionId: this.sessionId, // lets "open old chat" resume real agent memory, not just the view
+          events: this.transcript,
+        }),
       );
     }, 400);
   }
@@ -235,14 +242,27 @@ class AgentViewProvider {
     } catch { return []; }
   }
 
-  async ensureAgent() {
-    if (this.acp && this.sessionId) return true;
+  /**
+   * Connect to the runtime if needed, then either resume `resumeSessionId`
+   * (real agent memory restored server-side) or open a fresh session.
+   * Already-connected + already-on-the-right-session is the fast path.
+   */
+  async ensureAgent(resumeSessionId) {
+    if (this.acp && this.sessionId && (!resumeSessionId || resumeSessionId === this.sessionId)) return true;
+
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+
+    if (this.acp) {
+      // already connected, just switching which chat's session is active
+      await this.loadOrNewSession(resumeSessionId, cwd);
+      return true;
+    }
+
     const spec = agentSpawnSpec(this.context);
     if (!spec) {
       this.post({ type: "system", text: "Koder Agent Runtime not found. Set koder.agent.command in settings." });
       return false;
     }
-    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
     this.log.appendLine(`spawning agent: ${spec.command} ${spec.args.join(" ")}`);
     this.acp = new AcpClient(spec.command, spec.args, spec.cwd ?? cwd, spec.env, {
       onLog: (line) => this.log.append(line),
@@ -261,6 +281,7 @@ class AgentViewProvider {
         if (method === "session/update") this.onSessionUpdate(params.update);
         if (method === "koder/plan_saved") this.onPlanSaved(params.path);
         if (method === "koder/plan_ready") this.onPlanReady(params.path);
+        if (method === "koder/usage") this.post({ type: "usage", ...params });
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -269,10 +290,25 @@ class AgentViewProvider {
     });
     await this.acp.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
     const models = await this.acp.request("koder/models", {});
-    const s = await this.acp.request("session/new", { cwd, mcpServers: [] });
-    this.sessionId = s.sessionId;
+    await this.loadOrNewSession(resumeSessionId, cwd);
     this.post({ type: "ready", models });
     return true;
+  }
+
+  /** Resume a saved session's real history, falling back to a fresh one if it's gone/corrupt. */
+  async loadOrNewSession(resumeSessionId, cwd) {
+    if (resumeSessionId) {
+      try {
+        const res = await this.acp.request("session/load", { sessionId: resumeSessionId, cwd, mcpServers: [] });
+        this.sessionId = resumeSessionId;
+        if (res?.modes?.currentModeId) this.mode = res.modes.currentModeId;
+        return;
+      } catch (err) {
+        this.log.appendLine(`session/load failed for ${resumeSessionId}, starting fresh: ${err.message}`);
+      }
+    }
+    const s = await this.acp.request("session/new", { cwd, mcpServers: [] });
+    this.sessionId = s.sessionId;
   }
 
   onSessionUpdate(u) {
@@ -392,14 +428,17 @@ class AgentViewProvider {
           const j = JSON.parse(fs.readFileSync(path.join(chatsDir(), `${m.id}.json`), "utf8"));
           this.chatId = j.id;
           this.chatTitle = j.title;
+          this.mode = j.mode ?? "review";
           this.transcript = j.events ?? [];
           this.view?.webview.postMessage({ type: "replay", events: this.transcript });
-          this.view?.webview.postMessage({ type: "system", text: "Restored chat (view only — the agent's working memory starts fresh)." });
-          if (this.acp) {
-            const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
-            const s = await this.acp.request("session/new", { cwd, mcpServers: [] });
-            this.sessionId = s.sessionId;
-          }
+          this.view?.webview.postMessage({ type: "modeChanged", mode: this.mode, auto: false });
+          const resumed = await this.ensureAgent(j.sessionId);
+          this.view?.webview.postMessage({
+            type: "system",
+            text: resumed && this.sessionId === j.sessionId
+              ? "Chat restored — agent memory resumed."
+              : "Chat restored (agent memory could not be resumed — starting fresh from here).",
+          });
         } catch (err) {
           this.view?.webview.postMessage({ type: "system", text: `could not load chat: ${err.message}` });
         }
