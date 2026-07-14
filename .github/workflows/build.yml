@@ -1,0 +1,113 @@
+name: Build Koder
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+            artifact: Koder-macOS-arm64
+          - os: macos-13
+            target: darwin-x64
+            artifact: Koder-macOS-x64
+          - os: windows-latest
+            target: win32-x64
+            artifact: Koder-Windows-x64
+          - os: ubuntu-latest
+            target: linux-x64
+            artifact: Koder-Linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.17.0"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev fakeroot rpm
+
+      - name: Fetch pinned code-oss
+        shell: bash
+        run: ./scripts/fetch-vscode.sh
+
+      - name: Bundle agent runtime
+        shell: bash
+        run: |
+          cd agent
+          npm ci
+          npm run bundle
+
+      - name: Apply Koder overlay
+        shell: bash
+        run: ./scripts/prepare.sh
+
+      - name: Install upstream dependencies
+        shell: bash
+        working-directory: upstream
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+
+      - name: Package
+        shell: bash
+        working-directory: upstream
+        run: npm run gulp vscode-${{ matrix.target }}-min
+
+      - name: Archive (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd VSCode-${{ matrix.target }}
+          codesign --force --deep -s - Koder.app
+          ditto -c -k --keepParent Koder.app ../${{ matrix.artifact }}.zip
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.artifact }}.tar.gz -C VSCode-${{ matrix.target }} .
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "VSCode-${{ matrix.target }}\*" -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.zip
+            *.tar.gz
+          generate_release_notes: true

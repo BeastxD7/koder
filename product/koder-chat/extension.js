@@ -64,9 +64,24 @@ class AcpClient {
 }
 
 // ---------- runtime discovery ----------
+const isWin = process.platform === "win32";
+
+function runtimeEnv() {
+  // point the agent's grep tool at the editor's bundled ripgrep so it works
+  // on machines without rg installed (all platforms)
+  const rg = path.join(vscode.env.appRoot, "node_modules", "@vscode", "ripgrep", "bin", isWin ? "rg.exe" : "rg");
+  const env = { ...process.env };
+  if (fs.existsSync(rg)) env.KODER_RG_PATH = rg;
+  return env;
+}
+
 function agentSpawnSpec(context) {
   const custom = vscode.workspace.getConfiguration("koder").get("agent.command");
-  if (custom) return { command: "/bin/zsh", args: ["-lc", custom], cwd: undefined };
+  if (custom) {
+    return isWin
+      ? { command: "cmd.exe", args: ["/d", "/c", custom], env: runtimeEnv() }
+      : { command: "/bin/zsh", args: ["-lc", custom], env: runtimeEnv() };
+  }
   // dev layout: <repo>/upstream/extensions/koder-chat → runtime at <repo>/agent
   const candidates = [
     path.resolve(context.extensionPath, "..", "..", "..", "agent"),
@@ -74,7 +89,7 @@ function agentSpawnSpec(context) {
   ];
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, "src", "server.ts")) && fs.existsSync(path.join(dir, "node_modules"))) {
-      return { command: "npx", args: ["tsx", "src/server.ts"], cwd: dir };
+      return { command: isWin ? "npx.cmd" : "npx", args: ["tsx", "src/server.ts"], cwd: dir, env: runtimeEnv() };
     }
   }
   // packaged: bundled runtime, run with the app's own Electron-as-Node —
@@ -85,7 +100,7 @@ function agentSpawnSpec(context) {
       command: process.execPath,
       args: [bundled],
       cwd: undefined,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      env: { ...runtimeEnv(), ELECTRON_RUN_AS_NODE: "1" },
     };
   }
   return null;

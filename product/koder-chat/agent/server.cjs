@@ -18427,11 +18427,12 @@ var TOOLS = [
       required: ["pattern"]
     },
     async run(input, cwd, signal) {
+      const rg = process.env.KODER_RG_PATH ?? "rg";
       const globArg = input.glob ? `--glob ${JSON.stringify(input.glob)}` : "";
       const target = JSON.stringify(abs(cwd, input.path ?? "."));
       try {
         const { stdout } = await execAsync(
-          `rg --line-number --no-heading --max-count 200 --max-columns 300 ${globArg} -e ${JSON.stringify(input.pattern)} ${target}`,
+          `${JSON.stringify(rg)} --line-number --no-heading --max-count 200 --max-columns 300 ${globArg} -e ${JSON.stringify(input.pattern)} ${target}`,
           { cwd, signal, maxBuffer: 4 * 1024 * 1024 }
         );
         return stdout.slice(0, 6e4) || "(no matches)";
@@ -18445,7 +18446,7 @@ var TOOLS = [
     name: "bash",
     kind: "execute",
     dangerous: true,
-    description: "Run a shell command in the workspace. Use for builds, tests, git, and anything the other tools don't cover.",
+    description: "Run a shell command in the workspace (zsh on macOS/Linux, cmd on Windows). Use for builds, tests, git, and anything the other tools don't cover.",
     input_schema: {
       type: "object",
       properties: {
@@ -18461,7 +18462,7 @@ var TOOLS = [
           signal,
           timeout: input.timeout_ms ?? 12e4,
           maxBuffer: 4 * 1024 * 1024,
-          shell: "/bin/zsh"
+          shell: process.platform === "win32" ? void 0 : "/bin/zsh"
         });
         const out = [stdout, stderr].filter(Boolean).join("\n--- stderr ---\n");
         return out.slice(0, 6e4) || "(no output)";

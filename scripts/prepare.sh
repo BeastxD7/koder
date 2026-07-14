@@ -32,4 +32,7 @@ done
 # Koder UI layer: built-in theme extension + CSS injection
 node scripts/apply-ui.mjs
 
+# Koder icons for every platform whose assets exist
+node scripts/install-icons.mjs
+
 echo "upstream/ prepared for Koder"

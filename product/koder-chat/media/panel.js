@@ -253,11 +253,22 @@ window.addEventListener("message", (e) => {
       for (const p of m.models.providers) {
         for (const model of suggestions[p] ?? []) opts.add(`${p}/${model}`);
       }
+      // if the default model's provider has no key, fall back to the first
+      // model of a provider that does — and tell the runtime
+      let selected = def;
+      const defProvider = def.split("/")[0];
+      if (!m.models.providers.includes(defProvider)) {
+        const firstUsable = [...opts].find((o) => m.models.providers.includes(o.split("/")[0]));
+        if (firstUsable) {
+          selected = firstUsable;
+          vscode.postMessage({ type: "setModel", model: selected });
+        }
+      }
       for (const o of opts) {
         const opt = document.createElement("option");
         opt.value = o;
         opt.textContent = o;
-        if (o === def) opt.selected = true;
+        if (o === selected) opt.selected = true;
         modelEl.appendChild(opt);
       }
       if (m.models.providers.length === 0) {
