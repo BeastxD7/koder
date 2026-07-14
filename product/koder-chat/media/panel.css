@@ -419,7 +419,8 @@ html, body {
 .mention-item:hover, .mention-item.active { background: var(--accent-soft); color: var(--fg); }
 .mention-empty { padding: 8px 10px; font-size: 11.5px; color: var(--faint); }
 #toolbar { display: flex; align-items: center; gap: 6px; }
-.spacer { flex: 1; }
+#toolbar > button { flex-shrink: 0; }
+.spacer { flex: 1; min-width: 0; }
 #model {
   background: rgba(0, 0, 0, 0.25);
   color: var(--muted);
@@ -427,7 +428,12 @@ html, body {
   border-radius: 7px;
   font-size: 11px;
   padding: 4px 6px;
-  max-width: 58%;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   outline: none;
 }
 
@@ -443,7 +449,14 @@ button {
 #send { background: var(--accent); color: #fff; }
 #send:hover { background: #8f73ff; }
 #send:disabled { opacity: 0.45; cursor: default; }
-button.ghost { background: transparent; color: var(--muted); padding: 6px 9px; }
+button.ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 9px;
+}
 button.ghost:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
 button.allow { background: #2e8f68; color: #fff; padding: 4px 12px; }
 button.deny { background: rgba(255, 255, 255, 0.1); color: var(--fg); padding: 4px 12px; }
@@ -530,20 +543,36 @@ label.check input { accent-color: var(--accent); }
 .chatrow .cwhen { color: var(--faint); font-size: 10.5px; flex: none; }
 
 /* ---------- empty state ---------- */
-.empty { margin: auto; text-align: center; color: var(--muted); }
-.empty .mark { color: var(--accent); margin-bottom: 8px; }
+.empty {
+  margin: auto;
+  text-align: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.empty .mark { color: var(--accent); }
 .empty .title { font-weight: 600; font-size: 14px; color: var(--fg); }
-.empty .hint { font-size: 11.5px; margin-top: 6px; }
-.empty .cta {
-  margin: 14px auto 4px;
-  display: block;
-  background: var(--accent);
-  color: #fff;
+.empty .hint { font-size: 11.5px; }
+.empty .cta-row { display: flex; align-items: center; gap: 10px; }
+.empty .cta,
+.empty .cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 18px;
   border-radius: 9px;
   font-size: 12.5px;
 }
+.empty .cta { background: var(--accent); color: #fff; }
 .empty .cta:hover { background: #8f73ff; }
+.empty .cta-secondary {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--hairline);
+}
+.empty .cta-secondary:hover { background: rgba(255, 255, 255, 0.08); }
 .empty kbd {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 4px;

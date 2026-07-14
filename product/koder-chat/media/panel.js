@@ -55,11 +55,17 @@ function showEmpty() {
     <svg class="mark" width="34" height="34" viewBox="0 0 24 24"><path d="M12 2 L13.8 8.6 L20 5.5 L15.4 10.8 L22 12 L15.4 13.2 L20 18.5 L13.8 15.4 L12 22 L10.2 15.4 L4 18.5 L8.6 13.2 L2 12 L8.6 10.8 L4 5.5 L10.2 8.6 Z" fill="currentColor"/></svg>
     <div class="title">Koder Agent</div>
     <div class="hint">Review plans first. Approve executes with your OK. Auto runs free.</div>
-    <button id="ctaProviders" class="cta">Configure AI providers</button>
+    <div class="cta-row">
+      <button id="ctaProviders" class="cta">Configure AI providers</button>
+      <button id="ctaNewChat" class="cta-secondary">New chat</button>
+    </div>
     <div class="hint"><kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> newline</div>
   </div>`;
   document.getElementById("ctaProviders")?.addEventListener("click", () =>
     vscode.postMessage({ type: "openSettings" }),
+  );
+  document.getElementById("ctaNewChat")?.addEventListener("click", () =>
+    vscode.postMessage({ type: "newChat" }),
   );
 }
 showEmpty();
