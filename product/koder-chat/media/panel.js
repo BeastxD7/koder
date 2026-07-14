@@ -6,7 +6,6 @@ const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const stopBtn = document.getElementById("stop");
 const modelEl = document.getElementById("model");
-const settingsBtn = document.getElementById("settings");
 const permissionBar = document.getElementById("permissionBar");
 const modesEl = document.getElementById("modes");
 const composerEl = document.getElementById("composer");
@@ -56,7 +55,7 @@ function showEmpty() {
     <div class="title">Koder Agent</div>
     <div class="hint">Review plans first. Approve executes with your OK. Auto runs free.</div>
     <div class="cta-row">
-      <button id="ctaProviders" class="cta">Configure AI providers</button>
+      <button id="ctaProviders" class="cta">Config Model</button>
       <button id="ctaNewChat" class="cta-secondary">New chat</button>
     </div>
     <div class="hint"><kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> newline</div>
@@ -433,7 +432,6 @@ function send() {
 }
 sendBtn.addEventListener("click", send);
 stopBtn.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
-settingsBtn.addEventListener("click", () => vscode.postMessage({ type: "openSettings" }));
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
