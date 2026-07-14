@@ -18185,21 +18185,63 @@ async function hasStagedChanges(gitDir, worktree) {
     return true;
   }
 }
+function parseDiffRaw(stdout) {
+  const files = [];
+  for (const line of stdout.split("\n")) {
+    if (!line) continue;
+    const m = line.match(/^:(\d+) (\d+) [0-9a-f]+\.* [0-9a-f]+\.* \S+\t(.+)$/);
+    if (!m) continue;
+    const [, oldMode, newMode, path] = m;
+    if (oldMode === "160000" || newMode === "160000") continue;
+    files.push(path);
+  }
+  return files;
+}
 async function diffFiles(gitDir, worktree, a, b) {
   try {
     const { stdout } = await git(gitDir, worktree, ["diff", "--raw", "--no-renames", a, b]);
-    const files = [];
-    for (const line of stdout.split("\n")) {
-      if (!line) continue;
-      const m = line.match(/^:(\d+) (\d+) [0-9a-f]+\.* [0-9a-f]+\.* \S+\t(.+)$/);
-      if (!m) continue;
-      const [, oldMode, newMode, path] = m;
-      if (oldMode === "160000" || newMode === "160000") continue;
-      files.push(path);
-    }
+    return parseDiffRaw(stdout);
+  } catch {
+    return [];
+  }
+}
+async function filesChangedSinceCommit(cwd, sha) {
+  try {
+    const worktree = (0, import_node_path.resolve)(cwd);
+    const { gitDir } = shadowPaths(worktree);
+    await git(gitDir, worktree, ["add", "-A", "--", ".", ":!**/.git", ":!**/.git/**"]);
+    const { stdout } = await git(gitDir, worktree, ["diff", "--raw", "--no-renames", sha]);
+    const files = parseDiffRaw(stdout);
+    if (files.length) await advanceRoyalMirror(gitDir, worktree, sha);
     return files;
   } catch {
     return [];
+  }
+}
+var ROYAL_MIRROR_REF = "refs/koder/royal-mirror";
+async function advanceRoyalMirror(gitDir, worktree, fallbackParent) {
+  try {
+    const { stdout: treeOut } = await git(gitDir, worktree, ["write-tree"]);
+    const tree = treeOut.trim();
+    let parent = fallbackParent;
+    try {
+      const { stdout: curOut } = await git(gitDir, worktree, ["rev-parse", ROYAL_MIRROR_REF]);
+      if (curOut.trim()) parent = curOut.trim();
+    } catch {
+    }
+    const { stdout: commitOut } = await git(gitDir, worktree, ["commit-tree", tree, "-p", parent, "-m", "royal-mirror"]);
+    await git(gitDir, worktree, ["update-ref", ROYAL_MIRROR_REF, commitOut.trim()]);
+  } catch {
+  }
+}
+async function readFileAtCommit(cwd, sha, path) {
+  try {
+    const worktree = (0, import_node_path.resolve)(cwd);
+    const { gitDir } = shadowPaths(worktree);
+    const { stdout } = await git(gitDir, worktree, ["show", `${sha}:${path}`]);
+    return stdout;
+  } catch {
+    return null;
   }
 }
 function isAlive(pid) {
@@ -18305,7 +18347,18 @@ async function hasConflict(cwd, path, targetSha) {
   const { gitDir } = shadowPaths(worktree);
   if (await diffQuiet(gitDir, worktree, targetSha, path)) return false;
   if (await diffQuiet(gitDir, worktree, "HEAD", path)) return false;
+  if (await royalMirrorExists(gitDir, worktree)) {
+    if (await diffQuiet(gitDir, worktree, ROYAL_MIRROR_REF, path)) return false;
+  }
   return true;
+}
+async function royalMirrorExists(gitDir, worktree) {
+  try {
+    await git(gitDir, worktree, ["rev-parse", "--verify", "--quiet", ROYAL_MIRROR_REF]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function undoPaths(cwd, paths, targetSha, force = false) {
   const worktree = (0, import_node_path.resolve)(cwd);
@@ -18317,9 +18370,29 @@ async function undoPaths(cwd, paths, targetSha, force = false) {
     if (conflicts.length) return { ok: false, conflict: { paths: conflicts } };
   }
   return withLock(dir, async () => {
-    await git(gitDir, worktree, ["checkout", targetSha, "--", ...paths]);
+    const existed = [];
+    const created = [];
+    for (const p of paths) {
+      if (await existsAtCommit(gitDir, worktree, targetSha, p)) existed.push(p);
+      else created.push(p);
+    }
+    if (existed.length) await git(gitDir, worktree, ["checkout", targetSha, "--", ...existed]);
+    for (const p of created) {
+      await (0, import_promises.rm)((0, import_node_path.join)(worktree, p), { force: true }).catch(() => {
+      });
+      await git(gitDir, worktree, ["add", "-A", "--", p]).catch(() => {
+      });
+    }
     return { ok: true, reverted: paths };
   });
+}
+async function existsAtCommit(gitDir, worktree, sha, path) {
+  try {
+    await git(gitDir, worktree, ["cat-file", "-e", `${sha}:${path}`]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function undoFile(cwd, path, targetSha, force = false) {
   return undoPaths(cwd, [path], targetSha, force);
@@ -18366,6 +18439,8 @@ async function maybeCompact(cwd) {
       await git(gitDir, worktree, ["checkout", "--orphan", tmpBranch]);
       await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", "checkpoint history compacted"]);
       await git(gitDir, worktree, ["branch", "-M", mainBranch]);
+      await git(gitDir, worktree, ["update-ref", "-d", ROYAL_MIRROR_REF]).catch(() => {
+      });
       await git(gitDir, worktree, ["reflog", "expire", "--expire=now", "--all"]);
       await git(gitDir, worktree, ["gc", "--prune=now", "--quiet"]);
       return { compacted: true };
@@ -19478,6 +19553,10 @@ async function runPrompt(session, userText, cb, promptId, signal) {
         } else if (spec.dangerous) {
           const cp = await checkpointBeforeMutation(session.cwd, `${tc.name}: ${title}`);
           checkpointSha = cp.sha;
+          if (checkpointSha && !baselineTaken) {
+            cb.onBaseline?.(checkpointSha);
+            baselineTaken = true;
+          }
         }
       } else {
         const floor = floorCheck(tc.name, tc.input ?? {}, session.cwd);
@@ -19537,7 +19616,10 @@ async function runPrompt(session, userText, cb, promptId, signal) {
         if (tc.name === "read_file" && path) session.editFails.delete(path);
         if (!isRoyal && spec.dangerous) {
           const cp = await commitAfterTool(session.cwd, promptId, tc.id, tc.name, path);
-          if (cp.sha) cb.onCheckpoint?.({ toolCallId: tc.id, toolName: tc.name, sha: cp.sha, files: cp.files });
+          if (cp.sha && cp.files.length) cb.onCheckpoint?.({ toolCallId: tc.id, toolName: tc.name, sha: cp.sha, files: cp.files });
+        } else if (isRoyal && spec.dangerous && checkpointSha) {
+          const files = await filesChangedSinceCommit(session.cwd, checkpointSha);
+          if (files.length) cb.onCheckpoint?.({ toolCallId: tc.id, toolName: tc.name, sha: checkpointSha, files });
         }
         if (session.toolRepeatCount === 2) {
           output += "\n[note: identical call repeated \u2014 the result has not changed; try a different approach]";
@@ -19923,6 +20005,18 @@ Error: ${err?.message ?? err}` }
       if (Object.keys(overlap).length > 0) return { ok: false, overlap };
     }
     return undoPaths(session.cwd, files, target.baselineSha, force);
+  }
+).onRequest(
+  "koder/checkpoint_file_before",
+  (v) => v,
+  async (ctx) => {
+    const session = sessions.get(ctx.params.sessionId);
+    if (!session) throw new Error(`unknown session ${ctx.params.sessionId}`);
+    const target = session.checkpoints.find((c) => c.promptId === ctx.params.promptId);
+    if (!target) throw new Error(`no checkpoint found for prompt ${ctx.params.promptId}`);
+    if (!target.baselineSha) throw new Error(`no baseline recorded for prompt ${ctx.params.promptId}`);
+    const content = await readFileAtCommit(session.cwd, target.baselineSha, ctx.params.path);
+    return { content };
   }
 ).onNotification("session/cancel", async (ctx) => {
   sessions.get(ctx.params.sessionId)?.pending?.abort();
