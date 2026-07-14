@@ -126,5 +126,10 @@ test("stalled-but-open SSE stream times out and surfaces an error instead of han
       });
   } finally {
     child.kill();
+    // the fake server's stalled connection is never closed by the script
+    // itself (that's the whole point) — without this, its still-listening
+    // http.Server keeps the event loop alive and the test process hangs
+    // forever after the assertions pass.
+    await fake.stop();
   }
 });
