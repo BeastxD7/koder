@@ -160,7 +160,9 @@ const liveModels = {}; // provider → models fetched from the provider's API
 
 function renderSettings() {
   const sel = document.getElementById("providerSelect");
-  const providerId = sel?.value || Object.keys(PROVIDERS)[0];
+  // initial selection: the provider that already has a key, else the first
+  const firstSet = Object.keys(PROVIDERS).find((id) => settingsState.set?.[id]);
+  const providerId = sel?.value || firstSet || Object.keys(PROVIDERS)[0];
   const p = PROVIDERS[providerId];
   const isSet = settingsState.set?.[providerId];
   const currentDefault = settingsState.defaultModel || "";

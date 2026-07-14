@@ -334,8 +334,14 @@ class AgentViewProvider {
   }
 
   html(webview) {
-    const css = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "panel.css"));
-    const js = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "panel.js"));
+    // webviews cache resources by URL — version the URLs by file mtime so
+    // every extension update is picked up immediately
+    const stamp = (f) => {
+      try { return Math.round(fs.statSync(path.join(this.context.extensionPath, "media", f)).mtimeMs); }
+      catch { return Date.now(); }
+    };
+    const css = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "panel.css")) + "?v=" + stamp("panel.css");
+    const js = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "panel.js")) + "?v=" + stamp("panel.js");
     return `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">

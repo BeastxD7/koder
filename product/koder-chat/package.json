@@ -2,12 +2,16 @@
   "name": "koder-chat",
   "displayName": "Koder Agent",
   "description": "Koder's agent panel — talks to the Koder Agent Runtime over ACP.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "koder",
   "license": "MIT",
-  "engines": { "vscode": "^1.128.0" },
+  "engines": {
+    "vscode": "^1.128.0"
+  },
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "viewsContainers": {
       "secondarySidebar": [
@@ -29,21 +33,51 @@
       ]
     },
     "commands": [
-      { "command": "koder.openAgent", "title": "Koder: Open Agent", "icon": "media/koder.svg" },
-      { "command": "koder.newChat", "title": "Koder: New Chat", "icon": "$(add)" },
-      { "command": "koder.configureProviders", "title": "Koder: Configure AI Providers (BYOK)", "icon": "$(gear)" },
-      { "command": "koder.openProviderSettings", "title": "Koder: Edit Provider Config File (JSON)" }
+      {
+        "command": "koder.openAgent",
+        "title": "Koder: Open Agent",
+        "icon": "media/koder.svg"
+      },
+      {
+        "command": "koder.newChat",
+        "title": "Koder: New Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "koder.configureProviders",
+        "title": "Koder: Configure AI Providers (BYOK)",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "koder.openProviderSettings",
+        "title": "Koder: Edit Provider Config File (JSON)"
+      }
     ],
     "keybindings": [
-      { "command": "koder.openAgent", "key": "ctrl+l", "mac": "cmd+l" }
+      {
+        "command": "koder.openAgent",
+        "key": "ctrl+l",
+        "mac": "cmd+l"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "koder.newChat", "when": "view == koder.agentView", "group": "navigation@1" },
-        { "command": "koder.configureProviders", "when": "view == koder.agentView", "group": "navigation@2" }
+        {
+          "command": "koder.newChat",
+          "when": "view == koder.agentView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "koder.configureProviders",
+          "when": "view == koder.agentView",
+          "group": "navigation@2"
+        }
       ],
       "editor/title": [
-        { "command": "koder.openAgent", "group": "navigation@100" }
+        {
+          "command": "koder.openAgent",
+          "group": "navigation@100"
+        }
       ]
     },
     "configuration": {
