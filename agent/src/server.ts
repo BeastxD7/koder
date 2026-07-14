@@ -135,12 +135,16 @@ acp
         abort.signal,
       );
 
-      // Review-first flow: persist the plan, then advance to Approve mode
-      if (session.mode === "review" && !abort.signal.aborted && finalText.trim()) {
+      // Review-first flow: a turn that produced a "# Plan" saves it and asks
+      // the USER to decide — mode only advances on explicit approval
+      // (clarifying-question turns produce no plan and change nothing).
+      if (
+        session.mode === "review" &&
+        !abort.signal.aborted &&
+        /^#{1,3}\s*Plan\b/m.test(finalText)
+      ) {
         const planPath = savePlan(session.cwd, finalText);
-        session.mode = "approve";
-        await notify({ sessionUpdate: "current_mode_update", currentModeId: "approve" });
-        await ctx.client.notify("koder/plan_saved", { sessionId, path: planPath });
+        await ctx.client.notify("koder/plan_ready", { sessionId, path: planPath });
       }
 
       return { stopReason: abort.signal.aborted ? "cancelled" : stop };

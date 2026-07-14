@@ -44,8 +44,8 @@ html, body {
 #topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--hairline);
 }
 #modes {
@@ -77,7 +77,7 @@ html, body {
 #messages {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 14px 6px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -197,11 +197,32 @@ html, body {
 /* ---------- composer ---------- */
 #composer {
   border-top: 1px solid var(--hairline);
-  padding: 10px 12px 12px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
+
+#planBar {
+  background: rgba(124, 92, 255, 0.07);
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: rise 0.15s var(--ease);
+}
+#planBar .plan-title { font-size: 12px; font-weight: 600; }
+#planBar .plan-path {
+  color: var(--muted);
+  font-weight: 400;
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-left: 8px;
+}
+#planBar .plan-actions { display: flex; gap: 6px; }
+#planBar .plan-actions .allow { flex: 1; }
 #permissionBar {
   background: rgba(255, 180, 84, 0.07);
   border: 1px solid rgba(255, 180, 84, 0.28);
@@ -280,22 +301,22 @@ button.deny { background: rgba(255, 255, 255, 0.1); color: var(--fg); padding: 4
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  padding: 12px;
   border-bottom: 1px solid var(--hairline);
   font-weight: 600;
 }
 .settings-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 .settings-foot {
   display: flex;
-  gap: 6px;
-  padding: 10px 14px;
+  gap: 10px;
+  padding: 12px;
   border-top: 1px solid var(--hairline);
 }
 #settingsSave { background: var(--accent); color: #fff; }

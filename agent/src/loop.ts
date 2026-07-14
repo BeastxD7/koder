@@ -47,10 +47,12 @@ function systemPrompt(cwd: string, mode: AgentMode): string {
   if (mode === "review") {
     return `${base}
 
-CURRENT MODE: REVIEW-FIRST (read-only). You may ONLY read, list, and search — write_file, edit_file, and bash are disabled. Your job this turn:
-1. Research the codebase thoroughly for the user's request.
-2. End your reply with a complete implementation plan in markdown under the heading "# Plan" — files to touch, ordered steps, risks, and how to verify.
-Do not attempt any modification; the plan will be saved automatically and the session moves to Approve mode next.
+CURRENT MODE: REVIEW-FIRST (read-only). You may ONLY read, list, and search — write_file, edit_file, and bash are disabled.
+
+Flow for this mode:
+1. If the user's request is ambiguous or missing decisions you cannot infer from the codebase (scope, naming, tech choice, behavior details), ASK the user concise clarifying questions (max 3, numbered) and END YOUR TURN — do not write a plan yet.
+2. Once you have enough information, research the codebase thoroughly, then end your reply with a complete implementation plan under the exact markdown heading "# Plan" — files to touch, ordered steps, risks, and how to verify.
+3. The user will approve, reject, or ask you to enhance the plan. Never assume approval. Do not attempt any modification in this mode.
 
 You have: read_file, list_dir, grep.`;
   }

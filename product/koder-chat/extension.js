@@ -251,6 +251,7 @@ class AgentViewProvider {
       onNotification: (method, params) => {
         if (method === "session/update") this.onSessionUpdate(params.update);
         if (method === "koder/plan_saved") this.onPlanSaved(params.path);
+        if (method === "koder/plan_ready") this.onPlanReady(params.path);
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -284,6 +285,32 @@ class AgentViewProvider {
         this.post({ type: "toolUpdate", id: u.toolCallId, status: u.status });
         break;
     }
+  }
+
+  async onPlanReady(planPath) {
+    this.pendingPlan = planPath;
+    const rel = path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", planPath);
+    this.post({ type: "system", text: `Plan saved: ${rel}` });
+    this.view?.webview.postMessage({ type: "planReady", path: rel });
+    try {
+      const doc = await vscode.workspace.openTextDocument(planPath);
+      await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.One });
+    } catch {}
+  }
+
+  async planDecision(decision) {
+    this.pendingPlan = null;
+    if (decision === "approve") {
+      this.mode = "approve";
+      if (this.acp && this.sessionId) {
+        await this.acp.request("session/set_mode", { sessionId: this.sessionId, modeId: "approve" });
+      }
+      this.post({ type: "modeChanged", mode: "approve", auto: true });
+      await this.onWebviewMessage({ type: "send", text: "The plan is approved. Implement it step by step, verifying as you go." });
+    } else if (decision === "reject") {
+      await this.onWebviewMessage({ type: "send", text: "I am rejecting this plan. Ask me what direction you should take instead — do not start over on your own." });
+    }
+    // "enhance" is handled entirely in the webview (prefills the input)
   }
 
   async onPlanSaved(planPath) {
@@ -371,6 +398,13 @@ class AgentViewProvider {
       }
       case "replayRequest":
         if (this.transcript.length) this.view?.webview.postMessage({ type: "replay", events: this.transcript });
+        if (this.pendingPlan) {
+          const rel = path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", this.pendingPlan);
+          this.view?.webview.postMessage({ type: "planReady", path: rel });
+        }
+        break;
+      case "planDecision":
+        await this.planDecision(m.decision);
         break;
       case "cancel":
         this.acp?.notify("session/cancel", { sessionId: this.sessionId });
@@ -495,6 +529,7 @@ ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
   </div>
   <div id="messages"></div>
   <div id="composer">
+    <div id="planBar" hidden></div>
     <div id="permissionBar" hidden></div>
     <textarea id="input" rows="3" placeholder="Describe a task. Review mode plans first; Approve executes with your OK."></textarea>
     <div id="toolbar">

@@ -161,6 +161,7 @@ function send() {
   const text = inputEl.value.trim();
   if (!text || busy) return;
   inputEl.value = "";
+  planBar.hidden = true; // typing a custom reply supersedes the plan buttons
   vscode.postMessage({ type: "send", text }); // extension echoes back "user" for transcript
 }
 sendBtn.addEventListener("click", send);
@@ -189,6 +190,35 @@ messagesEl.addEventListener("click", (e) => {
   const link = e.target.closest("[data-href]");
   if (link) vscode.postMessage({ type: "openLink", href: link.dataset.href });
 });
+
+// ---------- plan approval gate ----------
+const planBar = document.getElementById("planBar");
+
+function showPlanBar(relPath) {
+  planBar.innerHTML = `<div class="plan-title">Plan ready<span class="plan-path"></span></div>
+    <div class="plan-actions">
+      <button id="planApprove" class="allow">Approve &amp; build</button>
+      <button id="planEnhance" class="deny">Enhance</button>
+      <button id="planReject" class="deny">Reject</button>
+    </div>`;
+  planBar.querySelector(".plan-path").textContent = relPath;
+  planBar.hidden = false;
+  document.getElementById("planApprove").addEventListener("click", () => {
+    planBar.hidden = true;
+    vscode.postMessage({ type: "planDecision", decision: "approve" });
+  });
+  document.getElementById("planReject").addEventListener("click", () => {
+    planBar.hidden = true;
+    vscode.postMessage({ type: "planDecision", decision: "reject" });
+  });
+  document.getElementById("planEnhance").addEventListener("click", () => {
+    planBar.hidden = true;
+    vscode.postMessage({ type: "planDecision", decision: "enhance" });
+    inputEl.value = "Enhance the plan: ";
+    inputEl.focus();
+    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+  });
+}
 
 // ---------- history ----------
 const historyPanel = document.getElementById("historyPanel");
@@ -417,6 +447,7 @@ window.addEventListener("message", (e) => {
       break;
     }
     case "historyList": showHistory(m.chats); break;
+    case "planReady": showPlanBar(m.path); break;
     case "system": addMsg("system", m.text); break;
     case "clear":
       messagesEl.innerHTML = "";
