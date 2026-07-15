@@ -34,6 +34,17 @@
  * write_file/edit_file) — those are Royal-mode-specific hardening that doc 09
  * explicitly scopes to a later phase, not part of today's auto-mode floor.
  *
+ * Cross-platform: Koder ships for macOS, Windows, and Linux (see
+ * `.github/workflows/build.yml`'s 4-platform matrix), and `tools.ts`'s
+ * `resolveShell()` falls back to the platform default shell (cmd.exe) on
+ * win32 — so the recursive-delete and pipe-to-shell rules also recognize
+ * cmd.exe's slash-flag syntax (`rmdir /s`, `del /s`) and PowerShell's
+ * dash-flag aliases for the same POSIX command names (`rm`/`del`/`rd`/
+ * `rmdir`/`erase`/`ri` are all built-in PowerShell aliases for
+ * `Remove-Item`, and `iwr ... | iex` is PowerShell's `curl ... | sh`) —
+ * see `checkRecursiveDeleteSegment`/`checkPipeToShell`. `checkDiskDestructive`
+ * covers `format`/`diskpart` alongside `mkfs`/`dd`/`diskutil eraseDisk`.
+ *
  * Parsing approach: lightweight tokenization + regex, matching this
  * codebase's existing style (see `tools.ts`'s command handling) — NOT a full
  * shell parser. Known limitations, called out inline where relevant:
@@ -205,13 +216,19 @@ function checkGitHistoryRewrite(tokens: string[]): FloorResult {
 const WHOLE_CWD_TOKENS = new Set([".", "./", "*", "./*", "$(pwd)", '"$(pwd)"']);
 
 /**
- * Resolve an rm/find target argument to an absolute path and decide whether
- * it's dangerous: outside the workspace, the workspace root itself, the
- * user's home directory root, or the filesystem root. Uses `node:path`
- * resolution the same way `tools.ts`'s `abs()` does (no symlink resolution —
- * see the module-level limitations comment).
+ * Resolve an rm/find/Windows-delete target argument to an absolute path and
+ * decide whether it's dangerous: outside the workspace, the workspace root
+ * itself, the user's home directory root, or the filesystem root. Uses
+ * `node:path` resolution the same way `tools.ts`'s `abs()` does (no symlink
+ * resolution — see the module-level limitations comment). `node:path` itself
+ * is platform-aware (win32 semantics when actually running on Windows), so
+ * this same logic correctly resolves `C:\...`-style absolute paths without
+ * any extra branching — it only needs to run on the OS it's protecting.
+ * `verb` labels the reason message with whatever command triggered the
+ * check (`"rm -rf"`, `"rmdir /s"`, `"find -delete"`, ...) so the message
+ * reads naturally regardless of caller.
  */
-function checkDangerousPath(raw: string, cwd: string): FloorResult {
+function checkDangerousPath(raw: string, cwd: string, verb = "rm -rf"): FloorResult {
   const norm = raw.trim();
   if (!norm) return SAFE;
   const home = resolve(homedir());
@@ -229,50 +246,112 @@ function checkDangerousPath(raw: string, cwd: string): FloorResult {
   }
 
   if (resolved === "/") {
-    return block(`rm -rf targets the filesystem root ("${raw}") — never allowed.`);
+    return block(`${verb} targets the filesystem root ("${raw}") — never allowed.`);
   }
   if (resolved === home) {
-    return block(`rm -rf targets the home directory root ("${raw}") — never allowed.`);
+    return block(`${verb} targets the home directory root ("${raw}") — never allowed.`);
   }
   if (resolved === cwdResolved) {
     return block(
-      `rm -rf targets the entire workspace root ("${raw}") — scope the deletion to a subdirectory instead (e.g. "./build"), or ask the user to do this manually.`,
+      `${verb} targets the entire workspace root ("${raw}") — scope the deletion to a subdirectory instead (e.g. "./build"), or ask the user to do this manually.`,
     );
   }
   const rel = relative(cwdResolved, resolved);
   if (rel.startsWith("..") || isAbsolute(rel)) {
     return block(
-      `rm -rf targets a path outside the workspace ("${raw}" → ${resolved}) — never allowed, even in auto mode.`,
+      `${verb} targets a path outside the workspace ("${raw}" → ${resolved}) — never allowed, even in auto mode.`,
     );
   }
   return SAFE;
 }
 
-function checkRmSegment(tokens: string[], cwd: string): FloorResult {
-  if (tokens[0] !== "rm") return SAFE;
-  const rest = tokens.slice(1);
-  const flags = rest.filter((t) => t.startsWith("-") && t !== "--");
-  const targets = rest.filter((t) => !t.startsWith("-"));
+/**
+ * Command names that mean "delete a file/directory tree", across POSIX
+ * shells, cmd.exe, and PowerShell. PowerShell ships `rm`/`del`/`erase`/`rd`/
+ * `rmdir`/`ri` as BUILT-IN ALIASES for `Remove-Item` — the same words this
+ * check already needed for `rm` mean something different, with different
+ * flag syntax, depending on which shell is actually interpreting them,
+ * which a static string check can't know for certain. So every name here is
+ * checked against BOTH flag styles below (POSIX/PowerShell dash flags AND
+ * cmd.exe's slash flags) rather than trying to guess the shell — a false
+ * positive from checking both styles is an accepted cost, per this module's
+ * stated bias toward catching real danger over precision. Without this,
+ * `tools.ts`'s `resolveShell()` falling back to cmd.exe on win32 meant the
+ * floor was blind to `rmdir /s`/`del /s`/PowerShell's `Remove-Item -Recurse
+ * -Force` entirely — a real gap, not a hypothetical one, for a project that
+ * explicitly targets Windows alongside macOS/Linux.
+ */
+const RECURSIVE_DELETE_COMMANDS = new Set(["rm", "rmdir", "rd", "del", "erase", "ri", "remove-item"]);
 
-  let hasRecursive = false;
-  let hasForce = false;
-  for (const f of flags) {
-    if (f.startsWith("--")) {
-      if (f === "--recursive") hasRecursive = true;
-      if (f === "--force") hasForce = true;
-    } else {
-      // combined short flags in any order: -rf, -fr, -Rf, -vrf, ...
-      if (/[rR]/.test(f)) hasRecursive = true;
-      if (/f/.test(f)) hasForce = true;
+/**
+ * A cmd.exe-style slash flag: a SHORT `/letter` token (`/s`, `/q`, `/f`,
+ * `/y`, ...), never a whole target path. Deliberately narrow (anchored,
+ * 1-2 letters) so an absolute POSIX path like `/tmp/foo` — which also
+ * "starts with /" — is never misclassified as a flag and dropped from the
+ * target list; only something flag-shaped is excluded.
+ */
+const WINDOWS_SLASH_FLAG = /^\/[a-z]{1,2}$/i;
+
+function checkRecursiveDeleteSegment(tokens: string[], cwd: string): FloorResult {
+  const cmd = tokens[0]?.toLowerCase();
+  if (!cmd || !RECURSIVE_DELETE_COMMANDS.has(cmd)) return SAFE;
+  const rest = tokens.slice(1);
+
+  // cmd.exe slash-style flags (/s recurse, /q quiet, /f force-delete
+  // read-only files). /s alone is treated as sufficient — matching rm -rf's
+  // severity — since a non-interactive `rmdir /s`/`del /s` already deletes
+  // the whole tree without per-file confirmation prompts.
+  if (rest.some((t) => /^\/s$/i.test(t))) {
+    const targets = rest.filter((t) => !WINDOWS_SLASH_FLAG.test(t));
+    for (const raw of targets) {
+      const check = checkDangerousPath(raw, cwd, `${tokens[0]} /s`);
+      if (check.blocked) return check;
     }
   }
-  if (!(hasRecursive && hasForce)) return SAFE; // scope: only the rm -rf class, not bare `rm -f file`
-  if (targets.length === 0) return SAFE; // nothing to resolve — let it fail naturally
 
-  for (const raw of targets) {
-    const check = checkDangerousPath(raw, cwd);
-    if (check.blocked) return check;
+  // POSIX dash flags (-rf/--recursive --force) or PowerShell single-dash
+  // words (-Recurse/-Force/-r/-f, case-insensitive — PowerShell flag
+  // matching is case-insensitive). Lowercasing before comparison also fixes
+  // a pre-existing bug: the old check for "-Force" required a literal
+  // lowercase "f", which "-Force" (capital F) never contained, so a
+  // PowerShell-flavored `rm -Recurse -Force` on tokens[0]==="rm" silently
+  // never counted as force even though it obviously is.
+  const dashFlags = rest.filter((t) => t.startsWith("-") && t !== "--");
+  let hasDashRecursive = false;
+  let hasDashForce = false;
+  for (const f of dashFlags) {
+    const isLong = f.startsWith("--");
+    const body = (isLong ? f.slice(2) : f.slice(1)).toLowerCase();
+    if (isLong || body.length > 3) {
+      // `--recursive`/`--force`, or a single-dash PowerShell WORD
+      // (`-Recurse`/`-Force`) — exact match only, never substring. Body
+      // length > 3 is the signal it's a word, not a combined short-flag
+      // cluster: real combined clusters top out around 3-4 letters
+      // (`-vrf`), while `force` (5) and `recurse` (7) are both longer than
+      // that AND both happen to contain the other's trigger letter
+      // (`force` contains "r", `recurse` contains... well it doesn't
+      // contain "f", but the asymmetry isn't something to rely on) — a
+      // substring check here would make a bare `-Force` also count as
+      // recursive, which is exactly the false positive this branch exists
+      // to avoid.
+      if (body === "recursive" || body === "recurse") hasDashRecursive = true;
+      if (body === "force") hasDashForce = true;
+    } else {
+      // combined POSIX short flags (-r, -f, -rf, -fr, -vrf, ...) — each
+      // character is an independent single-letter flag, so substring
+      // containment is correct here (unlike the word case above).
+      if (body.includes("r")) hasDashRecursive = true;
+      if (body.includes("f")) hasDashForce = true;
+    }
   }
+  if (hasDashRecursive && hasDashForce) {
+    const targets = rest.filter((t) => !t.startsWith("-") && !WINDOWS_SLASH_FLAG.test(t));
+    for (const raw of targets) {
+      const check = checkDangerousPath(raw, cwd);
+      if (check.blocked) return check;
+    }
+  }
+
   return SAFE;
 }
 
@@ -281,9 +360,7 @@ function checkFindDelete(tokens: string[], cwd: string): FloorResult {
   if (tokens[0] !== "find" || !tokens.includes("-delete")) return SAFE;
   const target = tokens.slice(1).find((t) => !t.startsWith("-"));
   if (!target) return SAFE;
-  const check = checkDangerousPath(target, cwd);
-  if (!check.blocked) return SAFE;
-  return block(`find ... -delete: ${check.reason}`);
+  return checkDangerousPath(target, cwd, "find -delete");
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +402,7 @@ function checkPublishSegment(tokens: string[]): FloorResult {
 // ---------------------------------------------------------------------------
 function checkDiskDestructive(tokens: string[]): FloorResult {
   const cmd = tokens[0];
+  const cmdLower = cmd?.toLowerCase();
   if (cmd && /^mkfs(\.\w+)?$/.test(cmd)) {
     return block(`'${cmd}' formats a filesystem/device — never allowed by the safety floor.`);
   }
@@ -337,6 +415,18 @@ function checkDiskDestructive(tokens: string[]): FloorResult {
   if (cmd === "diskutil" && tokens[1] === "eraseDisk") {
     return block("'diskutil eraseDisk' erases an entire disk — never allowed by the safety floor.");
   }
+  // Windows equivalents: `format` (formats a volume) and `diskpart`
+  // (scriptable partitioning/erasing) are the same danger class as
+  // mkfs/diskutil above — blocked outright, no target-resolution needed,
+  // matching mkfs's bare-command blocking.
+  if (cmdLower === "format") {
+    return block("'format' formats a filesystem/volume — never allowed by the safety floor.");
+  }
+  if (cmdLower === "diskpart") {
+    return block(
+      "'diskpart' can partition or erase disks — never allowed by the safety floor. Ask the user to run this manually if truly needed.",
+    );
+  }
   return SAFE;
 }
 
@@ -347,23 +437,59 @@ function checkDiskDestructive(tokens: string[]): FloorResult {
 // since the pipe itself is the thing being detected.
 // ---------------------------------------------------------------------------
 function checkPipeToShell(command: string): FloorResult {
-  const re = /\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|dash)\b/i;
+  // `iwr`/`Invoke-WebRequest` are PowerShell's fetch (and `curl`/`wget`
+  // themselves are built-in PowerShell aliases for it too); `iex`/
+  // `Invoke-Expression` is PowerShell's "run this string as code" sink —
+  // `curl https://... | iex` is the exact PowerShell-world equivalent of
+  // `curl https://... | sh`, and was entirely unmatched before.
+  const re = /\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|dash|iex|invoke-expression)\b/i;
   if (!re.test(command)) return SAFE;
   return block(
-    "piping a remote download (curl/wget) directly into a shell interpreter is never allowed — a compromised or malicious remote script would execute unreviewed. Download to a file, inspect it, then run it explicitly if it's safe.",
+    "piping a remote download directly into a shell/expression interpreter is never allowed — a compromised or malicious remote script would execute unreviewed. Download to a file, inspect it, then run it explicitly if it's safe.",
   );
+}
+
+// ---------------------------------------------------------------------------
+// Rule 5: write_file/edit_file targeting a path outside the workspace — the
+// write-side counterpart of rule 3's rm -rf-outside-workspace check.
+//
+// Before this rule existed, `write_file`/`edit_file` had NO path-scoping
+// check anywhere: `floorCheck()` only ever inspected the `bash` tool (see
+// its doc comment below, which literally anticipated this gap), and
+// `tools.ts`'s own `abs(cwd, p)` helper is a plain resolve — it does not
+// reject an absolute or `../`-escaping path. So Auto mode — the one mode
+// whose entire premise is "the floor keeps this locked," which also skips
+// the permission prompt for dangerous tools entirely — could silently
+// create or overwrite a file ANYWHERE on disk the process can reach (an SSH
+// key, a shell rc file, an unrelated project) with zero warning and zero
+// block. This closes that gap the same way rule 3 already closes it for
+// `rm -rf`. Reuses `checkDangerousPath` as-is: its "outside the workspace"
+// branch is the one that matters here; the filesystem-root/home-root/
+// workspace-root special cases are harmless no-ops for a file path (they'd
+// fail naturally with EISDIR if ever hit).
+//
+// Royal mode is unaffected — `floorCheck()` isn't called there at all, by
+// design (see the module doc comment and `loop.ts`'s `runPrompt()`).
+// ---------------------------------------------------------------------------
+function checkFileOutsideWorkspace(name: string, input: any, cwd: string): FloorResult {
+  if (name !== "write_file" && name !== "edit_file") return SAFE;
+  const path = String(input?.path ?? "").trim();
+  if (!path) return SAFE;
+  return checkDangerousPath(path, cwd, name);
 }
 
 /**
  * The floor. Pure, synchronous, no I/O — safe to call unconditionally for
  * every tool call, in every mode, before any permission/mode branching.
  *
- * Today this only inspects the `bash` tool's `command` string (all 5 rule
- * categories are shell-invoked actions). Other tool names fall through as
- * SAFE — extend here if a future rule needs to inspect e.g. `write_file`'s
- * `path` (see the module doc comment for what's deliberately deferred).
+ * `write_file`/`edit_file` get their own dedicated path check (rule 5,
+ * above); every other rule category inspects the `bash` tool's `command`
+ * string. Any other tool name falls through as SAFE.
  */
 export function floorCheck(name: string, input: any, cwd: string): FloorResult {
+  if (name === "write_file" || name === "edit_file") {
+    return checkFileOutsideWorkspace(name, input, cwd);
+  }
   if (name !== "bash") return SAFE;
   const command = String(input?.command ?? "");
   if (!command.trim()) return SAFE;
@@ -377,7 +503,7 @@ export function floorCheck(name: string, input: any, cwd: string): FloorResult {
     const checks = [
       checkGitForcePush(tokens),
       checkGitHistoryRewrite(tokens),
-      checkRmSegment(tokens, cwd),
+      checkRecursiveDeleteSegment(tokens, cwd),
       checkFindDelete(tokens, cwd),
       checkPublishSegment(tokens),
       checkDiskDestructive(tokens),

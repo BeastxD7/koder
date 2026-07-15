@@ -18747,7 +18747,7 @@ function checkGitHistoryRewrite(tokens) {
   return SAFE;
 }
 var WHOLE_CWD_TOKENS = /* @__PURE__ */ new Set([".", "./", "*", "./*", "$(pwd)", '"$(pwd)"']);
-function checkDangerousPath(raw, cwd) {
+function checkDangerousPath(raw, cwd, verb = "rm -rf") {
   const norm = raw.trim();
   if (!norm) return SAFE;
   const home = (0, import_node_path5.resolve)((0, import_node_os5.homedir)());
@@ -18763,45 +18763,57 @@ function checkDangerousPath(raw, cwd) {
     resolved = (0, import_node_path5.isAbsolute)(norm) ? (0, import_node_path5.resolve)(norm) : (0, import_node_path5.resolve)(cwd, norm);
   }
   if (resolved === "/") {
-    return block(`rm -rf targets the filesystem root ("${raw}") \u2014 never allowed.`);
+    return block(`${verb} targets the filesystem root ("${raw}") \u2014 never allowed.`);
   }
   if (resolved === home) {
-    return block(`rm -rf targets the home directory root ("${raw}") \u2014 never allowed.`);
+    return block(`${verb} targets the home directory root ("${raw}") \u2014 never allowed.`);
   }
   if (resolved === cwdResolved) {
     return block(
-      `rm -rf targets the entire workspace root ("${raw}") \u2014 scope the deletion to a subdirectory instead (e.g. "./build"), or ask the user to do this manually.`
+      `${verb} targets the entire workspace root ("${raw}") \u2014 scope the deletion to a subdirectory instead (e.g. "./build"), or ask the user to do this manually.`
     );
   }
   const rel = (0, import_node_path5.relative)(cwdResolved, resolved);
   if (rel.startsWith("..") || (0, import_node_path5.isAbsolute)(rel)) {
     return block(
-      `rm -rf targets a path outside the workspace ("${raw}" \u2192 ${resolved}) \u2014 never allowed, even in auto mode.`
+      `${verb} targets a path outside the workspace ("${raw}" \u2192 ${resolved}) \u2014 never allowed, even in auto mode.`
     );
   }
   return SAFE;
 }
-function checkRmSegment(tokens, cwd) {
-  if (tokens[0] !== "rm") return SAFE;
+var RECURSIVE_DELETE_COMMANDS = /* @__PURE__ */ new Set(["rm", "rmdir", "rd", "del", "erase", "ri", "remove-item"]);
+var WINDOWS_SLASH_FLAG = /^\/[a-z]{1,2}$/i;
+function checkRecursiveDeleteSegment(tokens, cwd) {
+  const cmd = tokens[0]?.toLowerCase();
+  if (!cmd || !RECURSIVE_DELETE_COMMANDS.has(cmd)) return SAFE;
   const rest = tokens.slice(1);
-  const flags = rest.filter((t) => t.startsWith("-") && t !== "--");
-  const targets = rest.filter((t) => !t.startsWith("-"));
-  let hasRecursive = false;
-  let hasForce = false;
-  for (const f of flags) {
-    if (f.startsWith("--")) {
-      if (f === "--recursive") hasRecursive = true;
-      if (f === "--force") hasForce = true;
-    } else {
-      if (/[rR]/.test(f)) hasRecursive = true;
-      if (/f/.test(f)) hasForce = true;
+  if (rest.some((t) => /^\/s$/i.test(t))) {
+    const targets = rest.filter((t) => !WINDOWS_SLASH_FLAG.test(t));
+    for (const raw of targets) {
+      const check2 = checkDangerousPath(raw, cwd, `${tokens[0]} /s`);
+      if (check2.blocked) return check2;
     }
   }
-  if (!(hasRecursive && hasForce)) return SAFE;
-  if (targets.length === 0) return SAFE;
-  for (const raw of targets) {
-    const check2 = checkDangerousPath(raw, cwd);
-    if (check2.blocked) return check2;
+  const dashFlags = rest.filter((t) => t.startsWith("-") && t !== "--");
+  let hasDashRecursive = false;
+  let hasDashForce = false;
+  for (const f of dashFlags) {
+    const isLong = f.startsWith("--");
+    const body = (isLong ? f.slice(2) : f.slice(1)).toLowerCase();
+    if (isLong || body.length > 3) {
+      if (body === "recursive" || body === "recurse") hasDashRecursive = true;
+      if (body === "force") hasDashForce = true;
+    } else {
+      if (body.includes("r")) hasDashRecursive = true;
+      if (body.includes("f")) hasDashForce = true;
+    }
+  }
+  if (hasDashRecursive && hasDashForce) {
+    const targets = rest.filter((t) => !t.startsWith("-") && !WINDOWS_SLASH_FLAG.test(t));
+    for (const raw of targets) {
+      const check2 = checkDangerousPath(raw, cwd);
+      if (check2.blocked) return check2;
+    }
   }
   return SAFE;
 }
@@ -18809,9 +18821,7 @@ function checkFindDelete(tokens, cwd) {
   if (tokens[0] !== "find" || !tokens.includes("-delete")) return SAFE;
   const target = tokens.slice(1).find((t) => !t.startsWith("-"));
   if (!target) return SAFE;
-  const check2 = checkDangerousPath(target, cwd);
-  if (!check2.blocked) return SAFE;
-  return block(`find ... -delete: ${check2.reason}`);
+  return checkDangerousPath(target, cwd, "find -delete");
 }
 function checkPublishSegment(tokens) {
   const cmd = tokens[0];
@@ -18842,6 +18852,7 @@ function checkPublishSegment(tokens) {
 }
 function checkDiskDestructive(tokens) {
   const cmd = tokens[0];
+  const cmdLower = cmd?.toLowerCase();
   if (cmd && /^mkfs(\.\w+)?$/.test(cmd)) {
     return block(`'${cmd}' formats a filesystem/device \u2014 never allowed by the safety floor.`);
   }
@@ -18854,16 +18865,33 @@ function checkDiskDestructive(tokens) {
   if (cmd === "diskutil" && tokens[1] === "eraseDisk") {
     return block("'diskutil eraseDisk' erases an entire disk \u2014 never allowed by the safety floor.");
   }
+  if (cmdLower === "format") {
+    return block("'format' formats a filesystem/volume \u2014 never allowed by the safety floor.");
+  }
+  if (cmdLower === "diskpart") {
+    return block(
+      "'diskpart' can partition or erase disks \u2014 never allowed by the safety floor. Ask the user to run this manually if truly needed."
+    );
+  }
   return SAFE;
 }
 function checkPipeToShell(command) {
-  const re = /\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|dash)\b/i;
+  const re = /\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(sudo\s+)?(sh|bash|zsh|dash|iex|invoke-expression)\b/i;
   if (!re.test(command)) return SAFE;
   return block(
-    "piping a remote download (curl/wget) directly into a shell interpreter is never allowed \u2014 a compromised or malicious remote script would execute unreviewed. Download to a file, inspect it, then run it explicitly if it's safe."
+    "piping a remote download directly into a shell/expression interpreter is never allowed \u2014 a compromised or malicious remote script would execute unreviewed. Download to a file, inspect it, then run it explicitly if it's safe."
   );
 }
+function checkFileOutsideWorkspace(name, input, cwd) {
+  if (name !== "write_file" && name !== "edit_file") return SAFE;
+  const path = String(input?.path ?? "").trim();
+  if (!path) return SAFE;
+  return checkDangerousPath(path, cwd, name);
+}
 function floorCheck(name, input, cwd) {
+  if (name === "write_file" || name === "edit_file") {
+    return checkFileOutsideWorkspace(name, input, cwd);
+  }
   if (name !== "bash") return SAFE;
   const command = String(input?.command ?? "");
   if (!command.trim()) return SAFE;
@@ -18875,7 +18903,7 @@ function floorCheck(name, input, cwd) {
     const checks = [
       checkGitForcePush(tokens),
       checkGitHistoryRewrite(tokens),
-      checkRmSegment(tokens, cwd),
+      checkRecursiveDeleteSegment(tokens, cwd),
       checkFindDelete(tokens, cwd),
       checkPublishSegment(tokens),
       checkDiskDestructive(tokens)
