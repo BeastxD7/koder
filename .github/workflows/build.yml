@@ -143,9 +143,28 @@ jobs:
           codesign --force --deep -s - Koder.app
           ditto -c -k --keepParent Koder.app ../${{ matrix.artifact }}.zip
 
+      # A proper .deb package, not a tarball of loose files — same "download,
+      # install one thing" experience Cursor/VS Code itself ships (and
+      # matches the .exe installer below for Windows). The gulp tasks
+      # (upstream/build/gulpfile.vscode.linux.ts, vscode-linux-x64-prepare-
+      # deb + vscode-linux-x64-build-deb, run in series) use `fakeroot`/
+      # `dpkg-deb` — already installed by this job's own "Linux build deps"
+      # step above (`apt-get install ... fakeroot rpm`), so no new CI
+      # tooling needed, same story as Windows's `innosetup` npm dependency.
+      - name: Build Linux package
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: upstream
+        run: npm run gulp vscode-linux-x64-prepare-deb vscode-linux-x64-build-deb
+
       - name: Archive (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf ${{ matrix.artifact }}.tar.gz -C VSCode-${{ matrix.target }} .
+        shell: bash
+        # dpkg-deb names the output from the control file's Package/Version/
+        # Architecture fields, not a fixed filename (unlike Windows's
+        # hardcoded VSCodeSetup.exe) — glob for whatever actually landed
+        # rather than guessing the exact name.
+        run: cp upstream/.build/linux/deb/amd64/deb/*.deb "${{ matrix.artifact }}.deb"
 
       # A proper installer, not a zip of loose files — the same "download,
       # run one .exe" experience Cursor/VS Code itself ships. The gulp task
@@ -184,7 +203,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             ${{ matrix.artifact }}.zip
-            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.deb
             ${{ matrix.artifact }}.exe
           if-no-files-found: error
 
