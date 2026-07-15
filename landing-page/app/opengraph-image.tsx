@@ -1,10 +1,11 @@
 import { ImageResponse } from "next/og";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import sharp from "sharp";
 
 export const alt = "LakshX — India's #1 Agentic Coding IDE";
 export const size = { width: 1200, height: 630 };
-export const contentType = "image/png";
+export const contentType = "image/jpeg";
 
 // Mirrors the real Hero component's composition (background photo + dark
 // scrim + centered logo/badge/headline) at OG dimensions, so link previews
@@ -20,7 +21,7 @@ export default async function OgImage() {
   const heroBg = await readFile(join(process.cwd(), "public/hero-bg.jpg"));
   const heroBgSrc = `data:image/jpeg;base64,${heroBg.toString("base64")}`;
 
-  return new ImageResponse(
+  const imageResponse = new ImageResponse(
     (
       <div
         style={{
@@ -167,4 +168,21 @@ export default async function OgImage() {
     ),
     { ...size },
   );
+
+  // `ImageResponse` (Satori + resvg) only ever rasterizes to PNG, with no
+  // quality/format control. Compositing a full-bleed photo losslessly into
+  // a 1200x630 canvas produces a ~1.3MB PNG — several times larger than the
+  // 472KB source JPEG. That weight is fine for Discord/Twitter but has been
+  // reported to cause WhatsApp's link-preview crawler to silently drop the
+  // image. Re-encode to JPEG (photos compress far better lossy than
+  // lossless) to keep the served OG image well under ~200KB.
+  const pngBuffer = Buffer.from(await imageResponse.arrayBuffer());
+  const jpegBuffer = await sharp(pngBuffer).jpeg({ quality: 82, mozjpeg: true }).toBuffer();
+
+  return new Response(new Uint8Array(jpegBuffer), {
+    headers: {
+      "content-type": "image/jpeg",
+      "cache-control": "public, immutable, no-transform, max-age=31536000",
+    },
+  });
 }

@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
+import { runBrowserPreview } from "./browser.js";
 import type { ToolDef } from "./providers/types.js";
 
 const execAsync = promisify(exec);
@@ -335,6 +336,30 @@ export const TOOLS: ToolSpec[] = [
         const out = clip([err.stdout, err.stderr, err.message].filter(Boolean).join("\n"), 60_000);
         return `EXIT ${err.code ?? "?"}\n${out}`;
       }
+    },
+  },
+  {
+    name: "browser_preview",
+    kind: "execute",
+    dangerous: true,
+    description:
+      "Load a LOCALHOST-ONLY dev server or webview you just built in a real browser and get back text signals: " +
+      "HTTP status, page title, console errors/warnings captured during load, whether an optional CSS selector " +
+      "appeared, and a capped chunk of visible page text. A screenshot is also saved to disk under .lakshx/tmp/ " +
+      "for a HUMAN to look at later — it is NOT shown to you, so don't rely on it to answer visual questions. " +
+      "Only 127.0.0.1, ::1, and localhost URLs are accepted (with any port/path) — this cannot reach the public " +
+      "internet or any other host, and file:// URLs are rejected outright.",
+    input_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Loopback URL to load, e.g. http://localhost:3000/" },
+        wait_for_selector: { type: "string", description: "Optional CSS selector to wait for before capturing signals" },
+        timeout_ms: { type: "number", description: "Default 15000" },
+      },
+      required: ["url"],
+    },
+    async run(input, cwd, signal) {
+      return runBrowserPreview(input, cwd, signal);
     },
   },
   {
