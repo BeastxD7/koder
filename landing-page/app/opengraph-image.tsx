@@ -9,17 +9,16 @@ export const contentType = "image/png";
 // Mirrors the real Hero component's composition (background photo + dark
 // scrim + centered logo/badge/headline) at OG dimensions, so link previews
 // (Slack, Twitter, iMessage, WhatsApp, Discord) look like the actual site
-// rather than a generic branded card. Assets are read from /public and
-// inlined as base64 data URIs — ImageResponse (Satori) can't reliably
-// fetch relative URLs, and doesn't support gradient/clip-text fills, so the
-// headline here is solid white instead of the page's gradient treatment.
+// rather than a generic branded card. The background photo is read from
+// /public and inlined as a base64 data URI — ImageResponse (Satori) can't
+// reliably fetch relative URLs, and doesn't support gradient/clip-text
+// fills, so the headline here is solid white instead of the page's
+// gradient treatment. The logo mark is the same inline Koder spark-glyph
+// SVG used by <Logo> (not a raster asset), so it stays in sync with the
+// on-page logo automatically.
 export default async function OgImage() {
-  const [heroBg, mark] = await Promise.all([
-    readFile(join(process.cwd(), "public/hero-bg.jpg")),
-    readFile(join(process.cwd(), "public/lakshx-mark.png")),
-  ]);
+  const heroBg = await readFile(join(process.cwd(), "public/hero-bg.jpg"));
   const heroBgSrc = `data:image/jpeg;base64,${heroBg.toString("base64")}`;
-  const markSrc = `data:image/png;base64,${mark.toString("base64")}`;
 
   return new ImageResponse(
     (
@@ -70,13 +69,36 @@ export default async function OgImage() {
             gap: 12,
           }}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={markSrc}
-            width={36}
-            height={36}
-            style={{ borderRadius: 9, width: "36px", height: "36px" }}
-          />
+          <svg width="40" height="40" viewBox="0 0 1024 1024">
+            <defs>
+              <linearGradient id="og-mark-bg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#15181f" />
+                <stop offset="1" stopColor="#0a0c10" />
+              </linearGradient>
+              <linearGradient id="og-mark-spark" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stopColor="#9d7fff" />
+                <stop offset="1" stopColor="#6a48f0" />
+              </linearGradient>
+            </defs>
+            <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#og-mark-bg)" />
+            <rect
+              x="64"
+              y="64"
+              width="896"
+              height="896"
+              rx="200"
+              fill="none"
+              stroke="#7c5cff"
+              strokeOpacity="0.35"
+              strokeWidth="8"
+            />
+            <path
+              d="M512 200 L568 424 L768 320 L616 496 L824 512 L616 528 L768 704 L568 600 L512 824 L456 600 L256 704 L408 528 L200 512 L408 496 L256 320 L456 424 Z"
+              fill="url(#og-mark-spark)"
+            />
+            <circle cx="512" cy="512" r="56" fill="#0a0c10" />
+            <circle cx="512" cy="512" r="34" fill="#c8b6ff" />
+          </svg>
           <span style={{ fontSize: 26, fontWeight: 700, color: "#ffffff", letterSpacing: "-0.02em" }}>
             LakshX
           </span>
