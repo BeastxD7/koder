@@ -11,6 +11,7 @@ const modeSelectEl = document.getElementById("modeSelect");
 const composerEl = document.getElementById("composer");
 const attachRow = document.getElementById("attachRow");
 const attachBtn = document.getElementById("attachBtn");
+const diagBtn = document.getElementById("diagBtn");
 const mentionPopup = document.getElementById("mentionPopup");
 const checkpointBarEl = document.getElementById("checkpointBar");
 const cpbarHead = document.getElementById("cpbarHead");
@@ -632,6 +633,17 @@ function renderAttachments() {
 }
 
 attachBtn.addEventListener("click", () => vscode.postMessage({ type: "attachActiveFile" }));
+
+// ---------- diagnostics (full session report -> clipboard) ----------
+// extension.js assembles the report (it holds the full transcript, incl.
+// fields this webview doesn't keep around, like raw tool input) and copies
+// it via vscode.env.clipboard — see the "copyDiagnostics"/"diagnosticsCopied"
+// pair below and the case "copyDiagnostics" handler in extension.js.
+diagBtn.addEventListener("click", () => {
+  if (diagBtn.disabled) return;
+  diagBtn.disabled = true;
+  vscode.postMessage({ type: "copyDiagnostics" });
+});
 
 // drag-and-drop onto the composer. VS Code reliably surfaces explorer/tab
 // drags into a webview as `text/uri-list`; OS-level Finder/Explorer drops
@@ -1264,6 +1276,18 @@ window.addEventListener("message", (e) => {
     case "fileResults":
       if (mentionActive && m.seq === mentionSeq) renderMentionResults(m.files);
       break;
+    case "diagnosticsCopied": {
+      // Same brief inline-note pattern attachFeedback() uses for "Retrying…"
+      // (panel.css .fb-note) — a small transient label next to the button,
+      // not a modal or a chat message.
+      const note = document.createElement("span");
+      note.className = "fb-note";
+      note.textContent = m.ok ? "Copied!" : "Copy failed";
+      diagBtn.insertAdjacentElement("afterend", note);
+      setTimeout(() => note.remove(), 2000);
+      diagBtn.disabled = false;
+      break;
+    }
     case "clear":
       messagesEl.innerHTML = "";
       tools.clear();
