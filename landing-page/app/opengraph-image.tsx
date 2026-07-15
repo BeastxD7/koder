@@ -109,7 +109,7 @@ export default async function OgImage() {
               marginBottom: 28,
             }}
           >
-            <span style={{ color: "#60a5fa" }}>&bull;</span>
+            <span style={{ color: "#c8b6ff" }}>&bull;</span>
             <span>India&rsquo;s #1 Agentic Coding IDE</span>
           </div>
 

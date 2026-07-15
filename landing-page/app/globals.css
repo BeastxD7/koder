@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-poppins), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* Hero headline only — an elegant italic serif for a distinctive,
+     premium display treatment. */
+  --font-display: var(--font-playfair), ui-serif, Georgia, serif;
+
+  /* Near-black text + white/grey surfaces + a violet/purple accent (the
+     LakshX wordmark recolored to violet, matching the tone used across the
+     product's own UI) as the one accent color, carried through on every
+     CTA, badge, and icon chip. */
+  --color-ink-navy: #14181f;
+  --color-lakshx-violet: #7c5cff;
+  --color-lakshx-violet-active: #c8b6ff;
+  --color-accent-soft: rgba(124, 92, 255, 0.14);
+  --color-paper: #ffffff;
+  --color-paper-dim: #f1f4f8;
+
+  --shadow-frame: 0 20px 60px -20px rgba(20, 24, 31, 0.2);
+  --radius-frame: 2.5rem;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    @apply font-sans;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink-navy);
+    -webkit-font-smoothing: antialiased;
+    @apply bg-background text-foreground;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+}
+
+@theme inline {
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #14181f;
+  --muted: #f1f4f8;
+  --muted-foreground: #5b616e;
+  --border: rgba(20, 24, 31, 0.1);
+  --ring: #7c5cff;
+}
