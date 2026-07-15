@@ -418,14 +418,17 @@ function remoteAccessQrHtml(info, workspaceName) {
   const svg = renderQrSvg(info.url, 5);
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <style>
+  html, body { height: 100%; margin: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0e1116; color: #c8cede;
-    padding: 32px 24px; text-align: center; }
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100vh; box-sizing: border-box; padding: 32px 24px; text-align: center; }
   h2 { font-size: 15px; margin: 0 0 6px; color: #fff; }
   .ws { color: #8a93a8; font-size: 12px; margin-bottom: 18px; }
-  .qr { background: #fff; display: inline-block; padding: 16px; border-radius: 14px; }
+  .qr { background: #fff; display: inline-flex; padding: 16px; border-radius: 14px; }
   .qr svg { display: block; }
   .url { font-family: "SF Mono", Menlo, monospace; font-size: 12px; word-break: break-all; margin-top: 18px;
-    background: rgba(255,255,255,0.06); padding: 10px 12px; border-radius: 8px; user-select: all; display: inline-block; }
+    background: rgba(255,255,255,0.06); padding: 10px 12px; border-radius: 8px; user-select: all; display: inline-block;
+    max-width: 380px; }
   .warn { color: #ffb454; font-size: 12px; margin: 20px auto 0; max-width: 380px; line-height: 1.5; }
   .stop { color: #8a93a8; font-size: 11.5px; margin-top: 10px; }
 </style></head><body>
