@@ -152,26 +152,29 @@ jobs:
       # step above (`apt-get install ... fakeroot rpm`), so no new CI
       # tooling needed, same story as Windows's `innosetup` npm dependency.
       #
-      # First CI attempt at this failed immediately on prepare-deb's own
+      # First two CI attempts at this failed identically on prepare-deb's own
       # rimraf step ("clean-amd64") with "Error: spawn /bin/sh ENOENT" —
-      # right after the preceding esbuild-bundle-linux-x64-min step, which is
-      # the heaviest single step in the whole job (~3min of JS bundling/
-      # minification). Same failure signature this project already hit and
-      # fixed on macOS's npm ci step (a transient child_process spawn
-      # failure under resource pressure right after a heavy prior step, not
-      # a real logic bug) — applying the same proven retry-loop fix rather
-      # than a new one.
+      # 100% reproducible, ~10ms after starting, unaffected by a 3x retry
+      # loop (ruling out the transient-resource-pressure theory the retry
+      # loop was originally written for; that theory doesn't hold, this is
+      # deterministic). Root cause: `actions/setup-python@v5` (earlier in
+      # this job, needed for native Node module compilation during
+      # "Install upstream dependencies") sets LD_LIBRARY_PATH to Python's
+      # own bundled lib directory for the REST of the job, including this
+      # step — a well-known class of bug where a language toolchain's
+      # LD_LIBRARY_PATH shadows system libraries that even /bin/sh itself
+      # needs to start, which can surface through Node's child_process as a
+      # plain ENOENT rather than a linker error. This step doesn't touch
+      # Python at all (dpkg-deb/fakeroot are unrelated native binaries), so
+      # clearing it here is safe without affecting the earlier step that
+      # actually needs it.
       - name: Build Linux package
         if: runner.os == 'Linux'
         shell: bash
         working-directory: upstream
-        run: |
-          for attempt in 1 2 3; do
-            npm run gulp vscode-linux-x64-prepare-deb vscode-linux-x64-build-deb && exit 0
-            echo "Linux package build failed (attempt $attempt) — retrying in 10s" >&2
-            sleep 10
-          done
-          exit 1
+        env:
+          LD_LIBRARY_PATH: ""
+        run: npm run gulp vscode-linux-x64-prepare-deb vscode-linux-x64-build-deb
 
       - name: Archive (Linux)
         if: runner.os == 'Linux'
