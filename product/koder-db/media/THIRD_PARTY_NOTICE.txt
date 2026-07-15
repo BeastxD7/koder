@@ -1,0 +1,14 @@
+mermaid.min.js (this directory)
+
+Source: mermaid (https://github.com/mermaid-js/mermaid), version 11.15.0.
+License: MIT.
+
+Vendored as a static webview asset (not an npm "dependencies" entry of this
+extension's own package.json, since it's never require()'d from Node — it
+only runs inside the sandboxed webview via <script src>). Copied from the
+build of `mermaid` already fetched by upstream VS Code's own built-in
+`mermaid-markdown-features` extension
+(upstream/extensions/mermaid-markdown-features/node_modules/mermaid/dist/mermaid.min.js)
+rather than installed separately, so this file's provenance matches
+upstream's own use of the same library. Re-vendor by re-copying that file if
+this needs to move to a newer mermaid release.

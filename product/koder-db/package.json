@@ -1,0 +1,41 @@
+{
+  "name": "lakshx-db",
+  "displayName": "LakshX Database",
+  "description": "LakshX's native database visualization panel — schema and relationships for Postgres/MySQL/SQLite/MongoDB, rendered as a Mermaid ER diagram in a webview.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "mongodb": "^7.5.0"
+  },
+  "activationEvents": [
+    "onCommand:lakshx.db.showPanel",
+    "onCommand:lakshx.db.forgetCredentials"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.db.showPanel",
+        "title": "LakshX: Show Database Panel (MongoDB)",
+        "icon": "$(database)"
+      },
+      {
+        "command": "lakshx.db.forgetCredentials",
+        "title": "LakshX: Forget Database Credentials"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "lakshx.db.showPanel" },
+        { "command": "lakshx.db.forgetCredentials" }
+      ]
+    }
+  }
+}

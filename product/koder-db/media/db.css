@@ -1,0 +1,168 @@
+:root {
+  /* Same rationale as koder-graph/media/graph.css: this panel is always
+     dark, independent of OS theme. */
+  color-scheme: dark;
+  --bg: var(--vscode-sideBar-background, #0e1116);
+  --fg: #c8cede;
+  --muted: #8a93a8;
+  --faint: #5c6577;
+  --accent: #7c5cff;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --radius: 10px;
+  --ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  --warn-bg: rgba(240, 198, 116, 0.1);
+  --warn-border: rgba(240, 198, 116, 0.35);
+  --warn-fg: #f0c674;
+  --suggested: #c9a227; /* low-confidence relationship color — deliberately amber/yellow, never the same hue as a "real" FK would use */
+  --error-fg: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 2;
+}
+#toolbar .spacer { flex: 1; }
+#title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.ghost {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg);
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 120ms var(--ease), border-color 120ms var(--ease);
+}
+button.ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+#banner {
+  margin: 12px;
+  padding: 8px 12px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-fg);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#loading, #error {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+#error { color: var(--error-fg); white-space: pre-wrap; }
+
+#diagramWrap {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px 20px;
+}
+#diagram {
+  min-width: max-content;
+}
+/* mermaid renders with theme:'dark', so no white card wrapper is needed —
+   its own SVG background matches the panel. */
+#diagram svg { max-width: none; }
+
+#relPanel {
+  border-top: 1px solid var(--hairline);
+  padding: 12px;
+}
+#relPanel h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+#relPanel .hint {
+  margin: 0 0 10px;
+  color: var(--faint);
+  font-size: 11.5px;
+  line-height: 1.5;
+  max-width: 640px;
+}
+#relList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#relList li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--fg);
+  padding: 6px 10px;
+  border: 1px dashed var(--suggested);
+  border-radius: 7px;
+  background: rgba(201, 162, 39, 0.06);
+}
+#relList .badge {
+  flex-shrink: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--suggested);
+  border: 1px solid var(--suggested);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+#relList .note {
+  color: var(--muted);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
