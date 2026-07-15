@@ -4,6 +4,7 @@
  * model + tools + verification, not harness complexity. Behavior, strategy,
  * and system prompt are 100% ours.
  */
+import { randomUUID } from "node:crypto";
 import { logRoyalAudit, summarizeInput, summarizeText } from "./audit.js";
 import { checkpointBaseline, checkpointBeforeMutation, commitAfterTool, filesChangedSinceCommit } from "./checkpoint.js";
 import { envBlock, loadRules, scrubSecrets } from "./context.js";
@@ -52,6 +53,39 @@ export interface LoopCallbacks {
    * show a zero-file "Files changed" row.
    */
   onCheckpoint?(info: { toolCallId: string; toolName: string; sha: string; files: string[] }): void;
+  /**
+   * Fired once when a `dispatch_subtasks` tool call begins — before any
+   * child `runPrompt()` starts — so the client can render the "Running N
+   * subtasks…" card immediately rather than waiting for the first child to
+   * produce activity. `batchId` scopes every subsequent `onSubagentActivity`/
+   * `onSubagentsEnd` call for this dispatch; `promptId` is the SAME promptId
+   * the parent call is running under (Part 1.6 — all children share it so
+   * their checkpoint commits land under one "Files changed" group instead of
+   * opening N separate ones).
+   */
+  onSubagentsStart?(info: { batchId: string; promptId: string; tasks: { id: string; prompt: string; mode: AgentMode }[] }): void;
+  /**
+   * Fired repeatedly as each child in a `dispatch_subtasks` batch does
+   * things — this is what makes the UI a live progress feed rather than a
+   * single "done" blob at the end. `detail` is always already-summarized,
+   * bounded text, never a raw streamed transcript:
+   *  - `tool_start`/`tool_end`: the tool's `title` (from `toolTitle()`),
+   *    exactly what the top-level `onToolStart`/`onToolEnd` callbacks use —
+   *    no separate summarization scheme for subagent tool activity.
+   *  - `text`/`thinking`: `summarizeText()` (audit.ts) over the delta, same
+   *    size-capping discipline the Royal audit log and tracing spans already
+   *    apply, so an unbounded child response can't flood this channel.
+   */
+  onSubagentActivity?(info: { batchId: string; taskId: string; kind: "text" | "thinking" | "tool_start" | "tool_end"; detail: string }): void;
+  /**
+   * Fired once when every child in a `dispatch_subtasks` batch has settled —
+   * including when one throws, since each child is caught individually (see
+   * `runSubtask`) so one failing subtask can never prevent its siblings' or
+   * the batch's own completion from being reported. `results` is the same
+   * per-task `{id, output, isError}` list merged into the tool_result handed
+   * back to the orchestrating model.
+   */
+  onSubagentsEnd?(info: { batchId: string; results: { id: string; output: string; isError: boolean }[] }): void;
 }
 
 export interface AgentSession {
@@ -67,6 +101,18 @@ export interface AgentSession {
 }
 
 const MAX_ITERATIONS = 60;
+
+/** `dispatch_subtasks` concurrency cap (Part 1.1) — see `dispatchSubtasks()` below. */
+const MAX_SUBTASKS_PER_CALL = 6;
+/**
+ * `dispatch_subtasks` depth cap (Part 1.2, carried over from
+ * docs/architecture.md §10's roadmap): a subtask must never be able to spawn
+ * its own subtasks. `depth` is the depth of the session CURRENTLY RUNNING
+ * `runPrompt` — 0 for the top-level orchestrator, 1 for a child spawned by
+ * one `dispatch_subtasks` call. Refusing at `depth >= MAX_SUBTASK_DEPTH`
+ * means only the top-level orchestrator (depth 0) may call this tool.
+ */
+const MAX_SUBTASK_DEPTH = 1;
 
 const IDENTITY = `You are Koder, the agent inside the Koder IDE — an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.`;
 
@@ -155,6 +201,179 @@ function wrapToolOutput(name: string, path: string | undefined, content: string)
   return `<tool_output${attrs}>\n${safe}\n</tool_output>`;
 }
 
+interface SubtaskInput {
+  id: string;
+  prompt: string;
+  /** Explicitly opt-in shared context (Part 1.4) — see `buildSubtaskMessage`. */
+  context?: string;
+  mode?: AgentMode;
+}
+
+/**
+ * Build a child subtask's first user message. Deliberately NOT the parent's
+ * `session.history`, not its tool outputs, not its file contents — those are
+ * never copied automatically (that's the isolation half of Part 1.4: a fresh
+ * session with empty history IS the boundary). What DOES cross the boundary
+ * is exactly two things: the task's own `prompt`, and — only if the
+ * orchestrating model explicitly chose to pass one — a `context` string it
+ * wrote itself (e.g. "the parent already found the bug is in auth.ts around
+ * line 40"). This is a deliberate middle ground: full isolation would waste
+ * every child's first turn rediscovering what the parent already knows;
+ * full history sharing would balloon each child's context N-fold with
+ * irrelevant parent-turn tool output and risk smuggling in-flight,
+ * potentially-stale state. Sharing here is opt-in and per-task, decided by
+ * the model at the call site, not automatic.
+ */
+function buildSubtaskMessage(task: SubtaskInput): string {
+  if (!task.context) return task.prompt;
+  return `<parent_context>\n${task.context}\n</parent_context>\n\n${task.prompt}`;
+}
+
+/**
+ * Run one child of a `dispatch_subtasks` batch to completion, wrapping
+ * `runPrompt` itself (Part 1.10) rather than duplicating its loop. Builds a
+ * synthetic `LoopCallbacks` for the child that deliberately does NOT forward
+ * `onText`/`onThinking`/`onToolStart`/`onToolEnd` to the parent's real
+ * callbacks — doing so would interleave N children's raw streamed text into
+ * the parent's single transcript/stream buffer and render child tool calls
+ * as top-level tool cards indistinguishable from the parent's own. Instead
+ * those four are redirected into `onSubagentActivity` (Part 3), summarized
+ * per doc comment on that callback. `onCheckpoint`/`onBaseline`, by
+ * contrast, ARE forwarded straight through to the parent's real callbacks —
+ * that's what makes Part 1.6 work: every child shares the parent's
+ * `promptId`, so their checkpoint commits land in the ONE "Files changed"
+ * card/undo group the parent's `server.ts` wiring already builds, rather
+ * than opening a separate one per child. `onPermission` is also forwarded
+ * (never silently auto-allowed) — approve-mode fan-out with several
+ * concurrent permission prompts is unusual but must still ask, not bypass.
+ *
+ * Never throws: a failing child must not take down its siblings or the
+ * batch (Part 1.9's "errors caught per-child") — errors are caught here and
+ * turned into an `isError: true` result instead.
+ */
+async function runSubtask(
+  childSession: AgentSession,
+  task: SubtaskInput,
+  cb: LoopCallbacks,
+  batchId: string,
+  promptId: string,
+  signal: AbortSignal | undefined,
+  depth: number,
+): Promise<{ id: string; output: string; isError: boolean }> {
+  // toolCallId -> title, so `tool_end` activity (LoopCallbacks.onToolEnd
+  // carries no title of its own, only id/output/isError) can still report
+  // WHAT finished, not just that something did.
+  const toolTitles = new Map<string, string>();
+  const childCb: LoopCallbacks = {
+    onText: (text) => cb.onSubagentActivity?.({ batchId, taskId: task.id, kind: "text", detail: summarizeText(text) }),
+    onThinking: (text) => cb.onSubagentActivity?.({ batchId, taskId: task.id, kind: "thinking", detail: summarizeText(text) }),
+    onToolStart: (c) => {
+      toolTitles.set(c.id, c.title);
+      cb.onSubagentActivity?.({ batchId, taskId: task.id, kind: "tool_start", detail: c.title });
+    },
+    onToolEnd: (c) =>
+      cb.onSubagentActivity?.({
+        batchId,
+        taskId: task.id,
+        kind: "tool_end",
+        detail: toolTitles.get(c.id) ?? (c.isError ? "failed" : "done"),
+      }),
+    onPermission: (c) => cb.onPermission(c),
+    onUsage: cb.onUsage,
+    // the child's history is throwaway (never persisted, never merged back
+    // into the parent) — nothing here for a persistence hook to do
+    onHistoryChanged: undefined,
+    onBaseline: cb.onBaseline,
+    onCheckpoint: cb.onCheckpoint,
+  };
+
+  try {
+    await runPrompt(childSession, buildSubtaskMessage(task), childCb, promptId, signal, undefined, depth + 1);
+    const lastAssistant = [...childSession.history].reverse().find((m) => m.role === "assistant");
+    const text = (lastAssistant?.content ?? [])
+      .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
+      .map((b) => b.text)
+      .join("");
+    return { id: task.id, output: text || "(no output)", isError: false };
+  } catch (err: any) {
+    return { id: task.id, output: `ERROR: ${err?.message ?? err}`, isError: true };
+  }
+}
+
+/**
+ * `dispatch_subtasks` tool handler (Part 1). Fans out `tasks` as concurrent
+ * child `runPrompt()` loops via `Promise.all` — NOT a sequential loop, that
+ * would defeat the entire point of this tool (tasks that depend on each
+ * other's output belong in the main loop instead; see tools.ts's
+ * description for how the model is told to self-select). Every child:
+ *  - gets a FRESH session with EMPTY history (Part 1.3's isolation boundary
+ *    — see `dispatchSubtasks`'s caller for why `session.history` is never
+ *    copied in);
+ *  - shares the SAME `promptId` as this call (Part 1.6);
+ *  - inherits the parent's `signal` so `session/cancel` kills the whole tree
+ *    (Part 1.7);
+ *  - reports its final assistant text only, not its full history, back into
+ *    the merged tool_result (Part 1.8).
+ */
+async function dispatchSubtasks(
+  session: AgentSession,
+  tc: { id: string; input: any },
+  cb: LoopCallbacks,
+  promptId: string,
+  signal: AbortSignal | undefined,
+  depth: number,
+): Promise<{ content: string; isError: boolean }> {
+  if (depth >= MAX_SUBTASK_DEPTH) {
+    return {
+      isError: true,
+      content: `dispatch_subtasks is not available from within a subtask (max nesting depth ${MAX_SUBTASK_DEPTH}) — a subtask must complete its own work directly rather than fanning out further.`,
+    };
+  }
+
+  const rawTasks: SubtaskInput[] = Array.isArray(tc.input?.tasks) ? tc.input.tasks : [];
+  if (rawTasks.length === 0) {
+    return { isError: true, content: `dispatch_subtasks requires a non-empty "tasks" array.` };
+  }
+
+  // Concurrency cap (Part 1.1): truncate rather than reject outright, so a
+  // model that over-asks still makes progress on the first 6 — but the
+  // truncation is surfaced as an explicit note in the tool_result, never a
+  // silent drop, so the model knows to resubmit the rest.
+  let note = "";
+  let tasks = rawTasks;
+  if (rawTasks.length > MAX_SUBTASKS_PER_CALL) {
+    tasks = rawTasks.slice(0, MAX_SUBTASKS_PER_CALL);
+    note = `Note: ${rawTasks.length} tasks were submitted but only ${MAX_SUBTASKS_PER_CALL} run per call (concurrency cap). The remaining ${rawTasks.length - MAX_SUBTASKS_PER_CALL} were NOT run — resubmit them in a follow-up dispatch_subtasks call.\n\n`;
+  }
+
+  const batchId = randomUUID();
+  cb.onSubagentsStart?.({
+    batchId,
+    promptId,
+    tasks: tasks.map((t) => ({ id: t.id, prompt: t.prompt, mode: t.mode ?? session.mode })),
+  });
+
+  const results = await Promise.all(
+    tasks.map((task) => {
+      // Isolation boundary (Part 1.3): a FRESH session, EMPTY history —
+      // deliberately never `[...session.history]`. See `runSubtask`'s doc
+      // comment for why (and `buildSubtaskMessage` for what DOES cross).
+      const childSession: AgentSession = {
+        cwd: session.cwd,
+        model: session.model,
+        mode: task.mode ?? session.mode,
+        history: [],
+      };
+      return runSubtask(childSession, task, cb, batchId, promptId, signal, depth);
+    }),
+  );
+
+  cb.onSubagentsEnd?.({ batchId, results });
+
+  const merged = results.map((r) => `### Subtask ${r.id}${r.isError ? " (failed)" : ""}\n${r.output}`).join("\n\n");
+  return { content: note + merged, isError: false };
+}
+
 export async function runPrompt(
   session: AgentSession,
   userText: string,
@@ -163,13 +382,36 @@ export async function runPrompt(
   signal?: AbortSignal,
   /** Optional ACP session id, purely for tracing (docs/architecture.md §10 item 1) — attached to the Langfuse trace as `sessionId` when tracing is enabled. Never affects loop behavior. */
   sessionId?: string,
+  /**
+   * Subtask nesting depth (Part 1.2) — trailing optional param so every
+   * existing call site (server.ts, tests) is unaffected; defaults to 0, the
+   * top-level orchestrator. `dispatchSubtasks()` below passes `depth + 1`
+   * when it recurses into a child's own `runPrompt()` call via `runSubtask`
+   * (which passes `undefined` for `sessionId` — a subtask has no distinct
+   * top-level ACP session id of its own to attach to its trace). Deliberately
+   * NOT stored on `AgentSession` — sessions are reused across turns/prompts
+   * (server.ts keeps one `Session` per ACP session for its whole lifetime),
+   * so depth must be threaded per-call, not attached to long-lived session
+   * state.
+   */
+  depth = 0,
 ): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   const cfg = loadConfig();
   const { provider, model } = resolveModel(cfg, session.model);
   const adapter = makeAdapter(provider.kind, provider);
 
+  // `dispatch_subtasks` is `dangerous: false` (tools.ts) — it doesn't mutate
+  // anything itself — but it's excluded from review mode's tool set anyway,
+  // on top of the `!dangerous` filter: its own `task.mode` field can name
+  // ANY mode, including auto/royal, for the child it spawns (Part 1's
+  // literal design — mode inheritance is a per-task override, not a hard
+  // ceiling). Offering it in review mode would let a read-only conversation
+  // spawn a fully-mutating child, silently defeating "write_file/edit_file/
+  // dangerous bash are disabled outright" (modeBlock's review-mode text,
+  // `spec.dangerous && session.mode === "review"` hard gate above) — the one
+  // guarantee review mode makes.
   const allowedTools =
-    session.mode === "review" ? TOOLS.filter((t) => !t.dangerous) : TOOLS;
+    session.mode === "review" ? TOOLS.filter((t) => !t.dangerous && t.name !== "dispatch_subtasks") : TOOLS;
 
   // Tracing (docs/architecture.md §10 item 1): a strict no-op unless the
   // user has fully configured Langfuse (see tracing.ts's module doc) — never
@@ -184,7 +426,7 @@ export async function runPrompt(
   });
 
   try {
-    return await runPromptLoop(session, userText, cb, promptId, trace, model, adapter, allowedTools, signal);
+    return await runPromptLoop(session, userText, cb, promptId, trace, model, adapter, allowedTools, signal, depth);
   } finally {
     trace.end();
     void tracer.flush();
@@ -200,7 +442,8 @@ async function runPromptLoop(
   model: string,
   adapter: ChatAdapter,
   allowedTools: ToolSpec[],
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  depth: number,
 ): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   session.history.push({ role: "user", content: [{ type: "text", text: userText }] });
   const userMessageIndex = session.history.length - 1;
@@ -283,6 +526,21 @@ async function runPromptLoop(
         results.push({ type: "tool_result", tool_use_id: tc.id, content: `Unknown tool ${tc.name}`, is_error: true });
         continue;
       }
+
+      // `dispatch_subtasks` is special-cased BEFORE the generic dispatch
+      // path below (floor/permission/checkpoint machinery, `spec.run(...)`)
+      // rather than folded into it: it doesn't do one unit of work itself,
+      // it fans out N concurrent child `runPrompt()` loops, each of which
+      // goes through that same generic machinery independently and
+      // recursively for its OWN tool calls. See tools.ts's `dispatch_subtasks`
+      // entry (its own `run()` is a defensive stub, never actually invoked)
+      // and `dispatchSubtasks()`'s doc comment below for the full design.
+      if (tc.name === "dispatch_subtasks") {
+        const outcome = await dispatchSubtasks(session, tc, cb, promptId, signal, depth);
+        results.push({ type: "tool_result", tool_use_id: tc.id, content: outcome.content, is_error: outcome.isError });
+        continue;
+      }
+
       cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
       // One span per tool execution (docs/architecture.md §10 item 1),
       // reusing audit.ts's summarization — same discipline the Royal audit

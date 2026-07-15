@@ -323,7 +323,7 @@ async function searchWorkspaceFiles(q) {
 // (see notifyReverted below) so a chat reload nets out to the same "does
 // this file currently have an undoable agent change" state live sessions
 // converge to, instead of resurrecting already-reverted files after reload.
-const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted"]);
+const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
 
 function chatsDir() {
   const dir = path.join(os.homedir(), ".koder", "chats");
@@ -592,6 +592,9 @@ class AgentViewProvider {
         if (method === "koder/checkpoint_compacted") {
           this.post({ type: "system", text: "Older undo history was compacted to bound disk usage — very old turns may no longer be undoable." });
         }
+        if (method === "koder/subagents_start") this.onSubagentsStart(params);
+        if (method === "koder/subagent_activity") this.onSubagentActivity(params);
+        if (method === "koder/subagents_end") this.onSubagentsEnd(params);
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -667,6 +670,27 @@ class AgentViewProvider {
     }
     this.refreshFileHasCheckpointContext();
     this.checkpointDecorationProvider?.refresh(params.files.map(toAbsoluteUri));
+  }
+
+  /**
+   * `koder/subagents_start`/`koder/subagent_activity`/`koder/subagents_end`
+   * (agent/src/loop.ts's `dispatch_subtasks` — parallel subagent fan-out) —
+   * same pattern as `onCheckpoint` above: forward the notification's params
+   * straight through to the webview as a transcript event, `panel.js` does
+   * the actual card rendering keyed off `batchId`. No extension-side state
+   * to maintain here (unlike `fileCheckpoints` above) — these three events
+   * are pure progress relay, nothing else in this file reads them.
+   */
+  onSubagentsStart(params) {
+    this.post({ type: "subagentsStart", batchId: params.batchId, promptId: params.promptId, tasks: params.tasks });
+  }
+
+  onSubagentActivity(params) {
+    this.post({ type: "subagentActivity", batchId: params.batchId, taskId: params.taskId, kind: params.kind, detail: params.detail });
+  }
+
+  onSubagentsEnd(params) {
+    this.post({ type: "subagentsEnd", batchId: params.batchId, results: params.results });
   }
 
   /**

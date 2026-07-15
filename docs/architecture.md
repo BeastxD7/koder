@@ -374,17 +374,36 @@ achieve reliability turned up three concrete, evidence-backed gaps worth closing
    alone swung SWE-bench Verified accuracy by 6.5 points, holding the execution agent fixed —
    i.e. compaction quality measurably affects task success, not just token cost. Worth
    benchmarking before treating it as an afterthought.
-3. **Scoped subagent delegation.** Anthropic's own production Research feature ships an
-   orchestrator-worker pattern: a lead agent decomposes and delegates to subagents with
-   isolated context. Koder's `AgentSession.history` already provides the isolation primitive
-   a child session would need — a `delegate_subtask` tool that spawns a nested `runPrompt`
-   with its own fresh history, inherits the parent's mode (so `floorCheck`/`onPermission`
-   apply for free), and returns only its final text (not its full tool trace) to the parent
-   would be additive, not a rewrite. True *parallel* subagents are a bigger lift: the shadow-git
-   checkpoint system (`checkpoint.ts`) commits per-tool-call against one shared working tree,
-   so concurrent workers would race on it — sequential delegation first, worktree-isolated
-   parallelism (mirroring how Cursor's background agents each get their own git worktree)
-   only once that proves out.
+3. **Scoped subagent delegation — DONE, parallel.** Anthropic's own production Research
+   feature ships an orchestrator-worker pattern: a lead agent decomposes and delegates to
+   subagents with isolated context. Shipped as `dispatch_subtasks` (`tools.ts`/`loop.ts`): the
+   model calls it once with up to 6 tasks, each spawning a child `AgentSession` with a fresh,
+   empty `history` (the isolation boundary — never a copy of the parent's history) and runs
+   concurrently via `Promise.all`, not sequentially. Sharing is deliberately partial, not full
+   isolation or a full history dump: each task's first message is its own `prompt` plus an
+   *optional*, model-chosen `context` string — the orchestrator decides per task what's worth
+   handing down, nothing crosses automatically. Children inherit the parent's mode by default
+   (`floorCheck`/`onPermission` apply for free) and share the parent's `promptId`, so their
+   checkpoint commits land under one "Files changed" group. A subtask cannot itself call
+   `dispatch_subtasks` (depth-capped at 1) and only its final text — not its full tool trace —
+   returns to the parent, merged across all tasks into one tool result.
+
+   True concurrent execution needed the one real blocker addressed: `checkpoint.ts`'s
+   shadow-git commits aren't safe to run concurrently (two subtasks committing at once race on
+   the same HEAD). Fixed with an in-process async mutex around just the git-commit bookkeeping
+   (`withProcessMutex` in `checkpoint.ts`) — tool execution and LLM round-trips for different
+   subtasks still run fully concurrently; only the brief commit step serializes. This does
+   **not** protect against two subtasks editing the literal same file at once — that's an
+   inherent limit of a shared working tree, not solvable without per-worker git worktrees
+   (mirroring Cursor's background agents), which remains the deferred bigger lift. The
+   `dispatch_subtasks` tool description warns the model against dispatching file-overlapping
+   tasks rather than pretending the risk is fully guarded.
+
+   Live progress surfaces in the chat panel: `koder/subagents_start`/`subagent_activity`/
+   `subagents_end` ACP notifications (`server.ts`) drive a card in `panel.js` (reusing the
+   checkpoint card's visual language) showing every dispatched task with a live running/done/
+   failed status as it works, not just a result blob at the end. See
+   `agent/test/dispatch-subtasks.test.ts` and `agent/test/checkpoint-mutex.test.ts`.
 
 What this roadmap deliberately does **not** claim: specific reliability numbers for how
 Cursor or Devin handle retries, rate-limit backoff, or tool-execution sandboxing internally —

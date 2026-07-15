@@ -259,6 +259,13 @@ acp
             void ctx.client.notify("koder/checkpoint", { sessionId, promptId, ...info });
             persist();
           },
+          // Live subagent progress (Part 3) — same shape/pattern as
+          // onBaseline/onCheckpoint above: one ACP notification per callback,
+          // params spread straight through, no server-side state beyond the
+          // sessionId this needs to add for the client to route it.
+          onSubagentsStart: (info) => void ctx.client.notify("koder/subagents_start", { sessionId, ...info }),
+          onSubagentActivity: (info) => void ctx.client.notify("koder/subagent_activity", { sessionId, ...info }),
+          onSubagentsEnd: (info) => void ctx.client.notify("koder/subagents_end", { sessionId, ...info }),
         },
         promptId,
         abort.signal,

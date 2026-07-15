@@ -82,6 +82,65 @@ export interface CheckpointResult {
   sha: string | null;
 }
 
+// ---- in-process concurrency lock (parallel subagents, loop.ts's dispatch_subtasks) ----
+
+/**
+ * In-process async mutex serializing only the shadow-git MUTATING calls in
+ * this file (`checkpointBeforeMutation` immediately below, `checkpointBaseline`,
+ * `commitAfterTool`).
+ *
+ * Why this exists on top of `withLock` (further below): `withLock` is a
+ * CROSS-PROCESS disk lock (`mkdirSync`/EEXIST, 100ms polling backoff) sized
+ * for "two VS Code windows open on the same workspace" — contention there is
+ * rare and brief, so it's fine that its retry loop gives up after ~2s and
+ * proceeds WITHOUT the lock rather than hang a tool call forever. That
+ * escape hatch is exactly wrong for intra-process contention:
+ * `dispatch_subtasks` can now have up to 6 subagents mid-tool-call in the
+ * SAME process, and if several finish a mutating call within the same
+ * second, whichever ones lose the disk-lock race for more than 2s would
+ * silently commit UNLOCKED — the lost-commit/corrupted-index race this
+ * whole file exists to prevent. A promise-chain queue costs nothing (no new
+ * dependency, no polling, no timeout) and is exact: it fully serializes
+ * access to the functions above for callers in this process, so contention
+ * never even reaches `withLock`'s fallible retry loop. It does NOT replace
+ * `withLock` — a second Koder window in another process still needs the
+ * disk lock — the two compose: this queue first, `withLock` still runs
+ * inside it.
+ *
+ * Tool EXECUTION (file reads/writes, bash commands, LLM round-trips) for
+ * different subtasks is NOT covered by this and runs fully concurrently —
+ * that is where parallel subagents actually win wall-clock time. Only the
+ * git-commit bookkeeping itself serializes here, and it's brief, so it
+ * doesn't meaningfully erode that benefit.
+ *
+ * What this does NOT protect against: two subtasks writing to the literal
+ * SAME file at the same time. That race lives one level below git commits
+ * entirely — it's a shared-working-tree conflict (last writer to touch the
+ * file on disk wins, before either subtask's commit even runs) that no
+ * commit-level lock can fix. Solving it for real needs per-worker git
+ * worktrees (one isolated working tree per subagent), which is a bigger
+ * lift explicitly out of scope here — same conclusion docs/architecture.md
+ * §10 reaches for full parallelism. `dispatch_subtasks`'s tool description
+ * (tools.ts) tells the model not to fan out tasks likely to edit the same
+ * file, since this is the only mitigation available without that lift.
+ */
+let mutexTail: Promise<unknown> = Promise.resolve();
+function withProcessMutex<T>(fn: () => Promise<T>): Promise<T> {
+  // Chain onto the tail regardless of whether the previous link resolved or
+  // rejected — a failed prior commit must never wedge every subsequent one.
+  const run = mutexTail.then(fn, fn);
+  mutexTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/** Test-only: exercise the in-process mutex directly, same naming convention as `_resetGuardCacheForTests`. */
+export function _withProcessMutexForTests<T>(fn: () => Promise<T>): Promise<T> {
+  return withProcessMutex(fn);
+}
+
 /**
  * Commit the current workspace state to the shadow repo. Call this BEFORE a
  * mutating tool runs, in royal mode only. `label` is a short, human-readable
@@ -93,21 +152,23 @@ export interface CheckpointResult {
  * call regardless.
  */
 export async function checkpointBeforeMutation(cwd: string, label: string): Promise<CheckpointResult> {
-  try {
-    const worktree = resolve(cwd);
-    const gitDir = await ensureShadowRepo(worktree);
-    // Magic pathspec exclude, matching doc 11 §2.2's verified-safe alternative to Cline's
-    // nested-.git rename trick — never touches any real or nested .git directory.
-    await git(gitDir, worktree, ["add", "-A", "--", ".", ":!**/.git", ":!**/.git/**"]);
-    // --allow-empty: a checkpoint must exist at every mutation boundary even if the
-    // previous tool call produced no net diff (e.g. a no-op edit), so "the commit
-    // immediately before this tool call" is always a well-defined target.
-    await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `royal-checkpoint: ${label}`.slice(0, 500)]);
-    const { stdout } = await git(gitDir, worktree, ["rev-parse", "HEAD"]);
-    return { sha: stdout.trim() || null };
-  } catch {
-    return { sha: null };
-  }
+  return withProcessMutex(async () => {
+    try {
+      const worktree = resolve(cwd);
+      const gitDir = await ensureShadowRepo(worktree);
+      // Magic pathspec exclude, matching doc 11 §2.2's verified-safe alternative to Cline's
+      // nested-.git rename trick — never touches any real or nested .git directory.
+      await git(gitDir, worktree, ["add", "-A", "--", ".", ":!**/.git", ":!**/.git/**"]);
+      // --allow-empty: a checkpoint must exist at every mutation boundary even if the
+      // previous tool call produced no net diff (e.g. a no-op edit), so "the commit
+      // immediately before this tool call" is always a well-defined target.
+      await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `royal-checkpoint: ${label}`.slice(0, 500)]);
+      const { stdout } = await git(gitDir, worktree, ["rev-parse", "HEAD"]);
+      return { sha: stdout.trim() || null };
+    } catch {
+      return { sha: null };
+    }
+  });
 }
 
 /** Exposed for tests: resolve the shadow git-dir a given cwd would use, without creating it. */
@@ -432,24 +493,26 @@ export interface BaselineResult {
  * diff vs the shadow repo's current HEAD.
  */
 export async function checkpointBaseline(cwd: string, promptId: string): Promise<BaselineResult> {
-  try {
-    const worktree = resolve(cwd);
-    const init = await initShadowRepo(worktree);
-    if (!init.ok) return { sha: null };
-    const { dir, gitDir } = shadowPaths(worktree);
-    return await withLock(dir, async () => {
-      await stageAll(gitDir, worktree);
-      const dirty = await hasStagedChanges(gitDir, worktree);
-      if (!dirty) {
-        const head = await currentHead(gitDir, worktree);
-        if (head) return { sha: head };
-      }
-      await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `baseline:${promptId}`]);
-      return { sha: await currentHead(gitDir, worktree) };
-    });
-  } catch {
-    return { sha: null };
-  }
+  return withProcessMutex(async () => {
+    try {
+      const worktree = resolve(cwd);
+      const init = await initShadowRepo(worktree);
+      if (!init.ok) return { sha: null };
+      const { dir, gitDir } = shadowPaths(worktree);
+      return await withLock(dir, async () => {
+        await stageAll(gitDir, worktree);
+        const dirty = await hasStagedChanges(gitDir, worktree);
+        if (!dirty) {
+          const head = await currentHead(gitDir, worktree);
+          if (head) return { sha: head };
+        }
+        await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `baseline:${promptId}`]);
+        return { sha: await currentHead(gitDir, worktree) };
+      });
+    } catch {
+      return { sha: null };
+    }
+  });
 }
 
 export interface ToolCommitResult {
@@ -473,30 +536,32 @@ export async function commitAfterTool(
   toolName: string,
   path?: string,
 ): Promise<ToolCommitResult> {
-  try {
-    const worktree = resolve(cwd);
-    const init = await initShadowRepo(worktree);
-    if (!init.ok) return { sha: null, files: [] };
-    const { dir, gitDir } = shadowPaths(worktree);
-    return await withLock(dir, async () => {
-      const prevHead = await currentHead(gitDir, worktree);
-      if (path) {
-        try {
-          await git(gitDir, worktree, ["add", "--", path]);
-        } catch {
-          await stageAll(gitDir, worktree); // fall back to a full scan rather than silently miss the edit
+  return withProcessMutex(async () => {
+    try {
+      const worktree = resolve(cwd);
+      const init = await initShadowRepo(worktree);
+      if (!init.ok) return { sha: null, files: [] };
+      const { dir, gitDir } = shadowPaths(worktree);
+      return await withLock(dir, async () => {
+        const prevHead = await currentHead(gitDir, worktree);
+        if (path) {
+          try {
+            await git(gitDir, worktree, ["add", "--", path]);
+          } catch {
+            await stageAll(gitDir, worktree); // fall back to a full scan rather than silently miss the edit
+          }
+        } else {
+          await stageAll(gitDir, worktree);
         }
-      } else {
-        await stageAll(gitDir, worktree);
-      }
-      await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `tool:${promptId}:${toolCallId}:${toolName}`]);
-      const sha = await currentHead(gitDir, worktree);
-      const files = prevHead && sha ? await diffFiles(gitDir, worktree, prevHead, sha) : [];
-      return { sha, files };
-    });
-  } catch {
-    return { sha: null, files: [] };
-  }
+        await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `tool:${promptId}:${toolCallId}:${toolName}`]);
+        const sha = await currentHead(gitDir, worktree);
+        const files = prevHead && sha ? await diffFiles(gitDir, worktree, prevHead, sha) : [];
+        return { sha, files };
+      });
+    } catch {
+      return { sha: null, files: [] };
+    }
+  });
 }
 
 async function diffQuiet(gitDir: string, worktree: string, ref: string, path: string): Promise<boolean> {
