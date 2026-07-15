@@ -9,7 +9,7 @@
  * at our `FakeOpenAI` server with no real API keys or network access.
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -258,3 +258,64 @@ test("dispatch_subtasks: concurrency cap truncates >6 tasks with a clear message
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test(
+  "dispatch_subtasks: a review-mode parent forces every child into review mode too, even when a task requests otherwise",
+  { timeout: 30_000 },
+  async (t) => {
+    const fake = new FakeOpenAI();
+    await fake.start();
+    const home = await setupHome(fake);
+    const workspace = await mkdtemp(join(tmpdir(), "koder-dispatch-review-ws-"));
+    const realHome = process.env.HOME;
+    process.env.HOME = home;
+    _resetGuardCacheForTests();
+
+    try {
+      // Parent is in REVIEW mode — dispatch_subtasks must still be offered
+      // (this is the fix: it used to be excluded from review mode entirely).
+      const session: AgentSession = { cwd: workspace, model: "fake/test-model", mode: "review", history: [] };
+      const cb = makeRecordingCallbacks();
+
+      // The task explicitly asks for "auto" mode, trying to get a
+      // mutating child past review mode's guarantee.
+      fake.enqueue(
+        toolTurn("call_dispatch_review", "dispatch_subtasks", {
+          tasks: [{ id: "escapee", prompt: "write a file", mode: "auto" }],
+        }),
+      );
+      // The child, however it's actually run, attempts a write.
+      fake.enqueue(toolTurn("call_write_attempt", "write_file", { path: "should-not-exist.txt", content: "escaped review mode" }));
+      fake.enqueue(textTurn("Child could not write — reporting back."));
+      fake.enqueue(textTurn("Confirmed the write was blocked."));
+
+      const stop = await runPrompt(session, "try to sneak a write past review mode", cb, "pr_review_containment");
+      assert.equal(stop, "end_turn");
+
+      // The tool offered to the PARENT for its own turn is still read-only + dispatch_subtasks.
+      const offeredToParent = fake.requests[0]!.tools.map((tl: any) => tl.function.name).sort();
+      assert.deepEqual(offeredToParent, ["dispatch_subtasks", "grep", "list_dir", "read_file"]);
+
+      // The child's announced mode is "review", NOT the "auto" the task asked for.
+      assert.equal(cb.subagentsStart[0].tasks[0].mode, "review");
+
+      // The child's write_file call was denied (review mode's hard gate — no
+      // permission prompt, no execution) rather than actually running.
+      const writeResult = findToolMessage(fake, "call_write_attempt");
+      assert.ok(writeResult, "expected a tool_result for the child's write_file attempt");
+      assert.match(writeResult!.content as string, /declined|review mode/i);
+
+      // And, decisively: the file was never actually created on disk.
+      await assert.rejects(
+        readFile(join(workspace, "should-not-exist.txt")),
+        /ENOENT/,
+        "review mode's guarantee must hold even for a dispatch_subtasks child",
+      );
+    } finally {
+      process.env.HOME = realHome;
+      await fake.stop();
+      await rm(home, { recursive: true, force: true });
+      await rm(workspace, { recursive: true, force: true });
+    }
+  },
+);

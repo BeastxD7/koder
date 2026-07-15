@@ -170,9 +170,11 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
             assert.equal(a.response.stopReason, "end_turn");
             assert.equal(permissionRequests.length, 0, "review mode must not ask for permission");
 
-            // request 1 only offered the read-only tools
+            // request 1 only offered the read-only tools, plus dispatch_subtasks
+            // (allowed in review mode since its own children are forced back
+            // into review mode too — see loop.ts's dispatchSubtasks)
             const offered = fake.requests.at(-2)!.tools.map((tl) => tl.function.name).sort();
-            assert.deepEqual(offered, ["grep", "list_dir", "read_file"]);
+            assert.deepEqual(offered, ["dispatch_subtasks", "grep", "list_dir", "read_file"]);
             // request 2 carries the declined tool result back to the model
             assert.match(lastToolMessage(fake, "call_rev1")!.content, /declined/i);
             // and the client saw the tool call fail

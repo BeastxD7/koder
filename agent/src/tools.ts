@@ -355,7 +355,8 @@ export const TOOLS: ToolSpec[] = [
       "Do NOT use it for tasks that depend on each other's output (a subtask cannot see another subtask's results while running) — keep those sequential in your normal tool calls instead. " +
       "Do NOT dispatch subtasks that are likely to edit the SAME file — there is no file-level lock, only a lock around the checkpoint/commit bookkeeping itself, so two subtasks racing on one file can silently overwrite each other's edits (last write wins). " +
       "Each subtask starts with an EMPTY history (not your conversation so far) plus exactly what you give it: its own `prompt`, and, only if you explicitly include it, a short `context` string carrying anything from your own investigation the subtask needs (e.g. \"the bug is likely in auth.ts around line 40\") — nothing else about this conversation is shared automatically. " +
-      "At most 6 tasks run per call; extra tasks beyond that are not run and must be resubmitted in a follow-up call. Subtasks cannot themselves call dispatch_subtasks (no nested fan-out).",
+      "At most 6 tasks run per call; extra tasks beyond that are not run and must be resubmitted in a follow-up call. Subtasks cannot themselves call dispatch_subtasks (no nested fan-out). " +
+      "Available in review mode too, for parallel read-only research — but if YOU are currently in review mode, every subtask is forced to run in review mode as well no matter what `mode` you request for it, so it can only read/list/grep, never write or run commands.",
     input_schema: {
       type: "object",
       properties: {
