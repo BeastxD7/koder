@@ -138,10 +138,19 @@ jobs:
 
       - name: Archive (macOS)
         if: runner.os == 'macOS'
+        # The .app bundle name comes from product.nameLong (see
+        # upstream/build/lib/electron.ts's `productAppName: product.nameLong`),
+        # not a fixed "Koder.app" — the LakshX rebrand of
+        # product/product.overrides.json's nameLong changed the actual output
+        # filename, which this step's old hardcoded reference didn't track
+        # (found via a real CI failure: "Koder.app: No such file or
+        # directory"). Glob for whatever .app actually landed instead of
+        # hardcoding a name that will go stale on the next rebrand too.
         run: |
           cd VSCode-${{ matrix.target }}
-          codesign --force --deep -s - Koder.app
-          ditto -c -k --keepParent Koder.app ../${{ matrix.artifact }}.zip
+          app=$(ls -d *.app)
+          codesign --force --deep -s - "$app"
+          ditto -c -k --keepParent "$app" ../${{ matrix.artifact }}.zip
 
       # A proper .deb package, not a tarball of loose files — same "download,
       # install one thing" experience Cursor/VS Code itself ships (and
@@ -152,29 +161,33 @@ jobs:
       # step above (`apt-get install ... fakeroot rpm`), so no new CI
       # tooling needed, same story as Windows's `innosetup` npm dependency.
       #
-      # First two CI attempts at this failed identically on prepare-deb's own
-      # rimraf step ("clean-amd64") with "Error: spawn /bin/sh ENOENT" —
-      # 100% reproducible, ~10ms after starting, unaffected by a 3x retry
-      # loop (ruling out the transient-resource-pressure theory the retry
-      # loop was originally written for; that theory doesn't hold, this is
-      # deterministic). Root cause: `actions/setup-python@v5` (earlier in
-      # this job, needed for native Node module compilation during
-      # "Install upstream dependencies") sets LD_LIBRARY_PATH to Python's
-      # own bundled lib directory for the REST of the job, including this
-      # step — a well-known class of bug where a language toolchain's
-      # LD_LIBRARY_PATH shadows system libraries that even /bin/sh itself
-      # needs to start, which can surface through Node's child_process as a
-      # plain ENOENT rather than a linker error. This step doesn't touch
-      # Python at all (dpkg-deb/fakeroot are unrelated native binaries), so
-      # clearing it here is safe without affecting the earlier step that
-      # actually needs it.
+      # Three CI attempts at this failed identically on prepare-deb's own
+      # rimraf step ("clean-amd64") with "Error: spawn /bin/sh ENOENT" — 100%
+      # reproducible, ~10ms after starting. A 3x retry loop didn't help
+      # (ruling out transient resource pressure) and neither did clearing
+      # LD_LIBRARY_PATH (ruling out the setup-python shadowing theory — the
+      # env dump in that failed run confirmed LD_LIBRARY_PATH was already
+      # empty). Root cause, found by reading gulpfile.vscode.linux.ts
+      # directly: `vscode-linux-x64-build-deb` is a bare task
+      # (`buildDebPackage(arch)`), NOT `task.series(prepareDebTask,
+      # buildDebPackage(arch))` like the snap variant a few lines below it
+      # is — so passing both task names on one `gulp` command line runs them
+      # in PARALLEL. build-deb's first exec() call needs to `cwd` into
+      # `.build/linux/deb/amd64`, but prepare-deb's own rimraf step is
+      # simultaneously deleting/recreating that exact directory — a genuine
+      # race, not an environment issue, which is why retries and env
+      # tweaks never touched it. Confirmed against Microsoft's own upstream
+      # pipeline (build/azure-pipelines/linux/steps/product-build-linux-
+      # compile.yml), which runs these as two SEPARATE `npm run gulp`
+      # invocations rather than one combined command line — do the same
+      # here so prepare-deb fully completes before build-deb starts.
       - name: Build Linux package
         if: runner.os == 'Linux'
         shell: bash
         working-directory: upstream
-        env:
-          LD_LIBRARY_PATH: ""
-        run: npm run gulp vscode-linux-x64-prepare-deb vscode-linux-x64-build-deb
+        run: |
+          npm run gulp vscode-linux-x64-prepare-deb
+          npm run gulp vscode-linux-x64-build-deb
 
       - name: Archive (Linux)
         if: runner.os == 'Linux'
