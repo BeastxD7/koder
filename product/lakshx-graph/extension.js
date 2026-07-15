@@ -275,7 +275,23 @@ function panelHtml(context, webview) {
 }
 
 function activate(context) {
-  context.subscriptions.push(vscode.commands.registerCommand("lakshx.showCallGraph", () => showCallGraph(context)));
+  // Status bar entry point — previously this panel was ONLY reachable via
+  // editor/title (and only then when `editorHasCallHierarchyProvider` is
+  // true) or the command palette, so it had no persistent, always-visible
+  // affordance. Priority 997, right after koder-db's "$(database) DB" (998)
+  // in the same right-aligned cluster as koder-chat's "✦ LakshX" (1000) and
+  // "$(radio-tower) Remote: ..." (999) — see those files for the same
+  // numbering convention.
+  const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 997);
+  statusItem.text = "$(graph) Call Graph";
+  statusItem.tooltip = "LakshX: Show Call Graph (place your cursor on a function/method first)";
+  statusItem.command = "lakshx.showCallGraph";
+  statusItem.show();
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("lakshx.showCallGraph", () => showCallGraph(context)),
+    statusItem,
+  );
 }
 
 function deactivate() {}

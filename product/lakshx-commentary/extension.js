@@ -266,7 +266,12 @@ function activate(context) {
     );
   }
 
-  const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 500);
+  // Priority 996 — right after lakshx-graph's "$(graph) Call Graph" (997),
+  // in the same right-aligned cluster as lakshx-chat's "✦ LakshX" (1000),
+  // "$(radio-tower) Remote: ..." (999), and lakshx-db's "$(database) DB"
+  // (998). Lands this icon immediately beside Remote/DB/Call Graph instead
+  // of floating off on its own — same numbering convention those files use.
+  const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 996);
   const refreshStatusItem = () => {
     const enabled = cfg().get("enabled", true);
     statusItem.text = enabled ? "$(unmute) Commentary" : "$(mute) Commentary";
