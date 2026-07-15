@@ -17,9 +17,18 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
 }
 
+/** Fully-resolved Langfuse tracing config — see `resolveLangfuseConfig()` below for why all three fields are mandatory with no defaults. */
+export interface LangfuseConfig {
+  publicKey: string;
+  secretKey: string;
+  baseUrl: string;
+}
+
 export interface KoderConfig {
   defaultModel: string;
   providers: Record<string, ProviderConfig>;
+  /** Raw, pre-merge Langfuse fields from `~/.koder/providers.json` (env vars fill in the rest — see `resolveLangfuseConfig()`). */
+  langfuse?: Partial<LangfuseConfig>;
 }
 
 /** Built-in presets: id → wire kind, base URL, API-key env var. */
@@ -63,7 +72,29 @@ export function loadConfig(): KoderConfig {
   return {
     defaultModel: fileCfg.defaultModel ?? "anthropic/claude-sonnet-5",
     providers,
+    langfuse: fileCfg.langfuse,
   };
+}
+
+/**
+ * Resolve Langfuse tracing config from (in the same order every other
+ * provider uses) `~/.koder/providers.json`'s `langfuse` block, then env vars
+ * (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_BASE_URL`).
+ *
+ * Returns `undefined` — i.e. tracing disabled — unless ALL THREE fields are
+ * present. Deliberately: unlike `PRESETS` above, there is NO built-in
+ * `baseUrl` default here (no Langfuse Cloud fallback). Traces contain prompt
+ * text, tool-call summaries, and response text pulled from the user's
+ * workspace; the only acceptable default is "send nothing anywhere." Do not
+ * add one, even as a documented opt-out default — see `tracing.ts`'s module
+ * doc for the full rationale.
+ */
+export function resolveLangfuseConfig(cfg: KoderConfig): LangfuseConfig | undefined {
+  const publicKey = cfg.langfuse?.publicKey ?? process.env.LANGFUSE_PUBLIC_KEY;
+  const secretKey = cfg.langfuse?.secretKey ?? process.env.LANGFUSE_SECRET_KEY;
+  const baseUrl = cfg.langfuse?.baseUrl ?? process.env.LANGFUSE_BASE_URL;
+  if (!publicKey || !secretKey || !baseUrl) return undefined;
+  return { publicKey, secretKey, baseUrl };
 }
 
 /** "anthropic/claude-sonnet-5" → { provider config, model id }. */

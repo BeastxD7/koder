@@ -262,6 +262,7 @@ acp
         },
         promptId,
         abort.signal,
+        sessionId,
       );
 
       // Review-first flow: a turn that produced a "# Plan" saves it and asks

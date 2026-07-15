@@ -13,6 +13,7 @@ import { AnthropicAdapter } from "./providers/anthropic.js";
 import { OpenAICompatAdapter } from "./providers/openai-compat.js";
 import type { ChatAdapter, ChatMessage, ContentBlock } from "./providers/types.js";
 import { clip, TOOLS, toolByName, type ToolSpec } from "./tools.js";
+import { getTracer, type PromptTrace } from "./tracing.js";
 
 export type AgentMode = "review" | "approve" | "auto" | "royal";
 
@@ -160,6 +161,8 @@ export async function runPrompt(
   cb: LoopCallbacks,
   promptId: string,
   signal?: AbortSignal,
+  /** Optional ACP session id, purely for tracing (docs/architecture.md §10 item 1) — attached to the Langfuse trace as `sessionId` when tracing is enabled. Never affects loop behavior. */
+  sessionId?: string,
 ): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   const cfg = loadConfig();
   const { provider, model } = resolveModel(cfg, session.model);
@@ -168,6 +171,37 @@ export async function runPrompt(
   const allowedTools =
     session.mode === "review" ? TOOLS.filter((t) => !t.dangerous) : TOOLS;
 
+  // Tracing (docs/architecture.md §10 item 1): a strict no-op unless the
+  // user has fully configured Langfuse (see tracing.ts's module doc) — never
+  // an `if` branch here, the no-op tracer absorbs every call below silently.
+  const tracer = getTracer(cfg);
+  const trace = tracer.startTrace({
+    id: promptId,
+    name: "runPrompt",
+    sessionId,
+    input: summarizeText(userText),
+    metadata: { mode: session.mode, model },
+  });
+
+  try {
+    return await runPromptLoop(session, userText, cb, promptId, trace, model, adapter, allowedTools, signal);
+  } finally {
+    trace.end();
+    void tracer.flush();
+  }
+}
+
+async function runPromptLoop(
+  session: AgentSession,
+  userText: string,
+  cb: LoopCallbacks,
+  promptId: string,
+  trace: PromptTrace,
+  model: string,
+  adapter: ChatAdapter,
+  allowedTools: ToolSpec[],
+  signal?: AbortSignal,
+): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   session.history.push({ role: "user", content: [{ type: "text", text: userText }] });
   const userMessageIndex = session.history.length - 1;
   session.editFails ??= new Map();
@@ -185,6 +219,16 @@ export async function runPrompt(
     // below — systemPrompt() shells out to git, no need to pay that twice
     const prompt = systemPrompt(session.cwd, session.mode);
 
+    // One generation span per adapter.runTurn() call (docs/architecture.md
+    // §10 item 1). `summarizeText` (audit.ts) caps the system-prompt input
+    // the same way the Royal audit log caps everything else — no raw
+    // multi-KB prompt text sitting in a trace.
+    const generation = trace.generation({
+      name: "adapter.runTurn",
+      model,
+      input: { system: summarizeText(prompt, 2000), messageCount: session.history.length },
+    });
+
     let result;
     try {
       result = await adapter.runTurn({
@@ -197,12 +241,17 @@ export async function runPrompt(
         onThinking: cb.onThinking,
       });
     } catch (err) {
+      generation.end({ isError: true, output: summarizeText(String((err as any)?.message ?? err)) });
       // don't leave a dangling user message with no reply — a retry would
       // otherwise produce two consecutive user turns, which several
       // providers reject outright
       if (session.history.length === userMessageIndex + 1) session.history.pop();
       throw err;
     }
+    generation.end({
+      output: summarizeText(result.text),
+      usage: { inputTokens: result.usage?.inputTokens, outputTokens: result.usage?.outputTokens },
+    });
 
     if (cb.onUsage) {
       const estimated = result.usage?.inputTokens === undefined;
@@ -235,6 +284,11 @@ export async function runPrompt(
         continue;
       }
       cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
+      // One span per tool execution (docs/architecture.md §10 item 1),
+      // reusing audit.ts's summarization — same discipline the Royal audit
+      // log already applies, so raw file contents/bash output never land
+      // in the trace, only a scrubbed, size-capped summary.
+      const toolSpan = trace.tool({ name: tc.name, input: summarizeInput(tc.input ?? {}) });
 
       let allowed = true;
       let denyMsg = "User declined this action. Adjust your approach or ask what they'd prefer.";
@@ -290,6 +344,7 @@ export async function runPrompt(
 
       if (!allowed) {
         cb.onToolEnd({ id: tc.id, output: denyMsg, isError: true });
+        toolSpan.end({ output: denyMsg, isError: true });
         results.push({ type: "tool_result", tool_use_id: tc.id, content: denyMsg, is_error: true });
         // Passive net, part 2: log this call even though it was blocked — the
         // tamper guard firing is itself audit-worthy.
@@ -379,6 +434,7 @@ export async function runPrompt(
           output += "\n[note: identical call repeated — the result has not changed; try a different approach]";
         } else if (session.toolRepeatCount >= 4) {
           cb.onToolEnd({ id: tc.id, output, isError: false });
+          toolSpan.end({ output: summarizeText(output), isError: false });
           auditRun(output, false);
           results.push({
             type: "tool_result",
@@ -391,6 +447,7 @@ export async function runPrompt(
         }
 
         cb.onToolEnd({ id: tc.id, output, isError: false });
+        toolSpan.end({ output: summarizeText(output), isError: false });
         auditRun(output, false);
         results.push({ type: "tool_result", tool_use_id: tc.id, content: wrapToolOutput(tc.name, path, output) });
       } catch (err: any) {
@@ -404,6 +461,7 @@ export async function runPrompt(
             : "\nHint: re-read the file first — old_string must byte-match (check tabs vs spaces, exact whitespace).";
         }
         cb.onToolEnd({ id: tc.id, output: msg, isError: true });
+        toolSpan.end({ output: summarizeText(msg), isError: true });
         auditRun(msg, true);
         results.push({ type: "tool_result", tool_use_id: tc.id, content: msg, is_error: true });
       }

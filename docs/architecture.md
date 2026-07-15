@@ -351,13 +351,22 @@ tools (Claude Code, Cursor, Devin, Anthropic's own production Research feature) 
 achieve reliability turned up three concrete, evidence-backed gaps worth closing —
 **without** a framework migration:
 
-1. **Tracing/observability.** `loop.ts` currently has no record of what prompt actually went
-   to the provider, what came back, token cost, or where in a run something degraded — the
+1. **Tracing/observability — DONE.** `loop.ts` currently has no record of what prompt actually
+   went to the provider, what came back, token cost, or where in a run something degraded — the
    only introspection is `audit.ts`'s Royal-mode audit log (which exists for safety review,
    not debugging). A dedicated tracing layer (Langfuse — open source, self-hostable, wraps
    around an existing loop instead of requiring a rewrite — or MLflow's OpenTelemetry-compatible
    tracing) is the highest-leverage, lowest-risk addition: instrument the `adapter.runTurn()`
    call and each tool execution in `runPrompt`, ship spans out, gain visibility for free.
+   Shipped as `agent/src/tracing.ts` (`getTracer()`), wired into `runPrompt`: one trace per
+   prompt (session id, mode, model as metadata), one generation span per `adapter.runTurn()`
+   call (system prompt, message count, response text, token usage, latency), one span per tool
+   call (name + `audit.ts`'s existing `summarizeInput`/`summarizeText` — never raw file/bash
+   output). **No default remote endpoint exists.** Tracing is a strict, zero-network-call no-op
+   unless all three of `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` are
+   set (env vars, or the `langfuse` block in `~/.koder/providers.json`) — `LANGFUSE_BASE_URL`
+   never falls back to Langfuse Cloud, so enabling this means pointing at a self-hosted instance
+   you chose. See `agent/test/tracing.test.ts` for the test asserting this directly.
 2. **Context compaction as a first-class concern.** `session.history` (`loop.ts`) grows
    unbounded across a conversation — `context.ts` only truncates individual oversized tool
    outputs (`cap` in `envBlock`), there is no summarization/compaction of the running history
