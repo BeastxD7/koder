@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply the Koder overlay to upstream/: merge product overrides, apply patches.
+# Apply the LakshX overlay to upstream/: merge product overrides, apply patches.
 # Idempotent — always starts from a clean upstream tree.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -29,10 +29,10 @@ for p in patches/*.patch; do
   git -C upstream apply --3way "../$p"
 done
 
-# Koder UI layer: built-in theme extension + CSS injection
+# LakshX UI layer: built-in theme extension + CSS injection
 node scripts/apply-ui.mjs
 
-# Koder icons for every platform whose assets exist
+# LakshX icons for every platform whose assets exist
 node scripts/install-icons.mjs
 
-echo "upstream/ prepared for Koder"
+echo "upstream/ prepared for LakshX"

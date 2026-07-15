@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 const require = createRequire(resolve(process.argv[2] ?? ".", "package.json"));
 const sharp = require("sharp");
 
-const tmp = mkdtempSync(join(tmpdir(), "koder-icon-"));
+const tmp = mkdtempSync(join(tmpdir(), "lakshx-icon-"));
 await sharp("assets/icon.svg", { density: 300 }).resize(1024, 1024).png().toFile(join(tmp, "icon.png"));
 
 const iconset = join(tmp, "koder.iconset");

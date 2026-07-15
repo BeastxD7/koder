@@ -17,7 +17,7 @@ function tool(name: string) {
 }
 
 async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "koder-tools-"));
+  const dir = await mkdtemp(join(tmpdir(), "lakshx-tools-"));
   try {
     return await fn(dir);
   } finally {
@@ -28,7 +28,7 @@ async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 /** Find a usable ripgrep binary, or undefined (grep tests then skip). */
 function findRg(): string | undefined {
   const candidates = [
-    process.env.KODER_RG_PATH,
+    process.env.LAKSHX_RG_PATH,
     "rg",
     "/opt/homebrew/bin/rg",
     "/usr/local/bin/rg",
@@ -72,9 +72,9 @@ test("read_file handles empty files and rejects missing ones", async () =>
 
 test("write_file creates parent directories and writes content", async () =>
   withTmp(async (dir) => {
-    const out = await tool("write_file").run({ path: "a/b/c/new.txt", content: "hello koder" }, dir);
-    assert.match(out, /wrote 11 chars/);
-    assert.equal(await readFile(join(dir, "a/b/c/new.txt"), "utf8"), "hello koder");
+    const out = await tool("write_file").run({ path: "a/b/c/new.txt", content: "hello lakshx" }, dir);
+    assert.match(out, /wrote 12 chars/);
+    assert.equal(await readFile(join(dir, "a/b/c/new.txt"), "utf8"), "hello lakshx");
   }));
 
 test("write_file overwrites an existing file", async () =>
@@ -137,29 +137,29 @@ const rgPath = findRg();
 
 test("grep returns path:line:text matches", { skip: rgPath ? false : "ripgrep not available" }, async () =>
   withTmp(async (dir) => {
-    const saved = process.env.KODER_RG_PATH;
-    process.env.KODER_RG_PATH = rgPath;
+    const saved = process.env.LAKSHX_RG_PATH;
+    process.env.LAKSHX_RG_PATH = rgPath;
     try {
       await writeFile(join(dir, "hay.txt"), "nothing here\nthe needle_xyz sits on line two\n");
       const out = await tool("grep").run({ pattern: "needle_xyz", path: "." }, dir);
       assert.match(out, /hay\.txt:2:.*needle_xyz/);
     } finally {
-      if (saved === undefined) delete process.env.KODER_RG_PATH;
-      else process.env.KODER_RG_PATH = saved;
+      if (saved === undefined) delete process.env.LAKSHX_RG_PATH;
+      else process.env.LAKSHX_RG_PATH = saved;
     }
   }));
 
 test("grep reports (no matches) instead of throwing", { skip: rgPath ? false : "ripgrep not available" }, async () =>
   withTmp(async (dir) => {
-    const saved = process.env.KODER_RG_PATH;
-    process.env.KODER_RG_PATH = rgPath;
+    const saved = process.env.LAKSHX_RG_PATH;
+    process.env.LAKSHX_RG_PATH = rgPath;
     try {
       await writeFile(join(dir, "hay.txt"), "just some text\n");
       const out = await tool("grep").run({ pattern: "zz_will_never_match_qq", path: "." }, dir);
       assert.equal(out, "(no matches)");
     } finally {
-      if (saved === undefined) delete process.env.KODER_RG_PATH;
-      else process.env.KODER_RG_PATH = saved;
+      if (saved === undefined) delete process.env.LAKSHX_RG_PATH;
+      else process.env.LAKSHX_RG_PATH = saved;
     }
   }));
 
@@ -167,8 +167,8 @@ test("grep reports (no matches) instead of throwing", { skip: rgPath ? false : "
 
 test("bash returns stdout of a successful command", async () =>
   withTmp(async (dir) => {
-    const out = await tool("bash").run({ command: "echo koder-bash-ok" }, dir);
-    assert.equal(out.trim(), "koder-bash-ok");
+    const out = await tool("bash").run({ command: "echo lakshx-bash-ok" }, dir);
+    assert.equal(out.trim(), "lakshx-bash-ok");
   }));
 
 test("bash captures the exit code and output of a failing command", async () =>

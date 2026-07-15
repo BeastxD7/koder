@@ -43,10 +43,10 @@ function makeRecordingCallbacks(): LoopCallbacks & {
 }
 
 async function setupHome(fake: FakeOpenAI): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), "koder-dispatch-home-"));
-  await mkdir(join(home, ".koder"), { recursive: true });
+  const home = await mkdtemp(join(tmpdir(), "lakshx-dispatch-home-"));
+  await mkdir(join(home, ".lakshx"), { recursive: true });
   await writeFile(
-    join(home, ".koder", "providers.json"),
+    join(home, ".lakshx", "providers.json"),
     JSON.stringify({
       defaultModel: "fake/test-model",
       providers: { fake: { kind: "openai", baseUrl: `http://127.0.0.1:${fake.port}/v1`, apiKey: "test-key-123" } },
@@ -74,7 +74,7 @@ test("dispatch_subtasks: runs tasks concurrently and isolates child history", { 
   const fake = new FakeOpenAI();
   await fake.start();
   const home = await setupHome(fake);
-  const workspace = await mkdtemp(join(tmpdir(), "koder-dispatch-ws-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-dispatch-ws-"));
   const realHome = process.env.HOME;
   process.env.HOME = home;
   _resetGuardCacheForTests();
@@ -175,7 +175,7 @@ test("dispatch_subtasks: depth cap refuses a nested dispatch_subtasks call witho
   const fake = new FakeOpenAI();
   await fake.start();
   const home = await setupHome(fake);
-  const workspace = await mkdtemp(join(tmpdir(), "koder-dispatch-depth-ws-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-dispatch-depth-ws-"));
   const realHome = process.env.HOME;
   process.env.HOME = home;
   _resetGuardCacheForTests();
@@ -219,7 +219,7 @@ test("dispatch_subtasks: concurrency cap truncates >6 tasks with a clear message
   const fake = new FakeOpenAI();
   await fake.start();
   const home = await setupHome(fake);
-  const workspace = await mkdtemp(join(tmpdir(), "koder-dispatch-cap-ws-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-dispatch-cap-ws-"));
   const realHome = process.env.HOME;
   process.env.HOME = home;
   _resetGuardCacheForTests();
@@ -266,7 +266,7 @@ test(
     const fake = new FakeOpenAI();
     await fake.start();
     const home = await setupHome(fake);
-    const workspace = await mkdtemp(join(tmpdir(), "koder-dispatch-review-ws-"));
+    const workspace = await mkdtemp(join(tmpdir(), "lakshx-dispatch-review-ws-"));
     const realHome = process.env.HOME;
     process.env.HOME = home;
     _resetGuardCacheForTests();

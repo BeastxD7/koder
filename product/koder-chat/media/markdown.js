@@ -1,7 +1,7 @@
-// Koder markdown renderer. No frameworks, no deps — small, fast, ours.
+// LakshX markdown renderer. No frameworks, no deps — small, fast, ours.
 //
 // Public API (single global, plain <script> tag):
-//   window.koderMarkdown.render(text) -> { html, codes }
+//   window.lakshxMarkdown.render(text) -> { html, codes }
 //     html  — XSS-safe HTML string wrapped in <div class="md">…</div>
 //     codes — { [id: number]: rawCode } side map; each fenced block's
 //             Copy button carries data-code-id="<id>" pointing into it.
@@ -316,5 +316,5 @@
     return { html: '<div class="md">' + html + "</div>", codes: ctx.codes };
   }
 
-  window.koderMarkdown = { render };
+  window.lakshxMarkdown = { render };
 })();

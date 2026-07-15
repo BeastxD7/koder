@@ -1,5 +1,5 @@
 /**
- * Phase 0 spike: Koder ⇄ Claude Code over ACP (Agent Client Protocol).
+ * Phase 0 spike: LakshX ⇄ Claude Code over ACP (Agent Client Protocol).
  *
  * Proves the core architecture bet from PLAN.md: the agent runtime lives in its
  * own process and talks to the editor over ACP, so Claude Code / Codex / Gemini
@@ -26,7 +26,7 @@ const adapterBin = join(
   "dist/index.js",
 );
 
-const PROMPT = `Create a file named hello.ts that exports a function greet(name: string): string returning "Hello, <name>! — from Koder via ACP". Keep it minimal. Then stop.`;
+const PROMPT = `Create a file named hello.ts that exports a function greet(name: string): string returning "Hello, <name>! — from LakshX via ACP". Keep it minimal. Then stop.`;
 
 function receipt(kind: string, detail: string) {
   console.log(`  ⎿  [receipt] ${kind}: ${detail}`);
@@ -54,7 +54,7 @@ async function main() {
 
   try {
     const result = await acp
-      .client({ name: "koder" })
+      .client({ name: "lakshx" })
       .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
         const { toolCall, options } = ctx.params;
         // Phase 0 policy: auto-approve with a logged receipt. The real permission

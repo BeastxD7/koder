@@ -1,9 +1,9 @@
 {
-  "name": "koder-ui",
-  "displayName": "Koder UI",
-  "description": "Koder's visual identity: Koder Dark theme and modern editor defaults.",
+  "name": "lakshx-ui",
+  "displayName": "LakshX UI",
+  "description": "LakshX's visual identity: Koder Dark theme and modern editor defaults.",
   "version": "0.0.1",
-  "publisher": "koder",
+  "publisher": "lakshx",
   "license": "MIT",
   "engines": { "vscode": "^1.128.0" },
   "categories": ["Themes"],

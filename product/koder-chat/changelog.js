@@ -50,7 +50,7 @@ const CHANGELOG = [
   {
     date: "2026-07-14",
     title: "Remote Access: control your agent from your phone",
-    description: "Pair your phone via QR code to view and control your Koder session remotely, including switching modes.",
+    description: "Pair your phone via QR code to view and control your LakshX session remotely, including switching modes.",
   },
   {
     date: "2026-07-14",

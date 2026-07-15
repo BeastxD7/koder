@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the Koder app icon (assets/koder.icns, pre-rendered from
+# Installs the LakshX app icon (assets/koder.icns, pre-rendered from
 # assets/icon.svg — regenerate with scripts/render-icon.mjs if the SVG changes)
 # into upstream resources (future builds) and the live dev bundle.
 set -euo pipefail
@@ -15,4 +15,4 @@ if [ -d "$APP" ]; then
   done
   touch "$APP"
 fi
-echo "Koder icon installed"
+echo "LakshX icon installed"

@@ -24,11 +24,11 @@ Both surfaces read from **one underlying data structure** (per-prompt checkpoint
 **Minting point: client-side, in `extension.js`'s `onWebviewMessage` `"send"` case (`extension.js:392-409`), with a server-side fallback.** Reasoning:
 
 - The task's own framing already identifies this as the simplest path: the client "already knows it just sent one prompt and is receiving updates until turnEnd." Minting client-side means the ID exists **before** the `session/prompt` request goes out, so it can be attached to the optimistic `post({type:"user", text: m.text})` call that already happens at `extension.js:395` — zero round-trip needed to associate the ID with that turn's transcript entry.
-- The alternative (server mints in the `session/prompt` handler, `server.ts:127`, and notifies the ID back via a new `koder/prompt_started` notification before any tool events) works too but adds an extra message type and an ordering dependency (client must buffer/guess which turn a checkpoint notification belongs to until the notify arrives). Rejected for the extra moving part with no correctness benefit — either way the ID has to reach the server before the first tool call happens.
-- **Wire path**: `extension.js` generates `promptId = "pr_" + crypto.randomUUID()` (Node's global `crypto`, already implicitly available — no new dependency), includes it as an extra field on the standard ACP `session/prompt` request: `{ sessionId, prompt: [...], promptId }`. This is a Koder-specific extension field on a standard ACP method. Other ACP clients (Zed, JetBrains) simply won't send it — `server.ts`'s handler does `const promptId = ctx.params.promptId ?? randomUUID()` so the feature degrades to "still works, just not client-correlatable" for non-Koder clients, never breaks.
+- The alternative (server mints in the `session/prompt` handler, `server.ts:127`, and notifies the ID back via a new `lakshx/prompt_started` notification before any tool events) works too but adds an extra message type and an ordering dependency (client must buffer/guess which turn a checkpoint notification belongs to until the notify arrives). Rejected for the extra moving part with no correctness benefit — either way the ID has to reach the server before the first tool call happens.
+- **Wire path**: `extension.js` generates `promptId = "pr_" + crypto.randomUUID()` (Node's global `crypto`, already implicitly available — no new dependency), includes it as an extra field on the standard ACP `session/prompt` request: `{ sessionId, prompt: [...], promptId }`. This is a LakshX-specific extension field on a standard ACP method. Other ACP clients (Zed, JetBrains) simply won't send it — `server.ts`'s handler does `const promptId = ctx.params.promptId ?? randomUUID()` so the feature degrades to "still works, just not client-correlatable" for non-LakshX clients, never breaks.
 - `runPrompt()`'s signature (`loop.ts:123-128`) gains a `promptId: string` parameter, threaded through to the new checkpoint hook (§3.2).
 
-**Where it's persisted**: alongside `StoredSession.history` in `~/.koder/sessions/<id>.json` (§3.1) as the canonical source, and mirrored into the extension's own `~/.koder/chats/<chatId>.json` transcript (§3.3) so "open old chat" can render the files-changed UI without asking the runtime.
+**Where it's persisted**: alongside `StoredSession.history` in `~/.lakshx/sessions/<id>.json` (§3.1) as the canonical source, and mirrored into the extension's own `~/.lakshx/chats/<chatId>.json` transcript (§3.3) so "open old chat" can render the files-changed UI without asking the runtime.
 
 ---
 
@@ -36,21 +36,21 @@ Both surfaces read from **one underlying data structure** (per-prompt checkpoint
 
 ### 2.1 Storage location
 
-`~/.koder/checkpoints/<workspace-hash>/` where `workspace-hash` = first 16 hex chars of `sha1(realpathSync(cwd))` — same keying pattern doc 07/09 already specified (Cline hashes the absolute workspace path into globalStorage; we do the same but under our own runtime-owned `~/.koder/` tree, not VS Code's `globalStorage`, because **the agent runtime, not the extension, owns git ops in Koder's architecture** — `agent/src/server.ts` is a standalone ACP process usable from Zed/JetBrains too, so checkpoint state has to live somewhere the runtime controls regardless of which client is attached. This supersedes doc 07's "globalStorage" framing and matches doc 09 §3.3's `~/.koder/checkpoints/<workspace-hash>/`, keeping it consistent with `~/.koder/sessions/`, `~/.koder/chats/`, `~/.koder/memory/`.
+`~/.lakshx/checkpoints/<workspace-hash>/` where `workspace-hash` = first 16 hex chars of `sha1(realpathSync(cwd))` — same keying pattern doc 07/09 already specified (Cline hashes the absolute workspace path into globalStorage; we do the same but under our own runtime-owned `~/.lakshx/` tree, not VS Code's `globalStorage`, because **the agent runtime, not the extension, owns git ops in LakshX's architecture** — `agent/src/server.ts` is a standalone ACP process usable from Zed/JetBrains too, so checkpoint state has to live somewhere the runtime controls regardless of which client is attached. This supersedes doc 07's "globalStorage" framing and matches doc 09 §3.3's `~/.lakshx/checkpoints/<workspace-hash>/`, keeping it consistent with `~/.lakshx/sessions/`, `~/.lakshx/chats/`, `~/.lakshx/memory/`.
 
-The shadow repo is **fully independent of the workspace's own `.git`** (if any) — it works identically in a non-git workspace, which matters because Koder is used on arbitrary folders, not only git projects.
+The shadow repo is **fully independent of the workspace's own `.git`** (if any) — it works identically in a non-git workspace, which matters because LakshX is used on arbitrary folders, not only git projects.
 
 ### 2.2 Git plumbing — and why we deliberately do NOT copy Cline's nested-`.git` rename trick
 
 Every shadow-git command is invoked with explicit `--git-dir`/`--work-tree` flags (no repo-local config, no ambiguity about which repo a bare `git` in the workspace might pick up):
 
 ```
-GITDIR=~/.koder/checkpoints/<hash>/shadow.git
+GITDIR=~/.lakshx/checkpoints/<hash>/shadow.git
 WORKTREE=<cwd>   # the real workspace root, absolute path
 
 git --git-dir="$GITDIR" init -q                                    # one-time, idempotent
-git --git-dir="$GITDIR" --work-tree="$WORKTREE" config user.email "checkpoints@koder.local"
-git --git-dir="$GITDIR" --work-tree="$WORKTREE" config user.name  "koder-checkpoints"
+git --git-dir="$GITDIR" --work-tree="$WORKTREE" config user.email "checkpoints@lakshx.local"
+git --git-dir="$GITDIR" --work-tree="$WORKTREE" config user.name  "lakshx-checkpoints"
 git --git-dir="$GITDIR" --work-tree="$WORKTREE" config core.bigFileThreshold 4m
 ```
 
@@ -77,18 +77,18 @@ If the workspace has its own `.gitignore`, chain it in with `--exclude-from="$WO
 
 **Why not rename nested `.git` dirs (Cline's approach, endorsed by doc 07's sketch):** researched fresh for this doc — Cline's `GitOperations.renameNestedGitRepos` temporarily renames nested `.git` → `.git_disabled` before staging. The purpose of that rename is not merely to *suppress an error* — it's to remove the submodule boundary marker so git **recurses into the nested directory and stages its inner files as ordinary blobs**, i.e. so nested-repo contents are actually captured and become undoable. That rename is documented to **corrupt real repositories** when interrupted mid-operation: `cline/cline#9590` ("infinite nested .git in node_modules, permanently renames .git to .git_disabled"), `#4385`/`#4388` ("Fix Checkpoint System Git Repository Corruption"), `#9631`. The failure mode is exactly the crash-window you'd expect: process killed between rename-out and rename-back leaves the user's or a dependency's `.git` renamed, silently breaking their real git tooling until someone notices.
 
-**Koder's design deliberately does not attempt to match that capture behavior.** Verified empirically (not assumed) before committing to this: a magic-pathspec exclude on `git add -A -- . ':!**/.git' ':!**/.git/**'` does **not** make git descend into a directory containing a `.git` — git's directory-traversal-level gitlink detection fires regardless of pathspec filtering, so the nested directory is staged as a single **gitlink entry** (`git ls-files` shows `nested`, not `nested/inner.txt`), with a warning ("adding embedded git repository"). This is not equivalent to Cline's rename — it does not capture the nested repo's contents at all, gitlink or not. So the honest framing is a genuine scope tradeoff, not a free equivalence:
+**LakshX's design deliberately does not attempt to match that capture behavior.** Verified empirically (not assumed) before committing to this: a magic-pathspec exclude on `git add -A -- . ':!**/.git' ':!**/.git/**'` does **not** make git descend into a directory containing a `.git` — git's directory-traversal-level gitlink detection fires regardless of pathspec filtering, so the nested directory is staged as a single **gitlink entry** (`git ls-files` shows `nested`, not `nested/inner.txt`), with a warning ("adding embedded git repository"). This is not equivalent to Cline's rename — it does not capture the nested repo's contents at all, gitlink or not. So the honest framing is a genuine scope tradeoff, not a free equivalence:
 
 ```
 git --git-dir="$GITDIR" --work-tree="$WORKTREE" add -A -- . ':!**/.git' ':!**/.git/**'
 git --git-dir="$GITDIR" --work-tree="$WORKTREE" status --porcelain -- . ':!**/.git' ':!**/.git/**'
 ```
 
-**Decision: accept the coverage gap, keep the safety.** Koder's shadow-git **does not checkpoint file contents inside nested git repositories/submodules** — full stop (stated again as an explicit limitation in §10). In exchange, it never renames anything, ever, which eliminates the crash-window and the entire class of documented corruption bugs above — there is no intermediate "half-migrated" `.git` state a kill-9 can catch it in. This is the correct trade for Koder specifically: the vast majority of agent edits happen in the primary workspace tree, not inside a vendored nested repo, and doc 07/09's own default-ignore patterns (`node_modules/`, etc.) already exclude the subtrees most likely to *contain* a nested `.git` (a vendored dependency checked out as a git clone) in the first place. If a future need arises to checkpoint agent edits made *inside* a nested repo, that requires either Cline's rename approach (with its own hardened crash-safety: try/finally, the lock from §2.5, and a startup sweep that repairs any orphaned `.git_disabled` left by a prior crash) or treating that nested repo as its own independently-checkpointed shadow-git — not attempted here.
+**Decision: accept the coverage gap, keep the safety.** LakshX's shadow-git **does not checkpoint file contents inside nested git repositories/submodules** — full stop (stated again as an explicit limitation in §10). In exchange, it never renames anything, ever, which eliminates the crash-window and the entire class of documented corruption bugs above — there is no intermediate "half-migrated" `.git` state a kill-9 can catch it in. This is the correct trade for LakshX specifically: the vast majority of agent edits happen in the primary workspace tree, not inside a vendored nested repo, and doc 07/09's own default-ignore patterns (`node_modules/`, etc.) already exclude the subtrees most likely to *contain* a nested `.git` (a vendored dependency checked out as a git clone) in the first place. If a future need arises to checkpoint agent edits made *inside* a nested repo, that requires either Cline's rename approach (with its own hardened crash-safety: try/finally, the lock from §2.5, and a startup sweep that repairs any orphaned `.git_disabled` left by a prior crash) or treating that nested repo as its own independently-checkpointed shadow-git — not attempted here.
 
 For `write_file`/`edit_file` (which always know their own single path, from `tools.ts:81-126`'s `input.path`), skip the tree-wide `add -A` entirely and `git add -- <path>` directly — narrower and faster. **This does not fully sidestep the gitlink gap**: if that single path happens to resolve inside a directory that has its own `.git` (the agent editing a file inside a vendored/nested repo), the scoped `add -- <path>` fails or is skipped by git's own submodule-pathspec handling exactly like the tree-wide case — so the nested-repo gap applies to `write_file`/`edit_file` too, not only `bash`. `bash` is simply the more likely way to hit it in practice (it can write anywhere, unprompted), not the only way structurally.
 
-**Gitlink entries must never reach either UI surface.** Because `commitAfterTool`'s `git diff --name-only` (§2.4) is the single source of truth both undo surfaces render from, and because a nested repo's HEAD can still move as an inert gitlink update (e.g. the agent runs a `git` command *inside* a nested repo via `bash`, changing what commit the gitlink points at, which then shows up as a one-line diff for the path `nested`), the file-list derivation must **filter out any entry whose git index mode is `160000`** (git's mode for a gitlink/submodule reference) before it's returned to `commitAfterTool`'s caller or included in a `koder/checkpoint` notification. Without this filter, the chat card would show "Files changed (1): nested" with an "Undo all" button that does nothing on disk (checking out a gitlink path doesn't touch the submodule's own worktree) — precisely the silent-no-op confusion §10 exists to avoid. The once-only disclosure trigger in §10 should fire on **either** condition: a tool's resolved path falls inside a `.git`-bearing directory, **or** a `diff --name-only` result is filtered for containing a `160000`-mode entry — not only the tool-call-path heuristic, which alone would miss the aggregate-`add`/gitlink-move case.
+**Gitlink entries must never reach either UI surface.** Because `commitAfterTool`'s `git diff --name-only` (§2.4) is the single source of truth both undo surfaces render from, and because a nested repo's HEAD can still move as an inert gitlink update (e.g. the agent runs a `git` command *inside* a nested repo via `bash`, changing what commit the gitlink points at, which then shows up as a one-line diff for the path `nested`), the file-list derivation must **filter out any entry whose git index mode is `160000`** (git's mode for a gitlink/submodule reference) before it's returned to `commitAfterTool`'s caller or included in a `lakshx/checkpoint` notification. Without this filter, the chat card would show "Files changed (1): nested" with an "Undo all" button that does nothing on disk (checking out a gitlink path doesn't touch the submodule's own worktree) — precisely the silent-no-op confusion §10 exists to avoid. The once-only disclosure trigger in §10 should fire on **either** condition: a tool's resolved path falls inside a `.git`-bearing directory, **or** a `diff --name-only` result is filtered for containing a `160000`-mode entry — not only the tool-call-path heuristic, which alone would miss the aggregate-`add`/gitlink-move case.
 
 **Large-repo guard (carried forward from doc 07, dropped in an earlier draft of this section — reinstated)**: the baseline commit (once per prompt) and every `bash`-triggered commit run a full-tree `add -A` scan. On a large monorepo this is a real per-prompt/per-bash-call cost, not free. Mirror doc 07's stated guard: **skip shadow-git checkpointing entirely for workspaces with >50k tracked files** (probe once at `initShadowRepo(cwd)` via `git -C <workspace> ls-files 2>/dev/null | wc -l` if the workspace has its own `.git`, else a capped `readdir` walk with an early-exit once the threshold is crossed), falling back to "undo not available in this workspace" (surfaced once, as a `system` transcript line, not a per-turn nag) rather than silently paying an unbounded scan cost on every mutating tool call.
 
@@ -118,11 +118,11 @@ Every commit message also encodes `promptId`, `toolCallId`, `toolName` (§2.3) a
 
 ### 2.5 Locking & crash safety
 
-**Cross-process concern, not cross-tool-call concern**: within one `runPrompt()` call, tool calls are already processed sequentially (the `for (const tc of result.toolCalls)` loop at `loop.ts:189` is not parallelized), so no intra-process race exists. The real risk is **two VS Code windows open on the same workspace** — each spawns its own `agent/src/server.ts` process (`extension.js`'s `AcpClient` is per-`AgentViewProvider`, `extension.js:173-184`), and both would target the *same* `~/.koder/checkpoints/<hash>/` directory (keyed by workspace path, not session ID) if the user has that workspace open twice.
+**Cross-process concern, not cross-tool-call concern**: within one `runPrompt()` call, tool calls are already processed sequentially (the `for (const tc of result.toolCalls)` loop at `loop.ts:189` is not parallelized), so no intra-process race exists. The real risk is **two VS Code windows open on the same workspace** — each spawns its own `agent/src/server.ts` process (`extension.js`'s `AcpClient` is per-`AgentViewProvider`, `extension.js:173-184`), and both would target the *same* `~/.lakshx/checkpoints/<hash>/` directory (keyed by workspace path, not session ID) if the user has that workspace open twice.
 
 Mitigation, matching Cline's own pattern (`tryAcquireCheckpointLockWithRetry`) but with plain Node (repo philosophy: zero new dependencies, `extension.js:1`/`panel.js:1`):
 
-- Exclusive lock file `$GITDIR/../koder.lock`, acquired via `mkdirSync(lockPath)` (atomic exclusive create — `EEXIST` if held) before any checkpoint git command, released via `rmdirSync` after. Write `{pid, startedAt}` inside the lock dir for staleness detection.
+- Exclusive lock file `$GITDIR/../lakshx.lock`, acquired via `mkdirSync(lockPath)` (atomic exclusive create — `EEXIST` if held) before any checkpoint git command, released via `rmdirSync` after. Write `{pid, startedAt}` inside the lock dir for staleness detection.
 - On `EEXIST`: check whether the recorded `pid` is alive (`process.kill(pid, 0)`, throws `ESRCH` if not); if dead, steal the lock (log a warning); if alive, retry with backoff up to ~2s, then proceed anyway with a logged warning rather than hanging a tool call indefinitely — checkpointing must never block or fail the actual file write it's checkpointing.
 - **Why crash-safety is structurally easier here than Cline's**: because §2.2 already eliminated the rename/restore two-step, there is no intermediate "half-migrated" state a crash can leave behind in the *real* repo. The only crash-recoverable state is the shadow repo's own lock file (cleaned up per the staleness check above) and, at worst, an uncommitted `git add` in the shadow index — which is harmless (the next checkpoint operation just re-adds and commits; git object writes are individually atomic, there is no window where the shadow repo's `.git` itself is unparseable).
 
@@ -170,7 +170,7 @@ export interface StoredSession {
 **Notification** (server → client, fired once per tool commit, so the chat UI can update live as a turn streams — not batched to turn-end, so a long multi-tool turn shows its files-changed list growing in real time, consistent with how `tool_call`/`tool_call_update` already stream per-call rather than per-turn):
 
 ```ts
-ctx.client.notify("koder/checkpoint", {
+ctx.client.notify("lakshx/checkpoint", {
   sessionId, promptId, toolCallId, toolName, sha, files,   // files: relative paths
 });
 ```
@@ -181,11 +181,11 @@ Emitted from a new `LoopCallbacks.onCheckpoint?(info)` hook (`loop.ts:16-27` int
 
 ```ts
 // undo one file to its state before the most recent prompt that touched it
-.onRequest("koder/undo_file", (v) => v as { sessionId: string; path: string },
+.onRequest("lakshx/undo_file", (v) => v as { sessionId: string; path: string },
   async (ctx) => { ... })
 
 // undo every file a specific prompt touched, atomically, back to that prompt's baseline
-.onRequest("koder/undo_prompt", (v) => v as { sessionId: string; promptId: string; force?: boolean },
+.onRequest("lakshx/undo_prompt", (v) => v as { sessionId: string; promptId: string; force?: boolean },
   async (ctx) => { ... })
 ```
 
@@ -193,10 +193,10 @@ Both return `{ ok: true, reverted: string[] }` or `{ ok: false, conflict: { path
 
 ### 3.3 Client-side association (`product/koder-chat/extension.js`)
 
-- Add `"checkpoint"` to `REPLAYABLE` (`extension.js:165`) so it persists into `~/.koder/chats/<chatId>.json` and replays on reopen — the chat-panel UI (§7) needs it available immediately on chat load, not only during a live session.
-- `onNotification` (`extension.js:287-292`) gains: `if (method === "koder/checkpoint") this.post({ type: "checkpoint", ...params });`
-- `AgentViewProvider` maintains `this.fileCheckpoints = new Map<absPath, { promptId, sha, toolCallId }>()` (latest-wins per path — see §4's editor-undo semantics decision), rebuilt from `this.transcript`'s `checkpoint` events on `loadChat` (`extension.js:433-453`) exactly the same way `this.transcript` itself is restored, and updated live as `koder/checkpoint` notifications arrive during a session.
-- On `vscode.window.onDidChangeActiveTextEditor`, look up the active file in `this.fileCheckpoints`; call `vscode.commands.executeCommand("setContext", "koder.fileHasCheckpoint", found)` — the context key `editor/title` button (§6) keys off.
+- Add `"checkpoint"` to `REPLAYABLE` (`extension.js:165`) so it persists into `~/.lakshx/chats/<chatId>.json` and replays on reopen — the chat-panel UI (§7) needs it available immediately on chat load, not only during a live session.
+- `onNotification` (`extension.js:287-292`) gains: `if (method === "lakshx/checkpoint") this.post({ type: "checkpoint", ...params });`
+- `AgentViewProvider` maintains `this.fileCheckpoints = new Map<absPath, { promptId, sha, toolCallId }>()` (latest-wins per path — see §4's editor-undo semantics decision), rebuilt from `this.transcript`'s `checkpoint` events on `loadChat` (`extension.js:433-453`) exactly the same way `this.transcript` itself is restored, and updated live as `lakshx/checkpoint` notifications arrive during a session.
+- On `vscode.window.onDidChangeActiveTextEditor`, look up the active file in `this.fileCheckpoints`; call `vscode.commands.executeCommand("setContext", "lakshx.fileHasCheckpoint", found)` — the context key `editor/title` button (§6) keys off.
 
 ---
 
@@ -227,7 +227,7 @@ Single `checkout` call with all paths as arguments — this is what makes it ato
 
 ### 4.3 Cross-prompt overlap warning
 
-Before executing `koder/undo_prompt`, for every path in prompt N's file set, check whether any prompt with a **later** `createdAt` also touched that path (linear scan over `session.checkpoints` — sessions are bounded, this is cheap, no index needed):
+Before executing `lakshx/undo_prompt`, for every path in prompt N's file set, check whether any prompt with a **later** `createdAt` also touched that path (linear scan over `session.checkpoints` — sessions are bounded, this is cheap, no index needed):
 
 ```ts
 function laterOverlap(checkpoints: PromptCheckpoint[], promptId: string): Record<string, string[]> {
@@ -248,7 +248,7 @@ If non-empty, the response includes it and the client shows: *"Prompt N+1 also c
 
 ### 4.4 Mode interaction — undo is available in all modes, including review
 
-Undo is **not a tool call subject to `loop.ts`'s mode/permission gate** (`loop.ts:199-210`, the `spec.dangerous && session.mode === "review"` hard block etc.) — it never enters `TOOLS` (`tools.ts:56-212`) at all, and the model can never invoke it. It's a **user action against the checkpoint store**, dispatched via its own `koder/undo_*` request handlers (§3.2), structurally identical to how doc 09 §3.3 already established restore must work ("never a tool the model can call itself"). Because it bypasses the mode gate entirely by construction, the "should it be available in review mode" question resolves itself: **yes, in every mode**, because mode governs what the *agent* is allowed to do, and undo is something the *user* does to files the agent already touched — a safety feature, not a mutation the agent is requesting. This needs no special-casing anywhere in `loop.ts`; it's a property of where the feature lives in the architecture, not a rule that has to be remembered and enforced.
+Undo is **not a tool call subject to `loop.ts`'s mode/permission gate** (`loop.ts:199-210`, the `spec.dangerous && session.mode === "review"` hard block etc.) — it never enters `TOOLS` (`tools.ts:56-212`) at all, and the model can never invoke it. It's a **user action against the checkpoint store**, dispatched via its own `lakshx/undo_*` request handlers (§3.2), structurally identical to how doc 09 §3.3 already established restore must work ("never a tool the model can call itself"). Because it bypasses the mode gate entirely by construction, the "should it be available in review mode" question resolves itself: **yes, in every mode**, because mode governs what the *agent* is allowed to do, and undo is something the *user* does to files the agent already touched — a safety feature, not a mutation the agent is requesting. This needs no special-casing anywhere in `loop.ts`; it's a property of where the feature lives in the architecture, not a rule that has to be remembered and enforced.
 
 ---
 
@@ -274,7 +274,7 @@ Since we commit after every mutating tool call (§2.3), shadow-HEAD for a given 
 - *Three-way merge* (agent's checkpoint vs. baseline vs. user's manual edit) sounds appealing but is the wrong reliability trade for this feature: text merges can silently produce plausible-looking-but-wrong code with no verification step (unlike the agent's own edits, which at least ran through the harness's verify contract), and implementing a merge UI is a much bigger surface to get right and test than a confirm dialog. Git's own posture is the precedent to mirror, not exceed: `git checkout` (branch form) *refuses* rather than merges when it would clobber uncommitted changes, and leaves the human to resolve it explicitly. We do the same — refuse-then-ask, not merge.
 - Additionally, distinct from the git-level check above: the **editor-buffer level** check — if the target path is open and dirty (`vscode.workspace.textDocuments.find(d => d.uri.fsPath === path && d.isDirty)`) — is checked client-side before even sending the request, and surfaces its own, earlier warning ("this file has unsaved changes in the editor"), since that case is even more immediately visible to the user than the git-level one and deserves to be caught first.
 
-**Conflict response shape** (both `koder/undo_file` and `koder/undo_prompt`): `{ ok: false, conflict: { paths: ["src/foo.ts"] } }`. Client renders one shared confirm dialog (used for both this case and §4.3's cross-prompt overlap case — they're presented identically: "these paths have changes undo would discard, continue?"), and on confirmation re-sends the same request with `force: true`, which skips the `diff --quiet` check and proceeds directly to checkout.
+**Conflict response shape** (both `lakshx/undo_file` and `lakshx/undo_prompt`): `{ ok: false, conflict: { paths: ["src/foo.ts"] } }`. Client renders one shared confirm dialog (used for both this case and §4.3's cross-prompt overlap case — they're presented identically: "these paths have changes undo would discard, continue?"), and on confirmation re-sends the same request with `force: true`, which skips the `diff --quiet` check and proceeds directly to checkout.
 
 ---
 
@@ -286,23 +286,23 @@ Since we commit after every mutating tool call (§2.3), shadow-HEAD for a given 
 
 ```json
 "contributes": {
-  "commands": [{ "command": "koder.undoFileChanges", "title": "Undo Agent Changes", "icon": "$(discard)" }],
+  "commands": [{ "command": "lakshx.undoFileChanges", "title": "Undo Agent Changes", "icon": "$(discard)" }],
   "menus": {
     "editor/title": [{
-      "command": "koder.undoFileChanges",
-      "when": "koder.fileHasCheckpoint",
+      "command": "lakshx.undoFileChanges",
+      "when": "lakshx.fileHasCheckpoint",
       "group": "navigation"
     }]
   }
 }
 ```
 
-**Context key lifecycle**: `koder.fileHasCheckpoint` is set/cleared exclusively from `extension.js` (§3.3) on `onDidChangeActiveTextEditor` and on every `koder/checkpoint`/undo-success event for the currently-active file — never read-then-assumed-stale, always recomputed from `this.fileCheckpoints` at the moment it's needed, same pattern as how `this.mode` already tracks server-pushed `modeChanged` events (`extension.js:329-332`).
+**Context key lifecycle**: `lakshx.fileHasCheckpoint` is set/cleared exclusively from `extension.js` (§3.3) on `onDidChangeActiveTextEditor` and on every `lakshx/checkpoint`/undo-success event for the currently-active file — never read-then-assumed-stale, always recomputed from `this.fileCheckpoints` at the moment it's needed, same pattern as how `this.mode` already tracks server-pushed `modeChanged` events (`extension.js:329-332`).
 
 **Command handler**:
 
 ```js
-vscode.commands.registerCommand("koder.undoFileChanges", async () => {
+vscode.commands.registerCommand("lakshx.undoFileChanges", async () => {
   const path = vscode.window.activeTextEditor?.document.uri.fsPath;
   if (!path) return;
   const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === path);
@@ -312,14 +312,14 @@ vscode.commands.registerCommand("koder.undoFileChanges", async () => {
     );
     if (pick !== "Discard and Undo") return;
   }
-  const res = await provider.acp.request("koder/undo_file", { sessionId: provider.sessionId, path: relPath(path) });
+  const res = await provider.acp.request("lakshx/undo_file", { sessionId: provider.sessionId, path: relPath(path) });
   if (!res.ok && res.conflict) {
     const pick = await vscode.window.showWarningMessage(
       `This file has been edited since the agent last changed it. Undo will overwrite that edit.`,
       { modal: true }, "Overwrite and Undo",
     );
     if (pick !== "Overwrite and Undo") return;
-    await provider.acp.request("koder/undo_file", { sessionId: provider.sessionId, path: relPath(path), force: true });
+    await provider.acp.request("lakshx/undo_file", { sessionId: provider.sessionId, path: relPath(path), force: true });
   }
   provider.post({ type: "system", text: `Reverted ${relPath(path)}.` }); // shows in chat too, receipt-style
 });
@@ -390,7 +390,7 @@ function renderCheckpointCard(card) {
 
 ```js
 case "undoPrompt": {
-  const res = await this.acp.request("koder/undo_prompt", { sessionId: this.sessionId, promptId: m.promptId });
+  const res = await this.acp.request("lakshx/undo_prompt", { sessionId: this.sessionId, promptId: m.promptId });
   if (!res.ok && (res.conflict || res.overlap)) {
     this.view?.webview.postMessage({ type: "undoConflict", promptId: m.promptId, conflict: res.conflict, overlap: res.overlap });
     break; // panel.js shows the shared confirm dialog (§5/§4.3), re-sends with force on confirm
@@ -413,16 +413,16 @@ case "undoPrompt": {
 | A1 | `checkpoint.ts` — shadow-git plumbing: init, baseline commit, tool commit, file-list diff, path-scoped checkout, lock | new `agent/src/checkpoint.ts` | §2.1–2.5 verbatim: `initShadowRepo(cwd)`, `checkpointBaseline(cwd, promptId)`, `commitAfterTool(cwd, promptId, toolCallId, toolName)` → `{sha, files}`, `undoFile(cwd, path, targetSha, force)`, `undoPaths(cwd, paths, targetSha, force)`, `hasConflict(cwd, path)`, lock acquire/release helpers |
 | A2 | `LoopCallbacks.onCheckpoint` hook + `promptId` param on `runPrompt` | `agent/src/loop.ts` | New optional field on the interface (`loop.ts:16-27`); `runPrompt(session, userText, cb, signal, promptId)`; call `await cb.onCheckpoint?.(...)` right after a successful dangerous-tool `spec.run()` (near `loop.ts:222/244`), only when `spec.dangerous` |
 | A3 | `PromptCheckpoint` type + `StoredSession.checkpoints` (v2, backward-compatible load) | `agent/src/store.ts` | §3.1; `loadSessionFile` accepts `v === 1 \|\| v === 2`, defaults `checkpoints: []` |
-| A4 | `session/prompt` mints/accepts `promptId`, calls `checkpointBaseline` before `runPrompt`, wires `onCheckpoint` → `koder/checkpoint` notify + push onto `session.checkpoints` + `saveSessionSoon` | `agent/src/server.ts` | `const promptId = ctx.params.promptId ?? randomUUID()`; new `Session.checkpoints: PromptCheckpoint[]` field on the `interface Session extends AgentSession` (`server.ts:16-18`) |
-| A5 | `koder/undo_file`, `koder/undo_prompt` request handlers | `agent/src/server.ts` | §3.2/§4/§5: overlap check (§4.3), conflict check (§5), calls into `checkpoint.ts`, returns `{ok, reverted}` or `{ok:false, conflict/overlap}` |
+| A4 | `session/prompt` mints/accepts `promptId`, calls `checkpointBaseline` before `runPrompt`, wires `onCheckpoint` → `lakshx/checkpoint` notify + push onto `session.checkpoints` + `saveSessionSoon` | `agent/src/server.ts` | `const promptId = ctx.params.promptId ?? randomUUID()`; new `Session.checkpoints: PromptCheckpoint[]` field on the `interface Session extends AgentSession` (`server.ts:16-18`) |
+| A5 | `lakshx/undo_file`, `lakshx/undo_prompt` request handlers | `agent/src/server.ts` | §3.2/§4/§5: overlap check (§4.3), conflict check (§5), calls into `checkpoint.ts`, returns `{ok, reverted}` or `{ok:false, conflict/overlap}` |
 
-No client changes in Phase A — this phase is done when `agent/test/` can drive `session/prompt` → mutate a file → `koder/undo_file` → assert the file is back to its pre-prompt content, entirely through ACP requests against a spawned server process, the same style `session-persistence.test.ts` already uses.
+No client changes in Phase A — this phase is done when `agent/test/` can drive `session/prompt` → mutate a file → `lakshx/undo_file` → assert the file is back to its pre-prompt content, entirely through ACP requests against a spawned server process, the same style `session-persistence.test.ts` already uses.
 
 ### Phase B — chat-panel "files changed + undo" per prompt
 
 | # | Change | File | Sketch |
 |---|---|---|---|
-| B1 | `"checkpoint"` added to `REPLAYABLE`; `koder/checkpoint` notification handling; `undoPrompt`/conflict round-trip in `onWebviewMessage` | `extension.js` | §3.3, §7's `case "undoPrompt"` block; `REPLAYABLE` at `extension.js:165` |
+| B1 | `"checkpoint"` added to `REPLAYABLE`; `lakshx/checkpoint` notification handling; `undoPrompt`/conflict round-trip in `onWebviewMessage` | `extension.js` | §3.3, §7's `case "undoPrompt"` block; `REPLAYABLE` at `extension.js:165` |
 | B2 | Client mints `promptId`, attaches to `post({type:"user", ...})` and the `session/prompt` request | `extension.js` | `onWebviewMessage` `"send"` case, `extension.js:392-409` |
 | B3 | Checkpoint card rendering, live accumulation by `promptId`, shared conflict dialog | `media/panel.js` | §7's `applyCheckpoint`/`renderCheckpointCard`; new `"checkpoint"`/`"undoConflict"` cases in the top-level `message` listener switch (`panel.js:359-461`) |
 | B4 | `.checkpoint` card styles | `media/panel.css` | §7's CSS block, appended near the existing `.tool` rules (`panel.css:167-195`) |
@@ -431,7 +431,7 @@ No client changes in Phase A — this phase is done when `agent/test/` can drive
 
 | # | Change | File | Sketch |
 |---|---|---|---|
-| C1 | `koder.undoFileChanges` command + `editor/title` menu contribution + `koder.fileHasCheckpoint` context key | `product/koder-chat/package.json`, `extension.js` | §6; `activate()` registers the command alongside existing ones (`extension.js:646-667`) |
+| C1 | `lakshx.undoFileChanges` command + `editor/title` menu contribution + `lakshx.fileHasCheckpoint` context key | `product/koder-chat/package.json`, `extension.js` | §6; `activate()` registers the command alongside existing ones (`extension.js:646-667`) |
 | C2 | `fileCheckpoints` map maintenance (live updates + rebuild on `loadChat`) + `onDidChangeActiveTextEditor` wiring | `extension.js` | §3.3, §6 |
 | C3 | (stretch, not required for the core feature) `FileDecorationProvider` badge on files with an available checkpoint, visible in the file tree/tabs before opening | new small module in `product/koder-chat/` or inline in `extension.js` | 2-char badge cap noted in §6; register via `vscode.window.registerFileDecorationProvider`, fire `onDidChangeFileDecorations` when `fileCheckpoints` changes |
 
@@ -445,11 +445,11 @@ This touches git plumbing with the explicit potential to silently destroy uncomm
 
 **Required E2E coverage, in priority order:**
 
-1. **Round-trip correctness** (baseline case): spawn server, `auto` mode, prompt that edits 2 files across 3 tool calls, assert `session.checkpoints` has one entry with the right `baselineSha` and 3 `tools` entries; call `koder/undo_prompt`; assert both files' on-disk content exactly matches pre-prompt state; assert a *second* undo of the same prompt is a safe no-op (idempotency, per §4.2).
-2. **Per-file undo does not touch other files**: prompt touches files A and B; `koder/undo_file` for A only; assert B is unchanged.
-3. **Crash/interrupt mid-checkpoint**: kill the server process (`child.kill('SIGKILL')`, matching how `session-persistence.test.ts` already simulates a restart at line 80) *during* a `bash`-triggered multi-file checkpoint commit; on respawn, assert the shadow repo is still a valid git repo (`git --git-dir ... status` succeeds, no dangling lock file blocks the next operation past the staleness window). This is the direct test analog of Cline's documented corruption bugs (§2.2) — if Koder ships this feature without this specific test, it is repeating a known, already-exploited failure class with a different implementation.
-4. **Manual-edit conflict**: agent edits file X; test harness (simulating the user) writes different content to X directly via `fs.writeFile` (not through the agent); `koder/undo_file` without `force` must return `{ok:false, conflict}` and must **not** have modified the file; with `force: true` it must overwrite and succeed.
-5. **Cross-prompt overlap warning**: prompt N edits file X; prompt N+1 also edits file X; `koder/undo_prompt` for N without `force` must return the overlap with N+1's `promptId` and must not modify X; with `force` it proceeds.
+1. **Round-trip correctness** (baseline case): spawn server, `auto` mode, prompt that edits 2 files across 3 tool calls, assert `session.checkpoints` has one entry with the right `baselineSha` and 3 `tools` entries; call `lakshx/undo_prompt`; assert both files' on-disk content exactly matches pre-prompt state; assert a *second* undo of the same prompt is a safe no-op (idempotency, per §4.2).
+2. **Per-file undo does not touch other files**: prompt touches files A and B; `lakshx/undo_file` for A only; assert B is unchanged.
+3. **Crash/interrupt mid-checkpoint**: kill the server process (`child.kill('SIGKILL')`, matching how `session-persistence.test.ts` already simulates a restart at line 80) *during* a `bash`-triggered multi-file checkpoint commit; on respawn, assert the shadow repo is still a valid git repo (`git --git-dir ... status` succeeds, no dangling lock file blocks the next operation past the staleness window). This is the direct test analog of Cline's documented corruption bugs (§2.2) — if LakshX ships this feature without this specific test, it is repeating a known, already-exploited failure class with a different implementation.
+4. **Manual-edit conflict**: agent edits file X; test harness (simulating the user) writes different content to X directly via `fs.writeFile` (not through the agent); `lakshx/undo_file` without `force` must return `{ok:false, conflict}` and must **not** have modified the file; with `force: true` it must overwrite and succeed.
+5. **Cross-prompt overlap warning**: prompt N edits file X; prompt N+1 also edits file X; `lakshx/undo_prompt` for N without `force` must return the overlap with N+1's `promptId` and must not modify X; with `force` it proceeds.
 6. **Concurrent windows / lock contention**: two server processes pointed at the same workspace (simulating two VS Code windows) both attempt a checkpoint commit at nearly the same time; assert neither corrupts the shadow repo and both eventually succeed (lock retry, §2.5) rather than one silently losing its commit.
 7. **Pruning doesn't touch live undo targets**: run `pruneCheckpoints()`/`git gc` (§2.6) immediately after creating a checkpoint still referenced by the current session; assert the checkpoint is still undoable (reachability-based expiry must never collect something a live session still points to).
 8. **Non-git workspace**: run the full round-trip test (#1) in a workspace `mkdtemp`'d with no `.git` at all — the shadow-git mechanism must not depend on or interact with the workspace having its own version control.
@@ -471,8 +471,8 @@ Unit-level (fast, no process spawn) coverage that should exist alongside the abo
 
 - **This codebase**: `agent/src/loop.ts` (`LoopCallbacks`, `AgentSession`, tool-call loop and mode gate at `loop.ts:199-210`), `agent/src/server.ts` (`session/prompt` handler `server.ts:127-215`, `session/load` replay `server.ts:56-100`), `agent/src/tools.ts` (`TOOLS`, `dangerous` flag), `agent/src/store.ts` (`StoredSession`, `saveSessionSoon`, `pruneSessions`), `agent/src/context.ts` (`scrubSecrets`, pattern to reuse for any checkpoint-adjacent logging), `agent/test/session-persistence.test.ts` (E2E test shape to mirror per §9), `product/koder-chat/extension.js` (`AgentViewProvider`, `REPLAYABLE`, `post()`/`persistSoon()`), `product/koder-chat/media/panel.js`/`panel.css` (`.tool` card pattern, `applyEvent`).
 - **`docs/research/07-enterprise-chat-panel.md`** P1.1 — the original shadow-git-checkpoints design this doc builds on and reconciles (§2.3).
-- **`docs/research/09-royal-mode-autonomous.md`** §3.3 — checkpoint/rollback design (`checkpointBefore`, `~/.koder/checkpoints/<workspace-hash>/`, "restore is user-triggered only, never a tool the model can call") — reused verbatim where it doesn't conflict with §2.3's reconciliation.
-- **`docs/research/08-memory-context-engineering.md`** §2.1 — session persistence pattern (`~/.koder/sessions/<id>.json`, atomic debounced writes, `pruneSessions`) this design's `store.ts` extension and `checkpoint.ts` pruning both mirror.
+- **`docs/research/09-royal-mode-autonomous.md`** §3.3 — checkpoint/rollback design (`checkpointBefore`, `~/.lakshx/checkpoints/<workspace-hash>/`, "restore is user-triggered only, never a tool the model can call") — reused verbatim where it doesn't conflict with §2.3's reconciliation.
+- **`docs/research/08-memory-context-engineering.md`** §2.1 — session persistence pattern (`~/.lakshx/sessions/<id>.json`, atomic debounced writes, `pruneSessions`) this design's `store.ts` extension and `checkpoint.ts` pruning both mirror.
 - **Cline shadow-git implementation** — `docs.cline.bot/core-workflows/checkpoints`; `deepwiki.com/cline/cline/10.1-checkpoints-and-snapshots` (exact restore modes: `workspace`/`task`/`taskAndWorkspace`, `tryAcquireCheckpointLockWithRetry` exclusive locking, directory-safety refusal for home/Desktop/Documents/Downloads, 13-char workspace-path-hash keying). **Documented corruption bugs from the nested-`.git` rename trick** (the direct evidence base for §2.2's design decision to avoid it): `github.com/cline/cline` issues #9590 ("infinite nested .git in node_modules, permanently renames .git to .git_disabled"), #4385 ("Fix Checkpoint System Git Repository Corruption"), #4388 ("Fix Checkpoint System Issues"), #9631 ("CHECKPOINT CORRUPTION BUG REPORT").
 - **Cursor checkpoints** — `forum.cursor.com` threads ("UX/UI confusion on restoring checkpoints," "Add Checkpoints-Restore to Chat," "Restore checkpoint button... not working") confirming: per-message restore point revealed on hover, restore snapshots "as of when the question was completed" (not started — a documented source of user confusion, worth avoiding by being explicit in our own UI about exactly which point in time an undo targets), confirmation step before restoring, and that checkpoint-restore-in-chat (vs. Composer) was itself a late/requested addition — informs this doc's decision to ship chat-panel undo (§7) as a first-class surface from the start rather than an afterthought.
 - **VS Code extension API** — `code.visualstudio.com/api/references/contribution-points` (`editor/title` menu group `navigation`), `code.visualstudio.com/api/references/when-clause-contexts` (custom context keys via the `setContext` command, referenced in `when` clauses), `code.visualstudio.com/api/references/vscode-api` (`FileDecorationProvider`, `FileDecoration.badge` 2-character limit, `onDidChangeFileDecorations` for propagating updates).

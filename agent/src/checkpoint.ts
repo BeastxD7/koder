@@ -9,7 +9,7 @@
  * originally written as a deliberately minimal, standalone version (single
  * commit per mutating tool call, no prompt-ID granularity, no locking, no
  * undo). Doc 11's implementation (this revision) extends the SAME module —
- * same `~/.koder/checkpoints/<hash>/shadow.git` location, same git-plumbing
+ * same `~/.lakshx/checkpoints/<hash>/shadow.git` location, same git-plumbing
  * helpers (`shadowPaths`, `git`, `ensureShadowRepo`) — rather than
  * duplicating a second shadow-git implementation. `checkpointBeforeMutation`
  * is untouched (Royal mode's tests already cover it); everything below is
@@ -26,8 +26,8 @@
  *
  * Undo (doc 11 §4/§5): `undoFile`/`undoPaths` are path-scoped `git checkout
  * <sha> -- <paths>` calls, gated by `hasConflict` unless `force` is passed.
- * These are never called by the model — only by `koder/undo_file` /
- * `koder/undo_prompt` request handlers in `server.ts`, dispatched from a
+ * These are never called by the model — only by `lakshx/undo_file` /
+ * `lakshx/undo_prompt` request handlers in `server.ts`, dispatched from a
  * user action.
  *
  * Safety guards carried in from doc 11: an exclusive lock file per workspace
@@ -50,10 +50,10 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** Same `~/.koder/checkpoints/<hash>/shadow.git` location doc 11 §2.1 specifies. */
+/** Same `~/.lakshx/checkpoints/<hash>/shadow.git` location doc 11 §2.1 specifies. */
 function shadowPaths(cwd: string): { dir: string; gitDir: string } {
   const hash = createHash("sha256").update(resolve(cwd)).digest("hex").slice(0, 16);
-  const dir = join(homedir(), ".koder", "checkpoints", hash);
+  const dir = join(homedir(), ".lakshx", "checkpoints", hash);
   return { dir, gitDir: join(dir, "shadow.git") };
 }
 
@@ -73,8 +73,8 @@ async function ensureShadowRepo(cwd: string): Promise<string> {
   // Explicit --git-dir only (matching doc 11 §2.2's explicit-flags style) — deliberately NOT
   // --separate-git-dir, which would drop a `.git` file into the user's own workspace.
   await execFileAsync("git", [`--git-dir=${gitDir}`, "init", "-q"]);
-  await git(gitDir, worktree, ["config", "user.email", "royal-checkpoints@koder.local"]);
-  await git(gitDir, worktree, ["config", "user.name", "koder-royal-checkpoints"]);
+  await git(gitDir, worktree, ["config", "user.email", "royal-checkpoints@lakshx.local"]);
+  await git(gitDir, worktree, ["config", "user.name", "lakshx-royal-checkpoints"]);
   return gitDir;
 }
 
@@ -103,7 +103,7 @@ export interface CheckpointResult {
  * dependency, no polling, no timeout) and is exact: it fully serializes
  * access to the functions above for callers in this process, so contention
  * never even reaches `withLock`'s fallible retry loop. It does NOT replace
- * `withLock` — a second Koder window in another process still needs the
+ * `withLock` — a second LakshX window in another process still needs the
  * disk lock — the two compose: this queue first, `withLock` still runs
  * inside it.
  *
@@ -359,7 +359,7 @@ export async function filesChangedSinceCommit(cwd: string, sha: string): Promise
     // for free from `commitAfterTool` advancing HEAD — see
     // `advanceRoyalMirror`'s doc comment for why this can't just be HEAD
     // for royal mode. Best-effort: a failure here must never lose the
-    // `files` result the caller's `koder/checkpoint` notification needs.
+    // `files` result the caller's `lakshx/checkpoint` notification needs.
     if (files.length) await advanceRoyalMirror(gitDir, worktree, sha);
     return files;
   } catch {
@@ -368,10 +368,10 @@ export async function filesChangedSinceCommit(cwd: string, sha: string): Promise
 }
 
 /** Never the checked-out branch — see `advanceRoyalMirror`. */
-const ROYAL_MIRROR_REF = "refs/koder/royal-mirror";
+const ROYAL_MIRROR_REF = "refs/lakshx/royal-mirror";
 
 /**
- * Advance `refs/koder/royal-mirror` — a side-ref, never the checked-out
+ * Advance `refs/lakshx/royal-mirror` — a side-ref, never the checked-out
  * branch/HEAD — to a commit reflecting whatever `filesChangedSinceCommit`
  * just staged into the shadow repo's index. Royal mode's before-mutation
  * commits deliberately never advance HEAD (`checkpointBeforeMutation`'s doc
@@ -407,7 +407,7 @@ async function advanceRoyalMirror(gitDir: string, worktree: string, fallbackPare
 /**
  * Blob content of `path` at shadow-repo commit `sha` — read-only. Used by
  * the "open diff" UI action (both chat surfaces, see server.ts's
- * `koder/checkpoint_file_before`) to materialize the pre-checkpoint version
+ * `lakshx/checkpoint_file_before`) to materialize the pre-checkpoint version
  * of a file so the client can hand it to `vscode.diff` against the live
  * file on disk, without needing git access client-side (only the agent
  * process touches the shadow-git plumbing). Returns `null` if the path
@@ -445,7 +445,7 @@ function isAlive(pid: number): boolean {
  * than hanging the caller's tool call indefinitely.
  */
 async function withLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
-  const lockPath = join(dir, "koder.lock");
+  const lockPath = join(dir, "lakshx.lock");
   const deadline = Date.now() + 2000;
   let acquired = false;
   for (;;) {
@@ -600,7 +600,7 @@ export async function hasConflict(cwd: string, path: string, targetSha: string):
   // Royal-sourced checkpoints: HEAD alone doesn't capture "what the
   // mechanism itself last wrote" the way it does for non-royal (Royal's
   // before-mutation commits deliberately never advance HEAD — see
-  // `advanceRoyalMirror`'s doc comment). `refs/koder/royal-mirror` is
+  // `advanceRoyalMirror`'s doc comment). `refs/lakshx/royal-mirror` is
   // Royal's equivalent fact — but ONLY consult it when it actually exists:
   // `diffQuiet`'s own "ref unresolvable, can't tell" fallback treats an
   // error as "clean," which would be correct in isolation but, chained as a
@@ -736,14 +736,14 @@ export async function maybeCompact(cwd: string): Promise<{ compacted: boolean }>
         stdout: "master",
       }));
       const mainBranch = curBranchOut.trim() || "master";
-      const tmpBranch = `koder-compact-${Date.now()}`;
+      const tmpBranch = `lakshx-compact-${Date.now()}`;
       await git(gitDir, worktree, ["checkout", "--orphan", tmpBranch]);
       await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", "checkpoint history compacted"]);
       // -M with a single arg renames the CURRENT branch (tmpBranch) to that name,
       // forcing overwrite of the previous branch ref of the same name — this is
       // the actual moment old commits become unreachable.
       await git(gitDir, worktree, ["branch", "-M", mainBranch]);
-      // `refs/koder/royal-mirror` (advanceRoyalMirror) is a side-ref this
+      // `refs/lakshx/royal-mirror` (advanceRoyalMirror) is a side-ref this
       // orphan-root dance never touches — left alone, it would keep every
       // pre-compaction commit it ever pointed through reachable forever,
       // silently defeating the whole point of compacting. Drop it; the next

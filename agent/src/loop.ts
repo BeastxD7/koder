@@ -1,5 +1,5 @@
 /**
- * The Koder agent loop: gather context → act → verify.
+ * The LakshX agent loop: gather context → act → verify.
  * Deliberately thin (the mini-SWE-agent lesson): the intelligence is the
  * model + tools + verification, not harness complexity. Behavior, strategy,
  * and system prompt are 100% ours.
@@ -41,7 +41,7 @@ export interface LoopCallbacks {
    * Fired once per successful mutating tool call that actually changed a
    * file, right after its shadow-git checkpoint lands
    * (docs/research/11-prompt-checkpoints-undo.md §2.3/§3.2) — the hook point
-   * for the `koder/checkpoint` notification and for appending to
+   * for the `lakshx/checkpoint` notification and for appending to
    * `session.checkpoints`. Fires for BOTH non-royal modes (from
    * `commitAfterTool`'s post-mutation commit) and royal mode (from a
    * non-committing working-tree diff against `checkpointBeforeMutation`'s
@@ -131,7 +131,7 @@ const MAX_SUBTASKS_PER_CALL = 6;
  */
 const MAX_SUBTASK_DEPTH = 1;
 
-const IDENTITY = `You are Koder, the agent inside the Koder IDE — an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.`;
+const IDENTITY = `You are LakshX, the agent inside the LakshX IDE — an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.`;
 
 const PRINCIPLES = `Operating principles:
 1. Gather context before acting: read the relevant files, grep for usages, understand conventions. Never guess file contents.
@@ -612,8 +612,8 @@ async function runPromptLoop(
           // for undo purposes — the same `onBaseline` hook non-royal mode
           // uses (below, §2.3), fired once per prompt from whichever
           // mutating call happens first. Without this, Royal-mode
-          // checkpoints would have nowhere for `koder/undo_file`/
-          // `koder/undo_prompt` to revert to (server.ts's `ensureEntry`
+          // checkpoints would have nowhere for `lakshx/undo_file`/
+          // `lakshx/undo_prompt` to revert to (server.ts's `ensureEntry`
           // needs a `baselineSha`).
           if (checkpointSha && !baselineTaken) {
             cb.onBaseline?.(checkpointSha);

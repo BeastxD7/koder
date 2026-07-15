@@ -72,7 +72,7 @@ function readRuleFile(path: string, cap: number): string | null {
   return text;
 }
 
-const PROJECT_RULE_CANDIDATES = [".koder/rules.md", "AGENTS.md", "CLAUDE.md"];
+const PROJECT_RULE_CANDIDATES = [".lakshx/rules.md", "AGENTS.md", "CLAUDE.md"];
 const PROJECT_RULE_CAP = 24_000;
 const USER_RULE_CAP = 8_000;
 
@@ -90,7 +90,7 @@ export function loadRules(cwd: string): string {
     }
   }
 
-  const userText = readRuleFile(join(homedir(), ".koder", "rules.md"), USER_RULE_CAP);
+  const userText = readRuleFile(join(homedir(), ".lakshx", "rules.md"), USER_RULE_CAP);
   if (userText) {
     blocks.push(`## User preferences\n<user-rules>\n${userText}\n</user-rules>`);
   }

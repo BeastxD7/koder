@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { floorCheck, royalTamperCheck } from "../src/floor.js";
 
 async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "koder-floor-"));
+  const dir = await mkdtemp(join(tmpdir(), "lakshx-floor-"));
   try {
     return await fn(dir);
   } finally {
@@ -20,7 +20,7 @@ async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-const bash = (command: string, cwd = "/tmp/koder-ws") => floorCheck("bash", { command }, cwd);
+const bash = (command: string, cwd = "/tmp/lakshx-ws") => floorCheck("bash", { command }, cwd);
 
 /* ---------------- read-only and other non-scoped tools are always safe ---------------- */
 
@@ -201,8 +201,8 @@ test("Windows/PowerShell command recognition is case-insensitive", () =>
 
 /* ---------------- rule 5: write_file/edit_file outside the workspace ---------------- */
 
-const writeFileCheck = (path: string, cwd = "/tmp/koder-ws") => floorCheck("write_file", { path, content: "x" }, cwd);
-const editFileCheck = (path: string, cwd = "/tmp/koder-ws") =>
+const writeFileCheck = (path: string, cwd = "/tmp/lakshx-ws") => floorCheck("write_file", { path, content: "x" }, cwd);
+const editFileCheck = (path: string, cwd = "/tmp/lakshx-ws") =>
   floorCheck("edit_file", { path, old_string: "a", new_string: "b" }, cwd);
 
 test("blocks write_file/edit_file targeting an absolute path outside the workspace", () =>
@@ -327,20 +327,20 @@ test("sudo/doas/env/absolute-path prefixes don't neutralize a rule", () =>
 /* ---------------- royalTamperCheck: the ONE narrow exception for royal mode ----------------
  * Royal mode does not call floorCheck() at all (see loop.ts) — this is a
  * separate, much smaller function that protects only the passive safety
- * net's own storage (~/.koder/royal-audit, ~/.koder/checkpoints), not a
+ * net's own storage (~/.lakshx/royal-audit, ~/.lakshx/checkpoints), not a
  * restriction on the user's project. Everything else Royal does is
  * unrestricted; these tests only cover this one guarded exception. */
 
 test("royalTamperCheck blocks write_file/edit_file targeting the royal-audit or checkpoints directories", () => {
-  const auditPath = join(homedir(), ".koder", "royal-audit", "2026-07.jsonl");
-  const checkpointPath = join(homedir(), ".koder", "checkpoints", "abc123", "shadow.git", "HEAD");
+  const auditPath = join(homedir(), ".lakshx", "royal-audit", "2026-07.jsonl");
+  const checkpointPath = join(homedir(), ".lakshx", "checkpoints", "abc123", "shadow.git", "HEAD");
   assert.equal(royalTamperCheck("write_file", { path: auditPath, content: "tampered" }).blocked, true);
   assert.equal(royalTamperCheck("edit_file", { path: checkpointPath, old_string: "x", new_string: "y" }).blocked, true);
 });
 
 test("royalTamperCheck blocks bash commands that reference the guarded paths", () => {
-  const auditDir = join(homedir(), ".koder", "royal-audit");
-  const checkpointsDir = join(homedir(), ".koder", "checkpoints");
+  const auditDir = join(homedir(), ".lakshx", "royal-audit");
+  const checkpointsDir = join(homedir(), ".lakshx", "checkpoints");
   assert.equal(royalTamperCheck("bash", { command: `rm -rf ${auditDir}` }).blocked, true);
   assert.equal(royalTamperCheck("bash", { command: `echo pwned > ${join(auditDir, "2026-07.jsonl")}` }).blocked, true);
   assert.equal(royalTamperCheck("bash", { command: `rm -rf ${checkpointsDir}` }).blocked, true);
@@ -355,7 +355,7 @@ test("royalTamperCheck does NOT block anything else — this is the whole point 
   assert.equal(royalTamperCheck("write_file", { path: join(homedir(), "Desktop", "notes.txt"), content: "x" }).blocked, false);
   // a path that merely shares a prefix with a guarded directory is not the guarded directory
   assert.equal(
-    royalTamperCheck("write_file", { path: join(homedir(), ".koder", "royal-audit-backup", "x.txt"), content: "x" })
+    royalTamperCheck("write_file", { path: join(homedir(), ".lakshx", "royal-audit-backup", "x.txt"), content: "x" })
       .blocked,
     false,
   );

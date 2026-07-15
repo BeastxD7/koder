@@ -1,4 +1,4 @@
-# Koder — Implementation Plan
+# LakshX — Implementation Plan
 
 **Mission:** The world's best IDE for agentic development — where "best" is measured by the **shipping quality of the software its users produce**, delivered through world-class software performance and UI/UX.
 
@@ -8,7 +8,7 @@ Backed by four research reports in `docs/research/` (editor foundation, agent in
 
 ## 1. Positioning: what we learned, in one paragraph
 
-Generation speed is solved and SWE-bench is saturated; ~20% of "solved" benchmark tasks are semantically wrong. Cursor won on distribution, not editor quality; the OSS AI-IDE graveyard (Void, Melty, Roo, Fleet) proves the shell is not the moat. The two under-served axes are exactly ours: **(a) shipped-code quality** — verification loops, deterministic quality gates, and critic passes that make "agent says done" actually mean done — and **(b) review throughput** — the human approval queue is the real bottleneck (93% of permission prompts get rubber-stamped today). Koder wins by making the agent *provably* finish work, and making the human's review of that work fast, legible, and safe.
+Generation speed is solved and SWE-bench is saturated; ~20% of "solved" benchmark tasks are semantically wrong. Cursor won on distribution, not editor quality; the OSS AI-IDE graveyard (Void, Melty, Roo, Fleet) proves the shell is not the moat. The two under-served axes are exactly ours: **(a) shipped-code quality** — verification loops, deterministic quality gates, and critic passes that make "agent says done" actually mean done — and **(b) review throughput** — the human approval queue is the real bottleneck (93% of permission prompts get rubber-stamped today). LakshX wins by making the agent *provably* finish work, and making the human's review of that work fast, legible, and safe.
 
 ## 2. Foundation decision
 
@@ -28,12 +28,12 @@ Rejected: Theia (no consumer-devtool precedent, same Electron ceiling, not-quite
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  Koder Shell (thin code-oss fork, Electron)                │
+│  LakshX Shell (thin code-oss fork, Electron)                │
 │  • Review multi-buffer (fork-level)  • Agent threads UI    │
 │  • Inline diff decorations           • Command palette     │
 │  • Permission ladder UI              • Context rail        │
 ├────────────────────────── ACP ─────────────────────────────┤
-│  Koder Agent Runtime (own process, TypeScript or Rust)     │
+│  LakshX Agent Runtime (own process, TypeScript or Rust)     │
 │  • Thin loop: gather → act → verify (mini-SWE-agent-sized) │
 │  • Event-sourced state + deterministic replay (OpenHands   │
 │    SDK pattern, MIT)                                       │
@@ -61,7 +61,7 @@ Rejected: Theia (no consumer-devtool precedent, same Electron ceiling, not-quite
 
 This is the differentiator. Quality is enforced by the **harness, not the prompt**:
 
-1. **Verify contract per project** (`koder.verify.json` / auto-detected): ordered fastest-first — typecheck → lint → targeted tests → full suite → build. The agent **cannot declare done** until the contract passes (Stop-hook enforced).
+1. **Verify contract per project** (`lakshx.verify.json` / auto-detected): ordered fastest-first — typecheck → lint → targeted tests → full suite → build. The agent **cannot declare done** until the contract passes (Stop-hook enforced).
 2. **Critic pass**: a separate fresh-context agent audits the final diff against the original intent before it ever reaches the human — catches "plausible but wrong."
 3. **Runtime verification** for UI-affecting changes: Playwright/Chrome-DevTools MCP drives the actual app; screenshots and console errors feed back into the loop.
 4. **Loop detection**: N failed edit-run-fail cycles → agent escalates to human as "stuck," never spins.
@@ -116,19 +116,19 @@ Plan (read-only) → Ask → Accept-edits → Auto (classifier-backed) → Bypas
 
 ### Phase 0 — Foundations (weeks 1–4)
 - Fork code-oss with VSCodium recipe: rebrand, product.json, Open VSX wiring, build/sign/notarize/update pipeline for macOS first.
-- Run Typometer baseline across VS Code/Cursor/Zed/Koder — establish the perf dashboard from day one.
+- Run Typometer baseline across VS Code/Cursor/Zed/LakshX — establish the perf dashboard from day one.
 - Spike: ACP client in the shell talking to Claude Code via `claude-agent-acp` — proves the architecture and gives us a working frontier agent in week ~2.
 - Import-from-VS Code/Cursor settings wizard (the proven migration killer-feature).
 
 ### Phase 1 — MVP: one great agent, one great review loop (weeks 5–14)
-- Koder Agent Runtime v1: thin loop, event-sourced state, hooks, model router, shadow-git checkpoints, srt sandbox.
+- LakshX Agent Runtime v1: thin loop, event-sourced state, hooks, model router, shadow-git checkpoints, srt sandbox.
 - **Verify contract v1** (auto-detect npm/cargo/pytest/etc.) + Stop-hook enforcement.
 - Review multi-buffer v1 (fork-level): unified changeset, per-hunk accept/reject/instruct.
 - Permission ladder (Plan/Ask/Accept-edits; Auto comes later).
 - Agent threads sidebar, plan-first flow, streaming UX to budget.
 - Context engine v1: ripgrep + tree-sitter repo map + LSP diagnostics feedback.
 - Zeta tab completion.
-- **Exit criteria:** an agent completes a real multi-file task in a real repo, passes the verify contract, and the human reviews and lands it entirely inside Koder — measurably faster and with fewer post-merge defects than the same task in Cursor.
+- **Exit criteria:** an agent completes a real multi-file task in a real repo, passes the verify contract, and the human reviews and lands it entirely inside LakshX — measurably faster and with fewer post-merge defects than the same task in Cursor.
 
 ### Phase 2 — The quality moat (weeks 15–26)
 - Critic pass on final diffs; loop detection + stuck-escalation.

@@ -1,6 +1,6 @@
 /**
  * BYOK configuration. Keys come from (in order):
- *   1. ~/.koder/providers.json   (user-managed, plaintext for v1 — SecretStorage in Phase 2)
+ *   1. ~/.lakshx/providers.json   (user-managed, plaintext for v1 — SecretStorage in Phase 2)
  *   2. environment variables     (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...)
  * Model strings are "provider/model", e.g. "anthropic/claude-sonnet-5",
  * "openrouter/deepseek/deepseek-chat", "ollama/qwen2.5-coder".
@@ -24,10 +24,10 @@ export interface LangfuseConfig {
   baseUrl: string;
 }
 
-export interface KoderConfig {
+export interface LakshXConfig {
   defaultModel: string;
   providers: Record<string, ProviderConfig>;
-  /** Raw, pre-merge Langfuse fields from `~/.koder/providers.json` (env vars fill in the rest — see `resolveLangfuseConfig()`). */
+  /** Raw, pre-merge Langfuse fields from `~/.lakshx/providers.json` (env vars fill in the rest — see `resolveLangfuseConfig()`). */
   langfuse?: Partial<LangfuseConfig>;
 }
 
@@ -45,10 +45,10 @@ export const PRESETS: Record<string, { kind: "anthropic" | "openai"; baseUrl: st
   ollama:     { kind: "openai", baseUrl: "http://localhost:11434/v1", envKey: "OLLAMA_API_KEY" },
 };
 
-export function loadConfig(): KoderConfig {
-  let fileCfg: Partial<KoderConfig> = {};
+export function loadConfig(): LakshXConfig {
+  let fileCfg: Partial<LakshXConfig> = {};
   try {
-    fileCfg = JSON.parse(readFileSync(join(homedir(), ".koder", "providers.json"), "utf8"));
+    fileCfg = JSON.parse(readFileSync(join(homedir(), ".lakshx", "providers.json"), "utf8"));
   } catch {
     /* no config file — env-only mode */
   }
@@ -78,7 +78,7 @@ export function loadConfig(): KoderConfig {
 
 /**
  * Resolve Langfuse tracing config from (in the same order every other
- * provider uses) `~/.koder/providers.json`'s `langfuse` block, then env vars
+ * provider uses) `~/.lakshx/providers.json`'s `langfuse` block, then env vars
  * (`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_BASE_URL`).
  *
  * Returns `undefined` — i.e. tracing disabled — unless ALL THREE fields are
@@ -89,7 +89,7 @@ export function loadConfig(): KoderConfig {
  * add one, even as a documented opt-out default — see `tracing.ts`'s module
  * doc for the full rationale.
  */
-export function resolveLangfuseConfig(cfg: KoderConfig): LangfuseConfig | undefined {
+export function resolveLangfuseConfig(cfg: LakshXConfig): LangfuseConfig | undefined {
   const publicKey = cfg.langfuse?.publicKey ?? process.env.LANGFUSE_PUBLIC_KEY;
   const secretKey = cfg.langfuse?.secretKey ?? process.env.LANGFUSE_SECRET_KEY;
   const baseUrl = cfg.langfuse?.baseUrl ?? process.env.LANGFUSE_BASE_URL;
@@ -98,7 +98,7 @@ export function resolveLangfuseConfig(cfg: KoderConfig): LangfuseConfig | undefi
 }
 
 /** "anthropic/claude-sonnet-5" → { provider config, model id }. */
-export function resolveModel(cfg: KoderConfig, modelString?: string): { providerId: string; provider: ProviderConfig; model: string } {
+export function resolveModel(cfg: LakshXConfig, modelString?: string): { providerId: string; provider: ProviderConfig; model: string } {
   const spec = modelString ?? cfg.defaultModel;
   const slash = spec.indexOf("/");
   if (slash === -1) throw new Error(`Model "${spec}" must be "provider/model"`);
@@ -108,15 +108,15 @@ export function resolveModel(cfg: KoderConfig, modelString?: string): { provider
   if (!provider) throw new Error(`Unknown provider "${providerId}". Known: ${Object.keys(cfg.providers).join(", ")}`);
   if (!provider.apiKey) {
     throw new Error(
-      `No API key for "${providerId}". Add it to ~/.koder/providers.json or set ${PRESETS[providerId]?.envKey ?? "its env var"}.`,
+      `No API key for "${providerId}". Add it to ~/.lakshx/providers.json or set ${PRESETS[providerId]?.envKey ?? "its env var"}.`,
     );
   }
   return { providerId, provider, model };
 }
 
 /** Providers that currently have a usable key (for the model picker). */
-export function availableProviders(cfg: KoderConfig): string[] {
+export function availableProviders(cfg: LakshXConfig): string[] {
   return Object.entries(cfg.providers)
-    .filter(([id, p]) => p.apiKey && (id !== "ollama" || process.env.KODER_ENABLE_OLLAMA))
+    .filter(([id, p]) => p.apiKey && (id !== "ollama" || process.env.LAKSHX_ENABLE_OLLAMA))
     .map(([id]) => id);
 }

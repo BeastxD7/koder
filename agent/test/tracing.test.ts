@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { KoderConfig } from "../src/config.js";
+import type { LakshXConfig } from "../src/config.js";
 import { getTracer, NOOP_TRACER } from "../src/tracing.js";
 
 /** Run fn with process.env patched (undefined → delete), restoring afterwards. */
@@ -30,7 +30,7 @@ function withEnv<T>(patch: Record<string, string | undefined>, fn: () => T): T {
 }
 
 /** A bare config with no file-provided `langfuse` block — isolates env-var behavior. */
-const bareCfg: KoderConfig = { defaultModel: "anthropic/claude-sonnet-5", providers: {} };
+const bareCfg: LakshXConfig = { defaultModel: "anthropic/claude-sonnet-5", providers: {} };
 
 const LANGFUSE_ENV_KEYS = ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"];
 
@@ -91,7 +91,7 @@ test("getTracer returns a real tracer ONLY once all three of publicKey/secretKey
 });
 
 test("getTracer never defaults to a public/cloud Langfuse host — baseUrl absence alone disables tracing even with both keys present via providers.json-style cfg", () => {
-  const cfgWithKeysNoUrl: KoderConfig = {
+  const cfgWithKeysNoUrl: LakshXConfig = {
     ...bareCfg,
     langfuse: { publicKey: "pk-file", secretKey: "sk-file" }, // no baseUrl in file config either
   };

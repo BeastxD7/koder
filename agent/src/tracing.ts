@@ -10,7 +10,7 @@
  * inert `NOOP_TRACER` (zero network calls, not even a client constructed)
  * unless the user has explicitly set ALL THREE of `LANGFUSE_PUBLIC_KEY`,
  * `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` (env vars, or the
- * equivalent `langfuse` block in `~/.koder/providers.json` — see
+ * equivalent `langfuse` block in `~/.lakshx/providers.json` — see
  * `config.ts`'s `resolveLangfuseConfig()`). In particular `LANGFUSE_BASE_URL`
  * NEVER falls back to Langfuse's public cloud host (`cloud.langfuse.com` or
  * similar) — if it's unset, tracing is disabled, full stop, even if the two
@@ -26,7 +26,7 @@
  * the agent loop itself — tracing is strictly best-effort.
  */
 import { Langfuse } from "langfuse";
-import { loadConfig, resolveLangfuseConfig, type KoderConfig } from "./config.js";
+import { loadConfig, resolveLangfuseConfig, type LakshXConfig } from "./config.js";
 
 export interface GenerationHandle {
   /** `usage` mirrors `TurnResult["usage"]` (providers/types.ts) — both fields optional, provider-reported. */
@@ -165,7 +165,7 @@ class LangfuseTracer implements Tracer {
  * inert `NOOP_TRACER`. `cfg` defaults to `loadConfig()` so call sites don't
  * need to thread config through, but accepts an explicit one for testing.
  */
-export function getTracer(cfg: KoderConfig = loadConfig()): Tracer {
+export function getTracer(cfg: LakshXConfig = loadConfig()): Tracer {
   const lf = resolveLangfuseConfig(cfg);
   if (!lf) return NOOP_TRACER;
   return new LangfuseTracer(lf);

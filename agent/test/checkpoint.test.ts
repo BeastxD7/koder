@@ -29,7 +29,7 @@ const serverPath = join(agentDir, "src", "server.ts");
 /** Same hash/location scheme as `checkpoint.ts`'s `shadowPaths()`, recomputed against a fake HOME. */
 function shadowGitDirFor(fakeHome: string, worktree: string): string {
   const hash = createHash("sha256").update(resolve(worktree)).digest("hex").slice(0, 16);
-  return join(fakeHome, ".koder", "checkpoints", hash, "shadow.git");
+  return join(fakeHome, ".lakshx", "checkpoints", hash, "shadow.git");
 }
 
 async function shadowGit(fakeHome: string, worktree: string, args: string[]): Promise<string> {
@@ -44,10 +44,10 @@ function spawnServer(home: string, workspace: string) {
 }
 
 async function setupHome(fake: FakeOpenAI): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), "koder-cp-home-"));
-  await mkdir(join(home, ".koder"), { recursive: true });
+  const home = await mkdtemp(join(tmpdir(), "lakshx-cp-home-"));
+  await mkdir(join(home, ".lakshx"), { recursive: true });
   await writeFile(
-    join(home, ".koder", "providers.json"),
+    join(home, ".lakshx", "providers.json"),
     JSON.stringify({
       defaultModel: "fake/test-model",
       providers: { fake: { kind: "openai", baseUrl: `http://127.0.0.1:${fake.port}/v1`, apiKey: "test-key-123" } },
@@ -60,7 +60,7 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
   const fake = new FakeOpenAI();
   await fake.start();
   const home = await setupHome(fake);
-  const workspace = await mkdtemp(join(tmpdir(), "koder-cp-ws-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-cp-ws-"));
 
   // doc 11 §9 item 8: this workspace has no .git at all — the shadow-git
   // mechanism must not depend on the workspace having its own version control.
@@ -75,11 +75,11 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
 
   try {
     await acp
-      .client({ name: "koder-checkpoint-test" })
+      .client({ name: "lakshx-checkpoint-test" })
       .onRequest(acp.methods.client.session.requestPermission, async () => ({
         outcome: { outcome: "selected", optionId: "allow" },
       }))
-      .onNotification("koder/checkpoint", (v: unknown) => v as any, async (ctx) => void checkpoints.push(ctx.params))
+      .onNotification("lakshx/checkpoint", (v: unknown) => v as any, async (ctx) => void checkpoints.push(ctx.params))
       .connectWith(stream, async (ctx) => {
         await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
 
@@ -106,7 +106,7 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
 
             await new Promise((r) => setTimeout(r, 50)); // let debounced notifies land
             const mine = checkpoints.slice(before);
-            assert.equal(mine.length, 2, "one koder/checkpoint notification per mutating tool call");
+            assert.equal(mine.length, 2, "one lakshx/checkpoint notification per mutating tool call");
             assert.ok(mine.every((c) => c.promptId === "pr_round1"));
             assert.ok(mine.every((c) => typeof c.sha === "string" && c.sha.length > 0));
             assert.deepEqual(mine.map((c) => c.files).flat().sort(), ["a.txt", "b.txt"]);
@@ -117,21 +117,21 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
             // "open diff": the pre-turn content the client would hand to
             // `vscode.diff` against the live file — must reflect the
             // baseline (before this prompt ran), not the current on-disk content.
-            const beforeContent = await ctx.request<{ content: string | null }>("koder/checkpoint_file_before", {
+            const beforeContent = await ctx.request<{ content: string | null }>("lakshx/checkpoint_file_before", {
               sessionId,
               promptId: "pr_round1",
               path: "a.txt",
             });
             assert.equal(beforeContent.content, "orig-a");
 
-            const undo1 = await ctx.request<any>("koder/undo_prompt", { sessionId, promptId: "pr_round1" });
+            const undo1 = await ctx.request<any>("lakshx/undo_prompt", { sessionId, promptId: "pr_round1" });
             assert.equal(undo1.ok, true);
             assert.deepEqual([...undo1.reverted].sort(), ["a.txt", "b.txt"]);
             assert.equal(await readFile(join(workspace, "a.txt"), "utf8"), "orig-a");
             assert.equal(await readFile(join(workspace, "b.txt"), "utf8"), "orig-b");
 
             // idempotency: undoing the same prompt again is a safe no-op
-            const undo2 = await ctx.request<any>("koder/undo_prompt", { sessionId, promptId: "pr_round1" });
+            const undo2 = await ctx.request<any>("lakshx/undo_prompt", { sessionId, promptId: "pr_round1" });
             assert.equal(undo2.ok, true);
             assert.equal(await readFile(join(workspace, "a.txt"), "utf8"), "orig-a");
             assert.equal(await readFile(join(workspace, "b.txt"), "utf8"), "orig-b");
@@ -156,7 +156,7 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
               _meta: { promptId: "pr_perfile" },
             });
 
-            const res = await ctx.request<any>("koder/undo_file", { sessionId, path: "c.txt" });
+            const res = await ctx.request<any>("lakshx/undo_file", { sessionId, path: "c.txt" });
             assert.equal(res.ok, true);
             assert.equal(await readFile(join(workspace, "c.txt"), "utf8"), "orig-c", "c.txt reverted");
             assert.equal(await readFile(join(workspace, "d.txt"), "utf8"), "new-d", "d.txt must be untouched");
@@ -183,13 +183,13 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
               _meta: { promptId: "pr_ov2" },
             });
 
-            const warned = await ctx.request<any>("koder/undo_prompt", { sessionId, promptId: "pr_ov1" });
+            const warned = await ctx.request<any>("lakshx/undo_prompt", { sessionId, promptId: "pr_ov1" });
             assert.equal(warned.ok, false);
             assert.ok(warned.overlap, "expected an overlap warning, not a plain failure");
             assert.ok(warned.overlap["e.txt"]?.includes("pr_ov2"));
             assert.equal(await readFile(join(workspace, "e.txt"), "utf8"), "e-from-prompt2", "no change without force");
 
-            const forced = await ctx.request<any>("koder/undo_prompt", { sessionId, promptId: "pr_ov1", force: true });
+            const forced = await ctx.request<any>("lakshx/undo_prompt", { sessionId, promptId: "pr_ov1", force: true });
             assert.equal(forced.ok, true);
             assert.equal(await readFile(join(workspace, "e.txt"), "utf8"), "orig-e", "force reverts to pr_ov1's baseline");
           }),
@@ -211,12 +211,12 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
             // simulate the user hand-editing the file in the IDE after the agent's last touch
             await writeFile(join(workspace, "f.txt"), "user-edited-f");
 
-            const blocked = await ctx.request<any>("koder/undo_file", { sessionId, path: "f.txt" });
+            const blocked = await ctx.request<any>("lakshx/undo_file", { sessionId, path: "f.txt" });
             assert.equal(blocked.ok, false);
             assert.deepEqual(blocked.conflict?.paths, ["f.txt"]);
             assert.equal(await readFile(join(workspace, "f.txt"), "utf8"), "user-edited-f", "must not touch the file without force");
 
-            const forced = await ctx.request<any>("koder/undo_file", { sessionId, path: "f.txt", force: true });
+            const forced = await ctx.request<any>("lakshx/undo_file", { sessionId, path: "f.txt", force: true });
             assert.equal(forced.ok, true);
             assert.equal(await readFile(join(workspace, "f.txt"), "utf8"), "orig-f");
           }),
@@ -238,19 +238,19 @@ test("prompt checkpoints + undo — round trip, per-file isolation, overlap, con
   }
 });
 
-test("royal mode: tool calls also fire koder/checkpoint (files-changed UI parity with non-royal modes)", { timeout: 60_000 }, async (t) => {
+test("royal mode: tool calls also fire lakshx/checkpoint (files-changed UI parity with non-royal modes)", { timeout: 60_000 }, async (t) => {
   // Confirmed root cause: loop.ts's royal branch only ever called
   // checkpointBeforeMutation (its own passive audit checkpoint), never
   // cb.onCheckpoint — so a genuine on-disk edit made in Royal mode never
   // produced a "Files changed" card or an undo button in either UI surface,
   // even though the shadow-git commit and audit-log entry were both there.
   // This test drives a real write_file call in royal mode and asserts the
-  // same `koder/checkpoint` notification (and, downstream, a working
-  // `koder/undo_file` round trip) that auto/approve modes already produce.
+  // same `lakshx/checkpoint` notification (and, downstream, a working
+  // `lakshx/undo_file` round trip) that auto/approve modes already produce.
   const fake = new FakeOpenAI();
   await fake.start();
   const home = await setupHome(fake);
-  const workspace = await mkdtemp(join(tmpdir(), "koder-cp-royal-ws-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-cp-royal-ws-"));
 
   const child = spawnServer(home, workspace);
   let childStderr = "";
@@ -261,15 +261,15 @@ test("royal mode: tool calls also fire koder/checkpoint (files-changed UI parity
 
   try {
     await acp
-      .client({ name: "koder-checkpoint-royal-test" })
+      .client({ name: "lakshx-checkpoint-royal-test" })
       .onRequest(acp.methods.client.session.requestPermission, async () => ({
         outcome: { outcome: "selected", optionId: "allow" },
       }))
-      .onNotification("koder/checkpoint", (v: unknown) => v as any, async (ctx) => void checkpoints.push(ctx.params))
+      .onNotification("lakshx/checkpoint", (v: unknown) => v as any, async (ctx) => void checkpoints.push(ctx.params))
       .connectWith(stream, async (ctx) => {
         await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
 
-        await t.test("royal mode write_file fires koder/checkpoint with a real sha and the touched file", () =>
+        await t.test("royal mode write_file fires lakshx/checkpoint with a real sha and the touched file", () =>
           ctx.buildSession(workspace).withSession(async (session: any) => {
             const sessionId = session.sessionId;
             await ctx.request(acp.methods.agent.session.setMode, { sessionId, modeId: "royal" });
@@ -290,7 +290,7 @@ test("royal mode: tool calls also fire koder/checkpoint (files-changed UI parity
 
             await new Promise((r) => setTimeout(r, 50)); // let debounced notifies land
             const mine = checkpoints.slice(before);
-            assert.equal(mine.length, 1, "royal mode must fire koder/checkpoint just like non-royal modes");
+            assert.equal(mine.length, 1, "royal mode must fire lakshx/checkpoint just like non-royal modes");
             assert.equal(mine[0].promptId, "pr_royal1");
             assert.equal(mine[0].toolName, "write_file");
             assert.ok(typeof mine[0].sha === "string" && mine[0].sha.length > 0);
@@ -300,7 +300,7 @@ test("royal mode: tool calls also fire koder/checkpoint (files-changed UI parity
             // same UI-facing data non-royal tool calls produce, not just a
             // notification with no real effect behind it
             assert.equal(await readFile(join(workspace, "royal.txt"), "utf8"), "hello-royal-checkpoint");
-            const undo = await ctx.request<any>("koder/undo_file", { sessionId, path: "royal.txt" });
+            const undo = await ctx.request<any>("lakshx/undo_file", { sessionId, path: "royal.txt" });
             assert.equal(undo.ok, true);
             assert.deepEqual(undo.reverted, ["royal.txt"]);
             // royal.txt never existed before this prompt — "undo" a brand-new
@@ -323,7 +323,7 @@ test("crash mid-checkpoint: killing the server during a mutating tool call never
   const fake = new FakeOpenAI();
   await fake.start();
   const home = await setupHome(fake);
-  const workspace = await mkdtemp(join(tmpdir(), "koder-cp-crash-ws-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-cp-crash-ws-"));
 
   try {
     // --- process 1: start a turn with a slow bash tool call, kill mid-flight ---
@@ -339,7 +339,7 @@ test("crash mid-checkpoint: killing the server during a mutating tool call never
     // connection — and the in-flight prompt — are genuinely still alive
     // during the kill window below.
     const connectPromise = acp
-      .client({ name: "koder-crash-test-1" })
+      .client({ name: "lakshx-crash-test-1" })
       .onRequest(acp.methods.client.session.requestPermission, async () => ({
         outcome: { outcome: "selected", optionId: "allow" },
       }))
@@ -400,7 +400,7 @@ test("crash mid-checkpoint: killing the server during a mutating tool call never
     const stream2 = acp.ndJsonStream(Writable.toWeb(child2.stdin!), Readable.toWeb(child2.stdout!) as ReadableStream<Uint8Array>);
     try {
       await acp
-        .client({ name: "koder-crash-test-2" })
+        .client({ name: "lakshx-crash-test-2" })
         .onRequest(acp.methods.client.session.requestPermission, async () => ({
           outcome: { outcome: "selected", optionId: "allow" },
         }))
@@ -426,7 +426,7 @@ test("crash mid-checkpoint: killing the server during a mutating tool call never
             assert.ok(elapsed < 10_000, `checkpoint operation after a crash must not hang on a stale lock (took ${elapsed}ms)`);
 
             assert.equal(await readFile(join(workspace, "post-crash.txt"), "utf8"), "written-after-crash");
-            const undo = await ctx.request<any>("koder/undo_prompt", { sessionId, promptId: "pr_after_crash" });
+            const undo = await ctx.request<any>("lakshx/undo_prompt", { sessionId, promptId: "pr_after_crash" });
             assert.equal(undo.ok, true, "the shadow repo must still be fully functional for new checkpoints/undo after the crash");
             assert.equal(await readFile(join(workspace, "post-crash.txt"), "utf8"), "orig-post-crash");
           });

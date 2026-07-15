@@ -8,7 +8,7 @@ import { envBlock, loadRules, scrubSecrets } from "../src/context.js";
 import { clip } from "../src/tools.js";
 
 async function withTmp(fn: (dir: string) => Promise<void>) {
-  const dir = await mkdtemp(join(tmpdir(), "koder-ctx-"));
+  const dir = await mkdtemp(join(tmpdir(), "lakshx-ctx-"));
   try {
     await fn(dir);
   } finally {
@@ -38,7 +38,7 @@ test("envBlock reports git branch and dirty state when inside a repo", async () 
     assert.match(block, /git: branch=main, 1 uncommitted change/);
   }));
 
-test("loadRules picks .koder/rules.md over AGENTS.md over CLAUDE.md", async () =>
+test("loadRules picks .lakshx/rules.md over AGENTS.md over CLAUDE.md", async () =>
   withTmp(async (dir) => {
     await writeFile(join(dir, "AGENTS.md"), "agents rules");
     await writeFile(join(dir, "CLAUDE.md"), "claude rules");
@@ -47,20 +47,20 @@ test("loadRules picks .koder/rules.md over AGENTS.md over CLAUDE.md", async () =
     assert.doesNotMatch(out, /claude rules/);
 
     const { mkdir } = await import("node:fs/promises");
-    await mkdir(join(dir, ".koder"));
-    await writeFile(join(dir, ".koder", "rules.md"), "koder rules win");
+    await mkdir(join(dir, ".lakshx"));
+    await writeFile(join(dir, ".lakshx", "rules.md"), "lakshx rules win");
     out = loadRules(dir);
-    assert.match(out, /koder rules win/);
+    assert.match(out, /lakshx rules win/);
     assert.doesNotMatch(out, /agents rules/);
   }));
 
 test("loadRules includes user rules from a separate HOME and labels provenance", async () =>
   withTmp(async (dir) => {
-    const home = await mkdtemp(join(tmpdir(), "koder-home-"));
+    const home = await mkdtemp(join(tmpdir(), "lakshx-home-"));
     try {
       const { mkdir } = await import("node:fs/promises");
-      await mkdir(join(home, ".koder"), { recursive: true });
-      await writeFile(join(home, ".koder", "rules.md"), "never use npm, use pnpm");
+      await mkdir(join(home, ".lakshx"), { recursive: true });
+      await writeFile(join(home, ".lakshx", "rules.md"), "never use npm, use pnpm");
       const prevHome = process.env.HOME;
       process.env.HOME = home;
       try {

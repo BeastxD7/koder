@@ -9,9 +9,9 @@
  * at this directory even though nothing else is blocked in royal mode).
  *
  * Format: one JSON object per line (JSONL), one file per calendar month —
- * `~/.koder/royal-audit/<yyyy-mm>.jsonl` — mirroring the exact convention
+ * `~/.lakshx/royal-audit/<yyyy-mm>.jsonl` — mirroring the exact convention
  * `product/koder-chat/extension.js`'s local feedback log already uses for
- * `~/.koder/feedback/<yyyy-mm>.jsonl`, so this isn't a new pattern in the
+ * `~/.lakshx/feedback/<yyyy-mm>.jsonl`, so this isn't a new pattern in the
  * product. Append-only: opened in append mode only, never truncated or
  * rewritten by the harness.
  */
@@ -35,7 +35,7 @@ export interface RoyalAuditEntry {
 }
 
 function auditDir(): string {
-  const dir = join(homedir(), ".koder", "royal-audit");
+  const dir = join(homedir(), ".lakshx", "royal-audit");
   mkdirSync(dir, { recursive: true });
   return dir;
 }

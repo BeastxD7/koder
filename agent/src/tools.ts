@@ -1,4 +1,4 @@
-/** Koder agent tool set v1 — minimal composable surface (mini-SWE-agent lesson). */
+/** LakshX agent tool set v1 — minimal composable surface (mini-SWE-agent lesson). */
 import { exec, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
@@ -291,7 +291,7 @@ export const TOOLS: ToolSpec[] = [
       required: ["pattern"],
     },
     async run(input, cwd, signal) {
-      const rg = process.env.KODER_RG_PATH ?? "rg";
+      const rg = process.env.LAKSHX_RG_PATH ?? "rg";
       const globArg = input.glob ? `--glob ${JSON.stringify(input.glob)}` : "";
       const target = JSON.stringify(abs(cwd, input.path ?? "."));
       try {

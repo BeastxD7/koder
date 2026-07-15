@@ -185,7 +185,7 @@ test("GET / serves the mobile page shell without requiring a token", async () =>
   try {
     const res = await rawGet(ip, server.port, "/", server.host);
     assert.equal(res.status, 200);
-    assert.match(res.body, /<title>Koder Remote<\/title>/);
+    assert.match(res.body, /<title>LakshX Remote<\/title>/);
   } finally {
     server.stop();
   }

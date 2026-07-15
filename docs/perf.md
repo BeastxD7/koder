@@ -1,4 +1,4 @@
-# Koder performance budgets & baseline
+# LakshX performance budgets & baseline
 
 ## Budgets (commitments from PLAN.md §4)
 
@@ -24,7 +24,7 @@ Editors to baseline on this machine (Apple Silicon, macOS 26):
 1. VS Code 1.128 stock
 2. Cursor (latest)
 3. Zed (latest) — the native reference point
-4. Koder dev build (`./scripts/dev.sh`)
+4. LakshX dev build (`./scripts/dev.sh`)
 
 Record min/avg/max into the table below. Reference published numbers: GVim 1.4ms,
 IntelliJ zero-latency 4.3ms, Sublime 12.6ms, Atom 60ms (Fatin); VS Code community
@@ -35,7 +35,7 @@ measurements ~15–25ms.
 | VS Code 1.128 | | | | |
 | Cursor | | | | |
 | Zed | | | | |
-| Koder dev | | | | |
+| LakshX dev | | | | |
 
 Also record per release: cold-start time (quit → window interactive, `time` +
 stopwatch), RSS after opening the vscode repo itself (Activity Monitor, sum of

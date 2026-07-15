@@ -38,11 +38,11 @@ test("session survives a runtime restart and resumes with real history", { timeo
   const fake = new FakeOpenAI();
   await fake.start();
 
-  const home = await mkdtemp(join(tmpdir(), "koder-persist-home-"));
-  const workspace = await mkdtemp(join(tmpdir(), "koder-persist-ws-"));
-  await mkdir(join(home, ".koder"), { recursive: true });
+  const home = await mkdtemp(join(tmpdir(), "lakshx-persist-home-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-persist-ws-"));
+  await mkdir(join(home, ".lakshx"), { recursive: true });
   await writeFile(
-    join(home, ".koder", "providers.json"),
+    join(home, ".lakshx", "providers.json"),
     JSON.stringify({
       defaultModel: "fake/test-model",
       providers: { fake: { kind: "openai", baseUrl: `http://127.0.0.1:${fake.port}/v1`, apiKey: "test-key-123" } },
@@ -57,7 +57,7 @@ test("session survives a runtime restart and resumes with real history", { timeo
     const stream1 = acp.ndJsonStream(Writable.toWeb(child1.stdin!), Readable.toWeb(child1.stdout!) as ReadableStream<Uint8Array>);
 
     await acp
-      .client({ name: "koder-persist-test" })
+      .client({ name: "lakshx-persist-test" })
       .onRequest(acp.methods.client.session.requestPermission, async () => ({
         outcome: { outcome: "selected", optionId: "allow" },
       }))
@@ -89,7 +89,7 @@ test("session survives a runtime restart and resumes with real history", { timeo
 
     try {
       await acp
-        .client({ name: "koder-persist-test-2" })
+        .client({ name: "lakshx-persist-test-2" })
         .onRequest(acp.methods.client.session.requestPermission, async () => ({
           outcome: { outcome: "selected", optionId: "allow" },
         }))
@@ -134,7 +134,7 @@ test("session survives a runtime restart and resumes with real history", { timeo
     const child3 = spawnServer(home, workspace);
     const stream3 = acp.ndJsonStream(Writable.toWeb(child3.stdin!), Readable.toWeb(child3.stdout!) as ReadableStream<Uint8Array>);
     try {
-      await acp.client({ name: "koder-persist-test-3" }).connectWith(stream3, async (ctx) => {
+      await acp.client({ name: "lakshx-persist-test-3" }).connectWith(stream3, async (ctx) => {
         await ctx.request(acp.methods.agent.initialize, { protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {} });
         // the SDK wraps thrown handler errors generically ("Internal error")
         // rather than propagating our message — what matters is that it

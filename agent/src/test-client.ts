@@ -1,4 +1,4 @@
-/** Smoke test: drive the Koder runtime over ACP exactly like the panel will. */
+/** Smoke test: drive the LakshX runtime over ACP exactly like the panel will. */
 import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ const stream = acp.ndJsonStream(
 
 try {
   await acp
-    .client({ name: "koder-test" })
+    .client({ name: "lakshx-test" })
     .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
       console.log(`  [permission] ${ctx.params.toolCall.title} → auto-allow`);
       return { outcome: { outcome: "selected", optionId: "allow" } };
@@ -32,8 +32,8 @@ try {
       });
       console.log(`✅ initialize ok (protocol v${init.protocolVersion})`);
 
-      const models = await ctx.request<{ defaultModel: string; providers: string[] }>("koder/models", {});
-      console.log(`✅ koder/models → default=${models.defaultModel} providers=[${models.providers.join(", ")}]`);
+      const models = await ctx.request<{ defaultModel: string; providers: string[] }>("lakshx/models", {});
+      console.log(`✅ lakshx/models → default=${models.defaultModel} providers=[${models.providers.join(", ")}]`);
 
       if (models.providers.length === 0) {
         console.log("⚠️  no API keys configured — skipping live prompt (set ANTHROPIC_API_KEY etc.)");
@@ -42,7 +42,7 @@ try {
 
       return ctx.buildSession(workspace).withSession(async (session) => {
         console.log(`✅ session ${session.sessionId}`);
-        session.prompt("Run `echo koder-runtime-ok` with bash and tell me the output. Be brief.");
+        session.prompt("Run `echo lakshx-runtime-ok` with bash and tell me the output. Be brief.");
         for (;;) {
           const msg = await session.nextUpdate();
           if (msg.kind === "stop") {

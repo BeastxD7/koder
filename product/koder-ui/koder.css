@@ -1,5 +1,5 @@
 /* ============================================================
-   Koder UI layer — injected into workbench HTML by apply-ui.mjs
+   LakshX UI layer — injected into workbench HTML by apply-ui.mjs
    Modern, sleek restyle on top of the Koder Dark theme.
    Rules: animate only opacity/transform/background-color (perf
    budgets in docs/perf.md); respect prefers-reduced-motion;
@@ -8,14 +8,14 @@
    ============================================================ */
 
 :root {
-  --koder-accent: #7c5cff;
-  --koder-radius-s: 6px;
-  --koder-radius-m: 10px;
-  --koder-radius-l: 14px;
-  --koder-hairline: rgba(255, 255, 255, 0.08);
-  --koder-shadow-pop: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --koder-shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.4);
-  --koder-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --lakshx-accent: #7c5cff;
+  --lakshx-radius-s: 6px;
+  --lakshx-radius-m: 10px;
+  --lakshx-radius-l: 14px;
+  --lakshx-hairline: rgba(255, 255, 255, 0.08);
+  --lakshx-shadow-pop: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --lakshx-shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.4);
+  --lakshx-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 /* ---------- micro-interactions (composited, cheap) ---------- */
@@ -26,21 +26,21 @@
 .monaco-workbench .monaco-button,
 .monaco-workbench .monaco-action-bar .action-item,
 .monaco-workbench .monaco-text-button {
-  transition: background-color 0.14s var(--koder-ease), color 0.14s var(--koder-ease), opacity 0.14s var(--koder-ease);
+  transition: background-color 0.14s var(--lakshx-ease), color 0.14s var(--lakshx-ease), opacity 0.14s var(--lakshx-ease);
 }
 
-@keyframes koder-pop-in {
+@keyframes lakshx-pop-in {
   from { opacity: 0; transform: translateY(4px) scale(0.99); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
-@keyframes koder-fade-in {
+@keyframes lakshx-fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
 /* ---------- rounded list/tree selection pills ---------- */
 .monaco-workbench .monaco-list .monaco-list-row {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 .monaco-workbench .sidebar .monaco-list .monaco-list-rows,
 .monaco-workbench .quick-input-list .monaco-list-rows {
@@ -54,7 +54,7 @@
 
 /* ---------- tabs: quiet bar, soft active pill ---------- */
 .monaco-workbench .part.editor > .content .editor-group-container > .title {
-  border-bottom: 1px solid var(--koder-hairline);
+  border-bottom: 1px solid var(--lakshx-hairline);
 }
 .monaco-workbench .tabs-container .tab {
   border-radius: 8px 8px 0 0;
@@ -70,10 +70,10 @@
 }
 .monaco-workbench .activitybar .action-item.checked .action-label {
   background-color: rgba(124, 92, 255, 0.14);
-  border-radius: var(--koder-radius-m);
+  border-radius: var(--lakshx-radius-m);
 }
 .monaco-workbench .activitybar .action-item .action-label {
-  border-radius: var(--koder-radius-m);
+  border-radius: var(--lakshx-radius-m);
 }
 .monaco-workbench .activitybar .action-item:hover .action-label {
   background-color: rgba(255, 255, 255, 0.06);
@@ -81,12 +81,12 @@
 
 /* ---------- command palette: floating glass panel ---------- */
 .monaco-workbench .quick-input-widget {
-  border-radius: var(--koder-radius-l) !important;
-  border: 1px solid var(--koder-hairline);
-  box-shadow: var(--koder-shadow-modal) !important;
+  border-radius: var(--lakshx-radius-l) !important;
+  border: 1px solid var(--lakshx-hairline);
+  box-shadow: var(--lakshx-shadow-modal) !important;
   backdrop-filter: blur(24px) saturate(1.4);
   overflow: hidden;
-  animation: koder-pop-in 0.16s var(--koder-ease);
+  animation: lakshx-pop-in 0.16s var(--lakshx-ease);
   margin-top: 8vh;
 }
 .monaco-workbench .quick-input-widget .quick-input-header {
@@ -97,23 +97,23 @@
   padding: 2px 4px;
 }
 .monaco-workbench .quick-input-list .monaco-list-row {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 
 /* ---------- context menus & dropdowns ---------- */
 .monaco-menu-container .monaco-menu > .monaco-action-bar.vertical {
-  border-radius: var(--koder-radius-m);
-  border: 1px solid var(--koder-hairline);
-  box-shadow: var(--koder-shadow-pop);
+  border-radius: var(--lakshx-radius-m);
+  border: 1px solid var(--lakshx-hairline);
+  box-shadow: var(--lakshx-shadow-pop);
   padding: 5px;
   backdrop-filter: blur(20px);
-  animation: koder-pop-in 0.14s var(--koder-ease);
+  animation: lakshx-pop-in 0.14s var(--lakshx-ease);
 }
 .monaco-menu .monaco-action-bar.vertical .action-item {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 .monaco-menu .monaco-action-bar.vertical .action-menu-item {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 
 /* ---------- editor pop-ups: suggest / hover / find ---------- */
@@ -122,10 +122,10 @@
 .monaco-editor .parameter-hints-widget,
 .monaco-editor .rename-box,
 .monaco-workbench .monaco-editor .find-widget {
-  border-radius: var(--koder-radius-m) !important;
-  border: 1px solid var(--koder-hairline) !important;
-  box-shadow: var(--koder-shadow-pop) !important;
-  animation: koder-fade-in 0.12s var(--koder-ease);
+  border-radius: var(--lakshx-radius-m) !important;
+  border: 1px solid var(--lakshx-hairline) !important;
+  box-shadow: var(--lakshx-shadow-pop) !important;
+  animation: lakshx-fade-in 0.12s var(--lakshx-ease);
   overflow: hidden;
 }
 .monaco-editor .suggest-widget .monaco-list .monaco-list-row {
@@ -137,14 +137,14 @@
 
 /* ---------- notifications: floating cards ---------- */
 .monaco-workbench > .notifications-toasts .notification-toast {
-  border-radius: var(--koder-radius-m);
-  box-shadow: var(--koder-shadow-pop);
+  border-radius: var(--lakshx-radius-m);
+  box-shadow: var(--lakshx-shadow-pop);
   overflow: hidden;
-  animation: koder-pop-in 0.18s var(--koder-ease);
+  animation: lakshx-pop-in 0.18s var(--lakshx-ease);
 }
 .monaco-workbench .notifications-center {
-  border-radius: var(--koder-radius-m);
-  box-shadow: var(--koder-shadow-pop);
+  border-radius: var(--lakshx-radius-m);
+  box-shadow: var(--lakshx-shadow-pop);
   overflow: hidden;
 }
 
@@ -180,7 +180,7 @@
 
 /* ---------- status bar: hover pills ---------- */
 .monaco-workbench .part.statusbar > .items-container > .statusbar-item a {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
   margin: 3px 1px;
   padding: 0 6px;
   height: calc(100% - 6px);
@@ -193,16 +193,16 @@
 
 /* ---------- panel & sidebar composed headers ---------- */
 .monaco-workbench .pane-header {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 .monaco-workbench .part.panel .composite-bar-container .monaco-action-bar .action-item {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 
 /* ---------- editor widgets zone (peek, debug toolbar) ---------- */
 .monaco-workbench .debug-toolbar {
-  border-radius: var(--koder-radius-m);
-  box-shadow: var(--koder-shadow-pop);
+  border-radius: var(--lakshx-radius-m);
+  box-shadow: var(--lakshx-shadow-pop);
 }
 
 /* ---------- welcome / empty states ---------- */
@@ -212,13 +212,13 @@
 
 /* ---------- settings editor ---------- */
 .settings-editor > .settings-body .settings-tree-container .monaco-list-row {
-  border-radius: var(--koder-radius-s);
+  border-radius: var(--lakshx-radius-s);
 }
 
 /* ---------- de-VSCode polish round 2 ---------- */
 /* activity bar icons: gentle lift on hover */
 .monaco-workbench .activitybar .action-item .action-label {
-  transition: background-color 0.14s var(--koder-ease), transform 0.14s var(--koder-ease);
+  transition: background-color 0.14s var(--lakshx-ease), transform 0.14s var(--lakshx-ease);
 }
 .monaco-workbench .activitybar .action-item:hover .action-label {
   transform: translateY(-1px);
@@ -248,7 +248,7 @@
 /* panel/aux-bar composite title alignment with the new look */
 .monaco-workbench .part.auxiliarybar .composite.title,
 .monaco-workbench .part.sidebar .composite.title {
-  border-bottom: 1px solid var(--koder-hairline);
+  border-bottom: 1px solid var(--lakshx-hairline);
 }
 
 /* welcome-less empty editor: dim the letterpress fully */
@@ -256,7 +256,7 @@
   opacity: 0.12;
 }
 
-/* ---------- reduce motion: kill all Koder animations ---------- */
+/* ---------- reduce motion: kill all LakshX animations ---------- */
 @media (prefers-reduced-motion: reduce) {
   .monaco-workbench *,
   .monaco-menu-container * {

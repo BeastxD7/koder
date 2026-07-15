@@ -10,7 +10,7 @@
  * deltas and then holds the connection open and silent — exactly the
  * "partial thinking shown, then dead air" symptom reported — and asserts
  * the runtime now times out on the stall and surfaces a clear error instead
- * of hanging. `KODER_STREAM_IDLE_MS` is set low so this resolves in well
+ * of hanging. `LAKSHX_STREAM_IDLE_MS` is set low so this resolves in well
  * under a second instead of the real 45s default.
  */
 import assert from "node:assert/strict";
@@ -33,11 +33,11 @@ test("stalled-but-open SSE stream times out and surfaces an error instead of han
   const fake = new FakeOpenAI();
   await fake.start();
 
-  const home = await mkdtemp(join(tmpdir(), "koder-idle-home-"));
-  const workspace = await mkdtemp(join(tmpdir(), "koder-idle-ws-"));
-  await mkdir(join(home, ".koder"), { recursive: true });
+  const home = await mkdtemp(join(tmpdir(), "lakshx-idle-home-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-idle-ws-"));
+  await mkdir(join(home, ".lakshx"), { recursive: true });
   await writeFile(
-    join(home, ".koder", "providers.json"),
+    join(home, ".lakshx", "providers.json"),
     JSON.stringify({
       defaultModel: "fake/test-model",
       providers: {
@@ -51,10 +51,10 @@ test("stalled-but-open SSE stream times out and surfaces an error instead of han
     HOME: home,
     // fires the idle-stall detector almost immediately instead of waiting
     // out the real 45s production default
-    KODER_STREAM_IDLE_MS: "400",
+    LAKSHX_STREAM_IDLE_MS: "400",
   };
   for (const preset of Object.values(PRESETS)) delete env[preset.envKey];
-  delete env.KODER_ENABLE_OLLAMA;
+  delete env.LAKSHX_ENABLE_OLLAMA;
 
   const child = spawn(tsxBin, [serverPath], {
     cwd: workspace,
@@ -71,7 +71,7 @@ test("stalled-but-open SSE stream times out and surfaces an error instead of han
 
   try {
     await acp
-      .client({ name: "koder-idle-timeout-test" })
+      .client({ name: "lakshx-idle-timeout-test" })
       .onRequest(acp.methods.client.session.requestPermission, async () => ({
         outcome: { outcome: "selected", optionId: "allow" },
       }))

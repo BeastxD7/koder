@@ -9,7 +9,7 @@ import {
   loadConfig,
   resolveModel,
   PRESETS,
-  type KoderConfig,
+  type LakshXConfig,
   type ProviderConfig,
 } from "../src/config.js";
 
@@ -19,7 +19,7 @@ const provider = (over: Partial<ProviderConfig> = {}): ProviderConfig => ({
   ...over,
 });
 
-const cfg = (providers: Record<string, ProviderConfig>, defaultModel = "anthropic/claude-sonnet-5"): KoderConfig => ({
+const cfg = (providers: Record<string, ProviderConfig>, defaultModel = "anthropic/claude-sonnet-5"): LakshXConfig => ({
   defaultModel,
   providers,
 });
@@ -91,7 +91,7 @@ test("resolveModel missing-key error for a non-preset provider mentions 'its env
 });
 
 test("loadConfig picks up API keys from environment variables (isolated HOME)", () => {
-  const home = mkdtempSync(join(tmpdir(), "koder-cfg-home-"));
+  const home = mkdtempSync(join(tmpdir(), "lakshx-cfg-home-"));
   try {
     withEnv(
       { HOME: home, CEREBRAS_API_KEY: "ck-env-test", GROQ_API_KEY: undefined },
@@ -112,11 +112,11 @@ test("loadConfig picks up API keys from environment variables (isolated HOME)", 
 });
 
 test("loadConfig: providers.json overrides presets, adds custom providers, wins over env", () => {
-  const home = mkdtempSync(join(tmpdir(), "koder-cfg-home-"));
+  const home = mkdtempSync(join(tmpdir(), "lakshx-cfg-home-"));
   try {
-    mkdirSync(join(home, ".koder"), { recursive: true });
+    mkdirSync(join(home, ".lakshx"), { recursive: true });
     writeFileSync(
-      join(home, ".koder", "providers.json"),
+      join(home, ".lakshx", "providers.json"),
       JSON.stringify({
         defaultModel: "custom/some-model",
         providers: {
@@ -139,16 +139,16 @@ test("loadConfig: providers.json overrides presets, adds custom providers, wins 
   }
 });
 
-test("availableProviders lists only providers with keys; ollama gated by KODER_ENABLE_OLLAMA", () => {
+test("availableProviders lists only providers with keys; ollama gated by LAKSHX_ENABLE_OLLAMA", () => {
   const c = cfg({
     anthropic: provider({ kind: "anthropic", apiKey: "k1" }),
     openai: provider(), // no key → excluded
     ollama: provider({ apiKey: "ollama" }),
   });
-  withEnv({ KODER_ENABLE_OLLAMA: undefined }, () => {
+  withEnv({ LAKSHX_ENABLE_OLLAMA: undefined }, () => {
     assert.deepEqual(availableProviders(c), ["anthropic"]);
   });
-  withEnv({ KODER_ENABLE_OLLAMA: "1" }, () => {
+  withEnv({ LAKSHX_ENABLE_OLLAMA: "1" }, () => {
     assert.deepEqual(availableProviders(c).sort(), ["anthropic", "ollama"]);
   });
 });

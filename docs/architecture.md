@@ -1,12 +1,12 @@
-# Koder Architecture
+# LakshX Architecture
 
-This document explains how Koder is actually built: what's inherited, what's custom, how the
+This document explains how LakshX is actually built: what's inherited, what's custom, how the
 agent thinks and acts, and how the pieces talk to each other. It's written for someone who
 knows the codebase exists but hasn't traced the wiring yet.
 
 ## 1. The one-sentence version
 
-**Koder is two separate systems wired together**: a patched copy of Microsoft's VS Code
+**LakshX is two separate systems wired together**: a patched copy of Microsoft's VS Code
 (the editor, file explorer, git integration, extension host — none of it custom), and a
 small, hand-written agent runtime (no LangChain/AutoGPT/CrewAI — just a system-prompt-and-tool-calling
 loop written directly against provider APIs) that the editor's chat panel talks to over a
@@ -21,7 +21,7 @@ flowchart LR
         EXT["Extension host<br/>(extension.js)"]
         WV <-- "postMessage" --> EXT
     end
-    subgraph Agent["koder-agent (separate Node process)"]
+    subgraph Agent["lakshx-agent (separate Node process)"]
         SRV["server.ts<br/>(ACP endpoint)"]
         LOOP["loop.ts<br/>(the agentic loop)"]
         TOOLS["tools.ts<br/>read/write/edit/list/grep/bash"]
@@ -41,10 +41,10 @@ flowchart LR
 ## 2. The editor half: a fork, not a rewrite
 
 `upstream/` is literally Microsoft's VS Code OSS source — `upstream/package.json`'s name
-field is `code-oss-dev`. Koder does not implement a text editor, a file tree, a terminal, a
+field is `code-oss-dev`. LakshX does not implement a text editor, a file tree, a terminal, a
 git integration, or an extension host. All of that is inherited wholesale from upstream.
 
-What Koder actually does is **patch and reskin** upstream at build time:
+What LakshX actually does is **patch and reskin** upstream at build time:
 
 | Piece | What it does |
 |---|---|
@@ -53,7 +53,7 @@ What Koder actually does is **patch and reskin** upstream at build time:
 | `scripts/dev.sh` | Fast local dev loop: `npm run compile-client` then launches Electron directly against `upstream/` (no packaging step) — the way to test changes quickly instead of syncing into a packaged `.app`. |
 | `.github/workflows/build.yml` | CI matrix: macOS arm64/x64, Windows, Linux. A fast `test` job (typecheck + unit tests) gates the expensive `build` job. Full 4-platform builds only run on release tags or manual dispatch, not every push. |
 
-Because it's a straight fork, Koder gets VS Code's entire extension ecosystem, settings
+Because it's a straight fork, LakshX gets VS Code's entire extension ecosystem, settings
 system, keybinding system, and multi-platform packaging for free. The cost is that upstream
 updates have to be re-applied through this same patch pipeline rather than merged normally.
 
@@ -69,7 +69,7 @@ updates have to be re-applied through this same patch pipeline rather than merge
 
 ## 3. The agent half: a separate OS process, not an in-editor feature
 
-The "Koder Agent" you talk to in the chat panel is not part of the editor's own process at
+The "LakshX Agent" you talk to in the chat panel is not part of the editor's own process at
 all. It's `agent/src/server.ts`, compiled/bundled by esbuild into a single CommonJS file —
 `agent/package.json`'s `bundle` script:
 
@@ -153,7 +153,7 @@ sequenceDiagram
 
 On top of that, `context.ts`'s `envBlock()` adds live repo context every turn: platform,
 current date, workspace file listing, git branch and dirty state — and `loadRules()` pulls
-in `.koder/rules.md` / `AGENTS.md` / `CLAUDE.md` if present, so user-authored project rules
+in `.lakshx/rules.md` / `AGENTS.md` / `CLAUDE.md` if present, so user-authored project rules
 ride along automatically.
 
 ### The six tools
@@ -194,11 +194,11 @@ gemini     → generativelanguage.googleapis.com/v1beta/openai  (OpenAI-compatib
 ollama     → localhost:11434/v1               (OpenAI-compatible, local, opt-in)
 ```
 
-API keys live in `~/.koder/providers.json` in plaintext today (a code comment marks
+API keys live in `~/.lakshx/providers.json` in plaintext today (a code comment marks
 `SecretStorage` — OS keychain-backed storage — as future Phase 2 work, not yet built).
 
 The SSE stream reader (`providers/types.ts`'s `sseLines()`) has an **idle timeout**
-(`KODER_STREAM_IDLE_MS`, default 45s) — a `Promise.race()` between the next chunk and a
+(`LAKSHX_STREAM_IDLE_MS`, default 45s) — a `Promise.race()` between the next chunk and a
 resettable timer. This is deliberately an idle timeout, not a total-request timeout: it
 catches a connection that's gone silent-but-still-open (dead proxy/VPN/overloaded free-tier
 upstream) without killing a legitimately long generation.
@@ -236,7 +236,7 @@ bypass attempts. Royal mode explicitly skips this check — that's the entire po
 
 Royal mode does still guard one thing even against itself: `royalTamperCheck()` blocks any
 tool call (even in Royal mode) from writing to or deleting its own audit/checkpoint storage
-(`~/.koder/royal-audit/`, `~/.koder/checkpoints/`) — "a log you can erase isn't a log."
+(`~/.lakshx/royal-audit/`, `~/.lakshx/checkpoints/`) — "a log you can erase isn't a log."
 
 ### The passive safety net: audit + checkpoints + kill switch
 
@@ -263,15 +263,15 @@ tool call (even in Royal mode) from writing to or deleting its own audit/checkpo
 Doc `docs/research/11-prompt-checkpoints-undo.md` designed this; here's the shipped shape:
 
 - **Chat panel** — a "Files changed (N)" card renders inline per prompt (`panel.js`'s
-  `applyCheckpoint`/`renderCheckpointCard`), fed live by `koder/checkpoint` notifications as
+  `applyCheckpoint`/`renderCheckpointCard`), fed live by `lakshx/checkpoint` notifications as
   each mutating tool call commits. Has both a per-file "Undo" button and one "Undo all N
-  files" button. Conflict handling (`koder/undo_file`/`koder/undo_prompt`) checks disk
+  files" button. Conflict handling (`lakshx/undo_file`/`lakshx/undo_prompt`) checks disk
   against the target SHA *first* — if it already matches, it's a no-op, not a conflict
   (catches a subtle bug: naively diffing only against HEAD would false-positive a "manual
   edit" on a second undo of the same prompt, since a completed undo legitimately leaves disk
   at an older SHA while HEAD still points at the last tool commit).
-- **Editor title bar** — a `koder.undoFileChanges` command, shown only when
-  `koder.fileHasCheckpoint` (a `when`-clause context key, recomputed on every active-editor
+- **Editor title bar** — a `lakshx.undoFileChanges` command, shown only when
+  `lakshx.fileHasCheckpoint` (a `when`-clause context key, recomputed on every active-editor
   change) is true for the currently open file — a single-click "undo what the agent last did
   to this file," independent of the chat panel being open at all.
 
@@ -341,7 +341,7 @@ a Keychain re-prompt on next launch if you skip the re-sign step.
 
 ## 10. Reliability roadmap: closing the gap to industry-grade
 
-Section 1 is honest that Koder's agent is a lean, hand-rolled "system prompt + tool-calling
+Section 1 is honest that LakshX's agent is a lean, hand-rolled "system prompt + tool-calling
 loop," not a framework like LangChain or a vendor Agent SDK. That's a deliberate choice, not
 an oversight — the Claude Agent SDK and OpenAI Agents SDK both automate the same loop
 (`runPrompt` in `loop.ts` is functionally what their `query()`/`Runner` do), but adopting
@@ -364,7 +364,7 @@ achieve reliability turned up three concrete, evidence-backed gaps worth closing
    call (name + `audit.ts`'s existing `summarizeInput`/`summarizeText` — never raw file/bash
    output). **No default remote endpoint exists.** Tracing is a strict, zero-network-call no-op
    unless all three of `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` are
-   set (env vars, or the `langfuse` block in `~/.koder/providers.json`) — `LANGFUSE_BASE_URL`
+   set (env vars, or the `langfuse` block in `~/.lakshx/providers.json`) — `LANGFUSE_BASE_URL`
    never falls back to Langfuse Cloud, so enabling this means pointing at a self-hosted instance
    you chose. See `agent/test/tracing.test.ts` for the test asserting this directly.
 2. **Context compaction as a first-class concern.** `session.history` (`loop.ts`) grows
@@ -399,7 +399,7 @@ achieve reliability turned up three concrete, evidence-backed gaps worth closing
    `dispatch_subtasks` tool description warns the model against dispatching file-overlapping
    tasks rather than pretending the risk is fully guarded.
 
-   Live progress surfaces in the chat panel: `koder/subagents_start`/`subagent_activity`/
+   Live progress surfaces in the chat panel: `lakshx/subagents_start`/`subagent_activity`/
    `subagents_end` ACP notifications (`server.ts`) drive a card in `panel.js` (reusing the
    checkpoint card's visual language) showing every dispatched task with a live running/done/
    failed status as it works, not just a result blob at the end. See

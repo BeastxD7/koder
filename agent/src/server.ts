@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Koder Agent Runtime — ACP agent server over stdio.
- * Any ACP client (the Koder panel, Zed, JetBrains, neovim) can drive it.
+ * LakshX Agent Runtime — ACP agent server over stdio.
+ * Any ACP client (the LakshX panel, Zed, JetBrains, neovim) can drive it.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -43,7 +43,7 @@ function laterOverlap(checkpoints: PromptCheckpoint[], promptId: string): Record
 
 const sessions = new Map<string, Session>();
 
-// housekeeping: bound ~/.koder/sessions/ so it never grows unbounded
+// housekeeping: bound ~/.lakshx/sessions/ so it never grows unbounded
 pruneSessions();
 
 const MODES = [
@@ -60,7 +60,7 @@ const MODES = [
 
 /** Save the review-mode output as a plan file; returns its path. */
 function savePlan(cwd: string, text: string): string {
-  const dir = join(cwd, ".koder", "plans");
+  const dir = join(cwd, ".lakshx", "plans");
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
   const file = join(dir, `plan-${stamp}.md`);
@@ -69,7 +69,7 @@ function savePlan(cwd: string, text: string): string {
 }
 
 acp
-  .agent({ name: "koder-agent" })
+  .agent({ name: "lakshx-agent" })
   .onRequest("initialize", async () => ({
     protocolVersion: acp.PROTOCOL_VERSION,
     agentCapabilities: { loadSession: true },
@@ -134,20 +134,20 @@ acp
     if (s && MODES.some((m) => m.id === ctx.params.modeId)) s.mode = ctx.params.modeId as AgentMode;
     return {};
   })
-  // Koder extension: list configured providers + current default model
-  .onRequest("koder/models", (v: unknown) => v as Record<string, never>, async () => {
+  // LakshX extension: list configured providers + current default model
+  .onRequest("lakshx/models", (v: unknown) => v as Record<string, never>, async () => {
     const cfg = loadConfig();
     return { defaultModel: cfg.defaultModel, providers: availableProviders(cfg) };
   })
-  // Koder extension: validate a provider key and list its live models
+  // LakshX extension: validate a provider key and list its live models
   .onRequest(
-    "koder/validate",
+    "lakshx/validate",
     (v: unknown) => v as { provider: string; apiKey?: string },
     async (ctx) => probeProvider(ctx.params.provider, ctx.params.apiKey),
   )
-  // Koder extension: set the model for a session ("provider/model")
+  // LakshX extension: set the model for a session ("provider/model")
   .onRequest(
-    "koder/set_model",
+    "lakshx/set_model",
     (v: unknown) => v as { sessionId: string; model: string },
     async (ctx) => {
       const s = sessions.get(ctx.params.sessionId);
@@ -164,7 +164,7 @@ acp
     const abort = new AbortController();
     session.pending = abort;
 
-    // doc 11 §1: Koder's own client mints promptId client-side and attaches
+    // doc 11 §1: LakshX's own client mints promptId client-side and attaches
     // it via `_meta` — the ACP SDK's own agent-side request registration
     // auto-validates "session/prompt" against its built-in `zPromptRequest`
     // schema (sessionId/prompt/_meta only) and SILENTLY STRIPS any other
@@ -220,7 +220,7 @@ acp
           },
           onThinking: (t) =>
             void notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: t } }),
-          onUsage: (usage) => void ctx.client.notify("koder/usage", { sessionId, ...usage }),
+          onUsage: (usage) => void ctx.client.notify("lakshx/usage", { sessionId, ...usage }),
           onHistoryChanged: persist,
           onToolStart: (c) =>
             void notify({
@@ -256,16 +256,16 @@ acp
           onCheckpoint: (info) => {
             const e = ensureEntry(null);
             e.tools.push({ toolCallId: info.toolCallId, toolName: info.toolName, sha: info.sha, files: info.files });
-            void ctx.client.notify("koder/checkpoint", { sessionId, promptId, ...info });
+            void ctx.client.notify("lakshx/checkpoint", { sessionId, promptId, ...info });
             persist();
           },
           // Live subagent progress (Part 3) — same shape/pattern as
           // onBaseline/onCheckpoint above: one ACP notification per callback,
           // params spread straight through, no server-side state beyond the
           // sessionId this needs to add for the client to route it.
-          onSubagentsStart: (info) => void ctx.client.notify("koder/subagents_start", { sessionId, ...info }),
-          onSubagentActivity: (info) => void ctx.client.notify("koder/subagent_activity", { sessionId, ...info }),
-          onSubagentsEnd: (info) => void ctx.client.notify("koder/subagents_end", { sessionId, ...info }),
+          onSubagentsStart: (info) => void ctx.client.notify("lakshx/subagents_start", { sessionId, ...info }),
+          onSubagentActivity: (info) => void ctx.client.notify("lakshx/subagent_activity", { sessionId, ...info }),
+          onSubagentsEnd: (info) => void ctx.client.notify("lakshx/subagents_end", { sessionId, ...info }),
         },
         promptId,
         abort.signal,
@@ -281,7 +281,7 @@ acp
         /^#{1,3}\s*Plan\b/m.test(finalText)
       ) {
         const planPath = savePlan(session.cwd, finalText);
-        await ctx.client.notify("koder/plan_ready", { sessionId, path: planPath });
+        await ctx.client.notify("lakshx/plan_ready", { sessionId, path: planPath });
       }
 
       // doc 11 §2.6: opportunistic, size-triggered only (250MB) — never
@@ -289,7 +289,7 @@ acp
       // system transcript line ("older undo history was compacted..."),
       // never silently.
       void maybeCompact(session.cwd).then((r) => {
-        if (r.compacted) void ctx.client.notify("koder/checkpoint_compacted", { sessionId });
+        if (r.compacted) void ctx.client.notify("lakshx/checkpoint_compacted", { sessionId });
       });
 
       return { stopReason: abort.signal.aborted ? "cancelled" : stop };
@@ -304,11 +304,11 @@ acp
       if (session.pending === abort) session.pending = undefined;
     }
   })
-  // Koder extension: undo one file to its state before the most recent
+  // LakshX extension: undo one file to its state before the most recent
   // prompt that touched it (doc 11 §3.2/§4.1) — user-initiated only, never a
   // tool the model can call; available in every mode, including review.
   .onRequest(
-    "koder/undo_file",
+    "lakshx/undo_file",
     (v: unknown) => v as { sessionId: string; path: string; force?: boolean },
     async (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
@@ -322,11 +322,11 @@ acp
       return undoFile(session.cwd, path, target.baselineSha, force);
     },
   )
-  // Koder extension: undo every file a specific prompt touched, atomically,
+  // LakshX extension: undo every file a specific prompt touched, atomically,
   // back to that prompt's baseline (doc 11 §3.2/§4.2), warning first if a
   // later prompt also touched one of those files (§4.3).
   .onRequest(
-    "koder/undo_prompt",
+    "lakshx/undo_prompt",
     (v: unknown) => v as { sessionId: string; promptId: string; force?: boolean },
     async (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
@@ -347,7 +347,7 @@ acp
   // hand to `vscode.diff` against the live file on disk — the shadow-git
   // plumbing only lives in this process, so the client can't read it itself.
   .onRequest(
-    "koder/checkpoint_file_before",
+    "lakshx/checkpoint_file_before",
     (v: unknown) => v as { sessionId: string; promptId: string; path: string },
     async (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
@@ -369,4 +369,4 @@ acp
     ),
   );
 
-process.stderr.write("koder-agent ready (ACP over stdio)\n");
+process.stderr.write("lakshx-agent ready (ACP over stdio)\n");

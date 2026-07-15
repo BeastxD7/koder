@@ -1,9 +1,9 @@
 {
-  "name": "koder-chat",
-  "displayName": "Koder Agent",
-  "description": "Koder's agent panel — talks to the Koder Agent Runtime over ACP.",
+  "name": "lakshx-chat",
+  "displayName": "LakshX Agent",
+  "description": "LakshX's agent panel — talks to the LakshX Agent Runtime over ACP.",
   "version": "0.0.2",
-  "publisher": "koder",
+  "publisher": "lakshx",
   "license": "MIT",
   "engines": {
     "vscode": "^1.128.0"
@@ -19,17 +19,17 @@
     "viewsContainers": {
       "secondarySidebar": [
         {
-          "id": "koder",
-          "title": "Koder",
+          "id": "lakshx",
+          "title": "LakshX",
           "icon": "media/koder.svg"
         }
       ]
     },
     "views": {
-      "koder": [
+      "lakshx": [
         {
           "type": "webview",
-          "id": "koder.chatView",
+          "id": "lakshx.chatView",
           "name": "Agent",
           "icon": "media/koder.svg"
         }
@@ -37,49 +37,49 @@
     },
     "commands": [
       {
-        "command": "koder.openAgent",
-        "title": "Koder: Open Agent",
+        "command": "lakshx.openAgent",
+        "title": "LakshX: Open Agent",
         "icon": "media/koder.svg"
       },
       {
-        "command": "koder.newChat",
-        "title": "Koder: New Chat",
+        "command": "lakshx.newChat",
+        "title": "LakshX: New Chat",
         "icon": "$(add)"
       },
       {
-        "command": "koder.configureProviders",
-        "title": "Koder: Configure AI Providers (BYOK)",
+        "command": "lakshx.configureProviders",
+        "title": "LakshX: Configure AI Providers (BYOK)",
         "icon": "$(gear)"
       },
       {
-        "command": "koder.openProviderSettings",
-        "title": "Koder: Edit Provider Config File (JSON)"
+        "command": "lakshx.openProviderSettings",
+        "title": "LakshX: Edit Provider Config File (JSON)"
       },
       {
-        "command": "koder.openFeedbackLog",
-        "title": "Koder: Open Feedback Log"
+        "command": "lakshx.openFeedbackLog",
+        "title": "LakshX: Open Feedback Log"
       },
       {
-        "command": "koder.addSelectionToChat",
-        "title": "Add to Koder Chat"
+        "command": "lakshx.addSelectionToChat",
+        "title": "Add to LakshX Chat"
       },
       {
-        "command": "koder.enableRemoteAccess",
-        "title": "Koder: Enable Remote Access (view and control this chat from your phone)"
+        "command": "lakshx.enableRemoteAccess",
+        "title": "LakshX: Enable Remote Access (view and control this chat from your phone)"
       },
       {
-        "command": "koder.disableRemoteAccess",
-        "title": "Koder: Disable Remote Access"
+        "command": "lakshx.disableRemoteAccess",
+        "title": "LakshX: Disable Remote Access"
       },
       {
-        "command": "koder.undoFileChanges",
+        "command": "lakshx.undoFileChanges",
         "title": "Undo Agent Changes",
         "icon": "$(discard)"
       }
     ],
     "keybindings": [
       {
-        "command": "koder.openAgent",
+        "command": "lakshx.openAgent",
         "key": "ctrl+l",
         "mac": "cmd+l"
       }
@@ -87,41 +87,41 @@
     "menus": {
       "view/title": [
         {
-          "command": "koder.newChat",
-          "when": "view == koder.chatView",
+          "command": "lakshx.newChat",
+          "when": "view == lakshx.chatView",
           "group": "navigation@1"
         },
         {
-          "command": "koder.configureProviders",
-          "when": "view == koder.chatView",
+          "command": "lakshx.configureProviders",
+          "when": "view == lakshx.chatView",
           "group": "navigation@2"
         }
       ],
       "editor/title": [
         {
-          "command": "koder.openAgent",
+          "command": "lakshx.openAgent",
           "group": "navigation@100"
         },
         {
-          "command": "koder.undoFileChanges",
-          "when": "koder.fileHasCheckpoint",
+          "command": "lakshx.undoFileChanges",
+          "when": "lakshx.fileHasCheckpoint",
           "group": "navigation@99"
         }
       ],
       "editor/context": [
         {
-          "command": "koder.addSelectionToChat",
-          "group": "koder@1"
+          "command": "lakshx.addSelectionToChat",
+          "group": "lakshx@1"
         }
       ]
     },
     "configuration": {
-      "title": "Koder Agent",
+      "title": "LakshX Agent",
       "properties": {
-        "koder.agent.command": {
+        "lakshx.agent.command": {
           "type": "string",
           "default": "",
-          "description": "Command to launch the Koder Agent Runtime (ACP over stdio). Empty = auto-detect the bundled runtime."
+          "description": "Command to launch the LakshX Agent Runtime (ACP over stdio). Empty = auto-detect the bundled runtime."
         }
       }
     }

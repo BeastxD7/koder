@@ -1,5 +1,5 @@
-// Koder Agent panel — ACP client + webview UI. Plain CJS, zero dependencies:
-// a minimal ndjson JSON-RPC client speaks ACP to the Koder Agent Runtime.
+// LakshX Agent panel — ACP client + webview UI. Plain CJS, zero dependencies:
+// a minimal ndjson JSON-RPC client speaks ACP to the LakshX Agent Runtime.
 const vscode = require("vscode");
 const cp = require("child_process");
 const crypto = require("crypto");
@@ -73,12 +73,12 @@ function runtimeEnv() {
   // on machines without rg installed (all platforms)
   const rg = path.join(vscode.env.appRoot, "node_modules", "@vscode", "ripgrep", "bin", isWin ? "rg.exe" : "rg");
   const env = { ...process.env };
-  if (fs.existsSync(rg)) env.KODER_RG_PATH = rg;
+  if (fs.existsSync(rg)) env.LAKSHX_RG_PATH = rg;
   return env;
 }
 
 function agentSpawnSpec(context) {
-  const custom = vscode.workspace.getConfiguration("koder").get("agent.command");
+  const custom = vscode.workspace.getConfiguration("lakshx").get("agent.command");
   if (custom) {
     return isWin
       ? { command: "cmd.exe", args: ["/d", "/c", custom], env: runtimeEnv() }
@@ -109,7 +109,7 @@ function agentSpawnSpec(context) {
 }
 
 const PROVIDERS_TEMPLATE = `{
-  // Koder BYOK — add API keys for any provider you use.
+  // LakshX BYOK — add API keys for any provider you use.
   // Model strings are "provider/model", e.g. "anthropic/claude-sonnet-5",
   // "openrouter/deepseek/deepseek-chat", "ollama/qwen3-coder".
   "defaultModel": "anthropic/claude-sonnet-5",
@@ -125,11 +125,11 @@ const PROVIDERS_TEMPLATE = `{
 }
 `;
 
-// ---------- BYOK provider state (~/.koder/providers.json) ----------
+// ---------- BYOK provider state (~/.lakshx/providers.json) ----------
 const PROVIDER_IDS = ["anthropic", "openai", "openrouter", "gemini", "deepseek", "groq", "xai"];
 
 function providersFile() {
-  return path.join(os.homedir(), ".koder", "providers.json");
+  return path.join(os.homedir(), ".lakshx", "providers.json");
 }
 
 function readProvidersJson() {
@@ -187,11 +187,11 @@ function toAbsoluteUri(relPath) {
  * Read-only virtual-document backing for "open diff" (docs/research/11 §7,
  * follow-up ask: clicking a changed file should show what changed, not just
  * open it blind). Materializes a file's shadow-git content at a checkpoint's
- * baseline as an in-memory `koder-checkpoint:` document, so `vscode.diff`
+ * baseline as an in-memory `lakshx-checkpoint:` document, so `vscode.diff`
  * can compare it against the real, live file on disk — no temp files, no
  * git access needed client-side (only the agent process touches the
  * shadow-git plumbing; content is fetched over ACP, see
- * `koder/checkpoint_file_before` in server.ts).
+ * `lakshx/checkpoint_file_before` in server.ts).
  */
 class CheckpointContentProvider {
   constructor() {
@@ -201,7 +201,7 @@ class CheckpointContentProvider {
   }
   /** A fresh nonce per call so VS Code never serves stale cached content for the same path across repeated diffs. */
   uriFor(relPath, content) {
-    const uri = vscode.Uri.parse(`koder-checkpoint:/${relPath}`).with({ query: `t=${Date.now()}` });
+    const uri = vscode.Uri.parse(`lakshx-checkpoint:/${relPath}`).with({ query: `t=${Date.now()}` });
     this.store.set(uri.toString(), content);
     return uri;
   }
@@ -215,7 +215,7 @@ class CheckpointContentProvider {
  * well-isolated): a small badge in the file tree/tabs for any file with an
  * available checkpoint, visible before the file is even opened. Reads
  * straight off `AgentViewProvider.fileCheckpoints`, the same map the
- * editor-title command's `koder.fileHasCheckpoint` context key already uses.
+ * editor-title command's `lakshx.fileHasCheckpoint` context key already uses.
  */
 class CheckpointDecorationProvider {
   constructor(provider) {
@@ -232,7 +232,7 @@ class CheckpointDecorationProvider {
     return {
       badge: "●",
       color: new vscode.ThemeColor("gitDecoration.modifiedResourceForeground"),
-      tooltip: "Changed by Koder this session — undo from the editor title bar or the chat panel",
+      tooltip: "Changed by LakshX this session — undo from the editor title bar or the chat panel",
     };
   }
 }
@@ -327,7 +327,7 @@ async function searchWorkspaceFiles(q) {
 const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
 
 function chatsDir() {
-  const dir = path.join(os.homedir(), ".koder", "chats");
+  const dir = path.join(os.homedir(), ".lakshx", "chats");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -343,19 +343,19 @@ function sortedChangelog() {
 // Empty-string lastSeen (never opened) sorts before every real date, so a
 // first-time user correctly sees the badge.
 function whatsNewHasUnseen(context) {
-  const lastSeen = context.globalState.get("koder.whatsNew.lastSeenDate", "");
+  const lastSeen = context.globalState.get("lakshx.whatsNew.lastSeenDate", "");
   const newest = sortedChangelog()[0]?.date ?? "";
   return newest > lastSeen;
 }
 
-// ---------- local feedback log (~/.koder/feedback/<yyyy-mm>.jsonl) ----------
+// ---------- local feedback log (~/.lakshx/feedback/<yyyy-mm>.jsonl) ----------
 // Intentionally 100% local: no network calls, no telemetry, no cloud sync of
 // any kind. This is the entire mechanism — nothing here phones home, and
 // nothing here is a stub or hook for a future sync feature. If cloud sync is
 // ever built, it will be a separate, explicit feature, not an extension of
 // this file.
 function feedbackDir() {
-  const dir = path.join(os.homedir(), ".koder", "feedback");
+  const dir = path.join(os.homedir(), ".lakshx", "feedback");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -371,12 +371,12 @@ function feedbackFile(date = new Date()) {
 // The one thing standing between that and a silent surprise is this one-time
 // confirmation, shown once per workspace (not once per app install, not once
 // per chat session — switching machines or projects re-asks). The ack is
-// stored outside the workspace tree (~/.koder/, not <workspace>/.koder/) for
+// stored outside the workspace tree (~/.lakshx/, not <workspace>/.lakshx/) for
 // the same reason royal-audit/checkpoints live outside it: a marker the agent
 // itself could edit via a Royal-mode tool call would defeat the point of
 // "informed consent" being a human's decision, not the agent's.
 function royalConsentDir() {
-  const dir = path.join(os.homedir(), ".koder", "royal-consent");
+  const dir = path.join(os.homedir(), ".lakshx", "royal-consent");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -404,7 +404,7 @@ function grantRoyalConsent(cwd) {
 }
 
 // ---------- Remote Access (LAN mobile view, view-only — docs/research/10) ----------
-// Off by default; only ever starts from the "Koder: Enable Remote Access"
+// Off by default; only ever starts from the "LakshX: Enable Remote Access"
 // command below. The server itself lives in remote-server.js (plain Node
 // http, no vscode dependency, independently unit-testable); this file's only
 // job is the VS Code-side plumbing: the command, the one-time warning, and
@@ -436,14 +436,14 @@ function remoteAccessQrHtml(info, workspaceName) {
   <div class="warn">Anyone who scans this code or gets this link can watch this chat live — including file paths and
     tool output — AND send prompts, approve/deny permission requests, and switch modes, exactly as if they were
     sitting at this keyboard, until you turn Remote Access off. Don't share it outside a network you trust.</div>
-  <div class="stop">Run &ldquo;Koder: Disable Remote Access&rdquo; from the command palette to stop and invalidate this link.</div>
+  <div class="stop">Run &ldquo;LakshX: Disable Remote Access&rdquo; from the command palette to stop and invalidate this link.</div>
 </body></html>`;
 }
 
 function showRemoteAccessPanel(info, workspaceName) {
   const panel = vscode.window.createWebviewPanel(
-    "koderRemoteAccess",
-    "Koder Remote Access",
+    "lakshxRemoteAccess",
+    "LakshX Remote Access",
     { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
     { enableScripts: false },
   );
@@ -467,22 +467,22 @@ class AgentViewProvider {
     this.acp = null;
     this.sessionId = null;
     this.permissionWaiters = new Map();
-    this.log = vscode.window.createOutputChannel("Koder Agent");
+    this.log = vscode.window.createOutputChannel("LakshX Agent");
     this.transcript = [];
     this.chatId = `chat-${Date.now()}`;
     this.chatTitle = null;
     this.mode = "review";
     this.currentModel = null; // best-effort, for feedback-log context only
-    this.remote = null; // RemoteServer instance, only set while "Koder: Enable Remote Access" is on
+    this.remote = null; // RemoteServer instance, only set while "LakshX: Enable Remote Access" is on
     this.turnInProgress = false; // set for the duration of a session/prompt turn — see sendPrompt(); the one guard
     // shared by the desktop composer and the phone's POST /control/send so the two can't race each other into two
     // concurrent session/prompt calls (docs/research/10-remote-control.md Phase B, race-handling item).
 
     // ---------- prompt-checkpoints + undo (docs/research/11) ----------
-    // path (workspace-relative, same shape `koder/checkpoint` notifications
+    // path (workspace-relative, same shape `lakshx/checkpoint` notifications
     // use) -> { promptId, sha, toolCallId } for the MOST RECENT prompt that
     // touched it — latest-wins, per doc 11 §3.3/§4.1. This is what the
-    // editor-title undo button's `koder.fileHasCheckpoint` context key and
+    // editor-title undo button's `lakshx.fileHasCheckpoint` context key and
     // "undo this file" action read from; the chat panel's per-turn card gets
     // its own file lists straight off the "checkpoint" transcript events
     // (grouped by promptId), not from this map.
@@ -492,7 +492,7 @@ class AgentViewProvider {
   /** Snapshot handed to a freshly (re)connecting phone — see remote-server.js's GET /state. */
   remoteSnapshot() {
     return {
-      workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? "Koder",
+      workspace: vscode.workspace.workspaceFolders?.[0]?.name ?? "LakshX",
       mode: this.mode,
       transcript: this.transcript,
     };
@@ -583,7 +583,7 @@ class AgentViewProvider {
 
     const spec = agentSpawnSpec(this.context);
     if (!spec) {
-      this.post({ type: "system", text: "Koder Agent Runtime not found. Set koder.agent.command in settings." });
+      this.post({ type: "system", text: "LakshX Agent Runtime not found. Set lakshx.agent.command in settings." });
       return false;
     }
     this.log.appendLine(`spawning agent: ${spec.command} ${spec.args.join(" ")}`);
@@ -602,16 +602,16 @@ class AgentViewProvider {
       },
       onNotification: (method, params) => {
         if (method === "session/update") this.onSessionUpdate(params.update);
-        if (method === "koder/plan_saved") this.onPlanSaved(params.path);
-        if (method === "koder/plan_ready") this.onPlanReady(params.path);
-        if (method === "koder/usage") this.post({ type: "usage", ...params });
-        if (method === "koder/checkpoint") this.onCheckpoint(params);
-        if (method === "koder/checkpoint_compacted") {
+        if (method === "lakshx/plan_saved") this.onPlanSaved(params.path);
+        if (method === "lakshx/plan_ready") this.onPlanReady(params.path);
+        if (method === "lakshx/usage") this.post({ type: "usage", ...params });
+        if (method === "lakshx/checkpoint") this.onCheckpoint(params);
+        if (method === "lakshx/checkpoint_compacted") {
           this.post({ type: "system", text: "Older undo history was compacted to bound disk usage — very old turns may no longer be undoable." });
         }
-        if (method === "koder/subagents_start") this.onSubagentsStart(params);
-        if (method === "koder/subagent_activity") this.onSubagentActivity(params);
-        if (method === "koder/subagents_end") this.onSubagentsEnd(params);
+        if (method === "lakshx/subagents_start") this.onSubagentsStart(params);
+        if (method === "lakshx/subagent_activity") this.onSubagentActivity(params);
+        if (method === "lakshx/subagents_end") this.onSubagentsEnd(params);
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -619,7 +619,7 @@ class AgentViewProvider {
       },
     });
     await this.acp.request("initialize", { protocolVersion: 1, clientCapabilities: {} });
-    const models = await this.acp.request("koder/models", {});
+    const models = await this.acp.request("lakshx/models", {});
     this.currentModel ??= models.defaultModel;
     await this.loadOrNewSession(resumeSessionId, cwd);
     this.post({ type: "ready", models });
@@ -667,7 +667,7 @@ class AgentViewProvider {
   }
 
   /**
-   * `koder/checkpoint` notification (doc 11 §3.2) — fired once per
+   * `lakshx/checkpoint` notification (doc 11 §3.2) — fired once per
    * successful mutating tool call. Feeds BOTH UI surfaces from the same
    * data: the chat panel gets the raw event (grouped/rendered by promptId in
    * panel.js); `fileCheckpoints` tracks, per path, only the LATEST prompt
@@ -690,7 +690,7 @@ class AgentViewProvider {
   }
 
   /**
-   * `koder/subagents_start`/`koder/subagent_activity`/`koder/subagents_end`
+   * `lakshx/subagents_start`/`lakshx/subagent_activity`/`lakshx/subagents_end`
    * (agent/src/loop.ts's `dispatch_subtasks` — parallel subagent fan-out) —
    * same pattern as `onCheckpoint` above: forward the notification's params
    * straight through to the webview as a transcript event, `panel.js` does
@@ -720,7 +720,7 @@ class AgentViewProvider {
 
   /**
    * Fan-out for "an undo just succeeded" — called from every place a
-   * `koder/undo_file`/`koder/undo_prompt` request (chat-panel buttons OR the
+   * `lakshx/undo_file`/`lakshx/undo_prompt` request (chat-panel buttons OR the
    * editor-title command) returns `ok:true`. Removes the reverted paths from
    * every piece of state that tracks "this file currently has an
    * agent-made change to undo," so all three surfaces (editor-title button +
@@ -752,11 +752,11 @@ class AgentViewProvider {
     this.checkpointDecorationProvider?.refresh(undefined);
   }
 
-  /** Recompute the `koder.fileHasCheckpoint` `when`-clause context key for whatever editor is currently active. */
+  /** Recompute the `lakshx.fileHasCheckpoint` `when`-clause context key for whatever editor is currently active. */
   refreshFileHasCheckpointContext() {
     const editor = vscode.window.activeTextEditor;
     const has = Boolean(editor && this.fileCheckpoints.has(toWorkspaceRelative(editor.document.uri.fsPath)));
-    vscode.commands.executeCommand("setContext", "koder.fileHasCheckpoint", has);
+    vscode.commands.executeCommand("setContext", "lakshx.fileHasCheckpoint", has);
   }
 
   /**
@@ -770,7 +770,7 @@ class AgentViewProvider {
     const rightUri = toAbsoluteUri(relPath);
     let content = null;
     try {
-      const res = await this.acp.request("koder/checkpoint_file_before", { sessionId: this.sessionId, promptId, path: relPath });
+      const res = await this.acp.request("lakshx/checkpoint_file_before", { sessionId: this.sessionId, promptId, path: relPath });
       content = res?.content ?? null;
     } catch (err) {
       this.post({ type: "system", text: `Could not load the pre-change version of ${relPath} (${err.message}) — opening the file instead.` });
@@ -925,7 +925,7 @@ class AgentViewProvider {
     }
 
     try {
-      let res = await this.acp.request("koder/undo_file", { sessionId: this.sessionId, path: relPath });
+      let res = await this.acp.request("lakshx/undo_file", { sessionId: this.sessionId, path: relPath });
       if (!res.ok && res.conflict) {
         const pick = await vscode.window.showWarningMessage(
           "This file has been edited since the agent last changed it. Undo will overwrite that edit.",
@@ -933,7 +933,7 @@ class AgentViewProvider {
           "Overwrite and Undo",
         );
         if (pick !== "Overwrite and Undo") return null;
-        res = await this.acp.request("koder/undo_file", { sessionId: this.sessionId, path: relPath, force: true });
+        res = await this.acp.request("lakshx/undo_file", { sessionId: this.sessionId, path: relPath, force: true });
       }
       return res;
     } catch (err) {
@@ -1024,7 +1024,7 @@ class AgentViewProvider {
       case "setModel":
         this.currentModel = m.model;
         if (this.acp && this.sessionId) {
-          await this.acp.request("koder/set_model", { sessionId: this.sessionId, model: m.model });
+          await this.acp.request("lakshx/set_model", { sessionId: this.sessionId, model: m.model });
         }
         break;
       case "setMode": {
@@ -1062,7 +1062,7 @@ class AgentViewProvider {
         // seen (not "today") so a later addUnseen check compares dates the
         // same way whatsNewHasUnseen() does above.
         const newest = entries[0]?.date ?? "";
-        await this.context.globalState.update("koder.whatsNew.lastSeenDate", newest);
+        await this.context.globalState.update("lakshx.whatsNew.lastSeenDate", newest);
         break;
       }
       case "loadChat": {
@@ -1131,7 +1131,7 @@ class AgentViewProvider {
         break;
       }
       case "openFeedbackLog":
-        vscode.commands.executeCommand("koder.openFeedbackLog");
+        vscode.commands.executeCommand("lakshx.openFeedbackLog");
         break;
       case "undoPrompt": {
         // Chat-panel surface (doc 11 §7): "Undo all N files" under a turn's
@@ -1139,7 +1139,7 @@ class AgentViewProvider {
         // only from this user-initiated webview message.
         if (!this.acp || !this.sessionId) break;
         try {
-          const res = await this.acp.request("koder/undo_prompt", {
+          const res = await this.acp.request("lakshx/undo_prompt", {
             sessionId: this.sessionId,
             promptId: m.promptId,
             force: Boolean(m.force),
@@ -1166,7 +1166,7 @@ class AgentViewProvider {
         // this panel's own inline confirm UI.
         if (!this.acp || !this.sessionId) break;
         try {
-          const res = await this.acp.request("koder/undo_file", {
+          const res = await this.acp.request("lakshx/undo_file", {
             sessionId: this.sessionId,
             path: m.path,
             force: Boolean(m.force),
@@ -1201,7 +1201,7 @@ class AgentViewProvider {
         const savedProvider = Object.keys(m.keys)[0];
         if (savedProvider && this.acp) {
           this.post({ type: "system", text: `checking ${savedProvider} key…` });
-          const result = await this.acp.request("koder/validate", { provider: savedProvider });
+          const result = await this.acp.request("lakshx/validate", { provider: savedProvider });
           if (result.ok) {
             this.post({ type: "system", text: `✓ ${savedProvider} key valid — ${result.models?.length ?? 0} models available` });
             this.post({ type: "providerModels", provider: savedProvider, models: result.models ?? [] });
@@ -1210,7 +1210,7 @@ class AgentViewProvider {
           }
         }
         if (this.acp) {
-          const models = await this.acp.request("koder/models", {});
+          const models = await this.acp.request("lakshx/models", {});
           this.post({ type: "ready", models });
         }
         break;
@@ -1218,12 +1218,12 @@ class AgentViewProvider {
       case "validateProvider": {
         if (!this.acp) await this.ensureAgent();
         if (!this.acp) break;
-        const result = await this.acp.request("koder/validate", { provider: m.provider });
+        const result = await this.acp.request("lakshx/validate", { provider: m.provider });
         this.post({ type: "providerStatus", provider: m.provider, ...result });
         break;
       }
       case "openSettingsFile":
-        vscode.commands.executeCommand("koder.openProviderSettings");
+        vscode.commands.executeCommand("lakshx.openProviderSettings");
         break;
       case "openLink": {
         const href = String(m.href ?? "");
@@ -1282,7 +1282,7 @@ class AgentViewProvider {
         // session it opened) ever emitted so much as a "system" notice, it
         // would land in the transcript and get persisted as a titleless
         // "Untitled chat". Instead, populate the model dropdown from a
-        // cheap local read of ~/.koder/providers.json (no process spawn),
+        // cheap local read of ~/.lakshx/providers.json (no process spawn),
         // and defer the real runtime connection + live model list to the
         // first actual "send" (which already calls ensureAgent()) or to
         // opening the settings sheet.
@@ -1408,28 +1408,28 @@ async function activate(context) {
   const checkpointDecorationProvider = new CheckpointDecorationProvider(provider);
   provider.checkpointDecorationProvider = checkpointDecorationProvider;
 
-  // Koder ships its own agent — make sure the leftover built-in chat surfaces
+  // LakshX ships its own agent — make sure the leftover built-in chat surfaces
   // stay off even where extension configurationDefaults don't reach (packaged
   // builds' setup views). One-time, respects later manual changes.
-  if (!context.globalState.get("koder.chatDisabled.v1")) {
+  if (!context.globalState.get("lakshx.chatDisabled.v1")) {
     const cfg = vscode.workspace.getConfiguration();
     try {
       await cfg.update("chat.disableAIFeatures", true, vscode.ConfigurationTarget.Global);
       await cfg.update("chat.commandCenter.enabled", false, vscode.ConfigurationTarget.Global);
     } catch {}
-    context.globalState.update("koder.chatDisabled.v1", true);
+    context.globalState.update("lakshx.chatDisabled.v1", true);
   }
 
   const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
-  statusItem.text = "✦ Koder";
-  statusItem.tooltip = "Open Koder Agent (⌘L)";
-  statusItem.command = "koder.openAgent";
+  statusItem.text = "✦ LakshX";
+  statusItem.tooltip = "Open LakshX Agent (⌘L)";
+  statusItem.command = "lakshx.openAgent";
   statusItem.show();
 
   // agent-first IDE: the agent panel is part of the default layout — open it
   // on every startup unless the user turned that off
-  if (vscode.workspace.getConfiguration("koder").get("agent.openOnStartup", true)) {
-    setTimeout(() => vscode.commands.executeCommand("koder.chatView.focus"), 900);
+  if (vscode.workspace.getConfiguration("lakshx").get("agent.openOnStartup", true)) {
+    setTimeout(() => vscode.commands.executeCommand("lakshx.chatView.focus"), 900);
   }
 
   // ---------- Remote Access status bar toggle (off by default) ----------
@@ -1437,12 +1437,12 @@ async function activate(context) {
   const updateRemoteStatus = () => {
     if (provider.remote?.isRunning) {
       remoteStatusItem.text = `$(radio-tower) Remote: ${provider.remote.port}`;
-      remoteStatusItem.tooltip = `Koder Remote Access is ON (view + control) — ${provider.remote.info().url}\nClick to show the QR code again.`;
-      remoteStatusItem.command = "koder.showRemoteAccessQr";
+      remoteStatusItem.tooltip = `LakshX Remote Access is ON (view + control) — ${provider.remote.info().url}\nClick to show the QR code again.`;
+      remoteStatusItem.command = "lakshx.showRemoteAccessQr";
     } else {
       remoteStatusItem.text = "$(radio-tower) Remote: off";
-      remoteStatusItem.tooltip = "Koder Remote Access — view and control this chat from your phone over WiFi (off by default)";
-      remoteStatusItem.command = "koder.enableRemoteAccess";
+      remoteStatusItem.tooltip = "LakshX Remote Access — view and control this chat from your phone over WiFi (off by default)";
+      remoteStatusItem.command = "lakshx.enableRemoteAccess";
     }
   };
   updateRemoteStatus();
@@ -1453,7 +1453,7 @@ async function activate(context) {
   async function startRemoteAccess() {
     if (provider.remote?.isRunning) {
       remoteQrPanel?.dispose();
-      remoteQrPanel = showRemoteAccessPanel(provider.remote.info(), vscode.workspace.workspaceFolders?.[0]?.name ?? "Koder");
+      remoteQrPanel = showRemoteAccessPanel(provider.remote.info(), vscode.workspace.workspaceFolders?.[0]?.name ?? "LakshX");
       return;
     }
     // This warning was strengthened for Phase B (docs/research/10 §2.4/§3):
@@ -1462,7 +1462,7 @@ async function activate(context) {
     // itself, minus BYOK key management. It is re-shown once even to users
     // who already acked the older view-only wording (distinct globalState
     // key), because the risk it describes materially changed.
-    if (!context.globalState.get("koder.remoteAccess.controlWarningAcked")) {
+    if (!context.globalState.get("lakshx.remoteAccess.controlWarningAcked")) {
       const choice = await vscode.window.showWarningMessage(
         "Remote Access starts a small server on your WiFi/LAN so you can view AND control this chat from your " +
           "phone: a paired phone can watch the conversation live, send new prompts, approve or deny permission " +
@@ -1473,7 +1473,7 @@ async function activate(context) {
         "Enable Remote Access",
       );
       if (choice !== "Enable Remote Access") return;
-      await context.globalState.update("koder.remoteAccess.controlWarningAcked", true);
+      await context.globalState.update("lakshx.remoteAccess.controlWarningAcked", true);
     }
     const { RemoteServer } = require("./remote-server.js");
     provider.remote = new RemoteServer({
@@ -1488,18 +1488,18 @@ async function activate(context) {
       const info = await provider.remote.start();
       updateRemoteStatus();
       remoteQrPanel?.dispose();
-      remoteQrPanel = showRemoteAccessPanel(info, vscode.workspace.workspaceFolders?.[0]?.name ?? "Koder");
+      remoteQrPanel = showRemoteAccessPanel(info, vscode.workspace.workspaceFolders?.[0]?.name ?? "LakshX");
       remoteQrPanel.onDidDispose(() => { remoteQrPanel = null; });
-      vscode.window.showInformationMessage(`Koder Remote Access is on: ${info.url}`);
+      vscode.window.showInformationMessage(`LakshX Remote Access is on: ${info.url}`);
     } catch (err) {
       provider.remote = null;
-      vscode.window.showErrorMessage(`Could not start Koder Remote Access: ${err.message}`);
+      vscode.window.showErrorMessage(`Could not start LakshX Remote Access: ${err.message}`);
     }
   }
 
   function stopRemoteAccess() {
     if (!provider.remote) {
-      vscode.window.showInformationMessage("Koder Remote Access is already off.");
+      vscode.window.showInformationMessage("LakshX Remote Access is already off.");
       return;
     }
     provider.remote.stop();
@@ -1507,43 +1507,43 @@ async function activate(context) {
     updateRemoteStatus();
     remoteQrPanel?.dispose();
     remoteQrPanel = null;
-    vscode.window.showInformationMessage("Koder Remote Access is off.");
+    vscode.window.showInformationMessage("LakshX Remote Access is off.");
   }
 
   context.subscriptions.push(
     statusItem,
     remoteStatusItem,
     { dispose: () => provider.remote?.stop() },
-    vscode.commands.registerCommand("koder.enableRemoteAccess", startRemoteAccess),
-    vscode.commands.registerCommand("koder.showRemoteAccessQr", startRemoteAccess),
-    vscode.commands.registerCommand("koder.disableRemoteAccess", stopRemoteAccess),
-    vscode.window.registerWebviewViewProvider("koder.chatView", provider, {
+    vscode.commands.registerCommand("lakshx.enableRemoteAccess", startRemoteAccess),
+    vscode.commands.registerCommand("lakshx.showRemoteAccessQr", startRemoteAccess),
+    vscode.commands.registerCommand("lakshx.disableRemoteAccess", stopRemoteAccess),
+    vscode.window.registerWebviewViewProvider("lakshx.chatView", provider, {
       webviewOptions: { retainContextWhenHidden: false },
     }),
-    vscode.commands.registerCommand("koder.openAgent", () =>
-      vscode.commands.executeCommand("koder.chatView.focus"),
+    vscode.commands.registerCommand("lakshx.openAgent", () =>
+      vscode.commands.executeCommand("lakshx.chatView.focus"),
     ),
-    vscode.commands.registerCommand("koder.newChat", () => provider.newChat()),
-    vscode.commands.registerCommand("koder.configureProviders", async () => {
-      await vscode.commands.executeCommand("koder.chatView.focus");
+    vscode.commands.registerCommand("lakshx.newChat", () => provider.newChat()),
+    vscode.commands.registerCommand("lakshx.configureProviders", async () => {
+      await vscode.commands.executeCommand("lakshx.chatView.focus");
       provider.post({ type: "showSettings", providers: readProviderState() });
     }),
-    vscode.commands.registerCommand("koder.openProviderSettings", async () => {
-      const dir = path.join(os.homedir(), ".koder");
+    vscode.commands.registerCommand("lakshx.openProviderSettings", async () => {
+      const dir = path.join(os.homedir(), ".lakshx");
       const file = path.join(dir, "providers.json");
       fs.mkdirSync(dir, { recursive: true });
       if (!fs.existsSync(file)) fs.writeFileSync(file, PROVIDERS_TEMPLATE);
       const doc = await vscode.workspace.openTextDocument(file);
       vscode.window.showTextDocument(doc);
     }),
-    vscode.commands.registerCommand("koder.addSelectionToChat", async () => {
+    vscode.commands.registerCommand("lakshx.addSelectionToChat", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
       const attachment = provider.attachmentFromEditor(editor);
-      await vscode.commands.executeCommand("koder.chatView.focus");
+      await vscode.commands.executeCommand("lakshx.chatView.focus");
       provider.view?.webview.postMessage({ type: "addAttachment", attachment });
     }),
-    vscode.commands.registerCommand("koder.openFeedbackLog", async () => {
+    vscode.commands.registerCommand("lakshx.openFeedbackLog", async () => {
       // Opens this month's local feedback JSONL — the "give you the log
       // file" step from a one-click command, no file-hunting required.
       const file = feedbackFile();
@@ -1552,7 +1552,7 @@ async function activate(context) {
       vscode.window.showTextDocument(doc);
     }),
     // ---------- editor-title undo (doc 11 §6) ----------
-    vscode.commands.registerCommand("koder.undoFileChanges", async () => {
+    vscode.commands.registerCommand("lakshx.undoFileChanges", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
       const relPath = toWorkspaceRelative(editor.document.uri.fsPath);
@@ -1567,7 +1567,7 @@ async function activate(context) {
       provider.post({ type: "system", text: `Reverted ${relPath}.` });
     }),
     vscode.window.onDidChangeActiveTextEditor(() => provider.refreshFileHasCheckpointContext()),
-    vscode.workspace.registerTextDocumentContentProvider("koder-checkpoint", checkpointContentProvider),
+    vscode.workspace.registerTextDocumentContentProvider("lakshx-checkpoint", checkpointContentProvider),
     vscode.window.registerFileDecorationProvider(checkpointDecorationProvider),
   );
 }

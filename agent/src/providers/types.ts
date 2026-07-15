@@ -60,7 +60,7 @@ export interface ChatAdapter {
  * merely slow one by silence, not by total elapsed time.
  */
 export function streamIdleMs(): number {
-  const v = Number(process.env.KODER_STREAM_IDLE_MS);
+  const v = Number(process.env.LAKSHX_STREAM_IDLE_MS);
   return Number.isFinite(v) && v > 0 ? v : 45_000;
 }
 

@@ -1,4 +1,4 @@
-// Koder agent panel UI. No frameworks — small, fast, ours.
+// LakshX agent panel UI. No frameworks — small, fast, ours.
 const vscode = acquireVsCodeApi();
 
 const messagesEl = document.getElementById("messages");
@@ -40,8 +40,8 @@ let turnHasText = false;
 
 // ---------- rendering ----------
 function renderRich(raw) {
-  if (window.koderMarkdown) {
-    const { html, codes } = window.koderMarkdown.render(raw);
+  if (window.lakshxMarkdown) {
+    const { html, codes } = window.lakshxMarkdown.render(raw);
     for (const [k, v] of Object.entries(codes)) codeStore[`s${codeSeq}-${k}`] = v;
     return html.replace(/data-code-id="(\d+)"/g, (m, id) => `data-code-id="s${codeSeq}-${id}"`);
   }
@@ -55,7 +55,7 @@ function renderRich(raw) {
 function showEmpty() {
   messagesEl.innerHTML = `<div class="empty">
     <svg class="mark" width="34" height="34" viewBox="0 0 24 24"><path d="M12 2 L13.8 8.6 L20 5.5 L15.4 10.8 L22 12 L15.4 13.2 L20 18.5 L13.8 15.4 L12 22 L10.2 15.4 L4 18.5 L8.6 13.2 L2 12 L8.6 10.8 L4 5.5 L10.2 8.6 Z" fill="currentColor"/></svg>
-    <div class="title">Koder Agent</div>
+    <div class="title">LakshX Agent</div>
     <div class="hint">Review plans first. Approve executes with your OK. Auto runs free.</div>
     <button id="ctaProviders" class="cta">Config Model</button>
     <div class="hint"><kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> newline</div>
@@ -152,7 +152,7 @@ function addTool(t) {
 // Two surfaces, same underlying "checkpoint"/"checkpointReverted" event
 // stream, same undo primitives:
 //  - `checkpointCards`: one card per promptId, inline in the transcript,
-//    accumulated live as `koder/checkpoint` events arrive (not batched to
+//    accumulated live as `lakshx/checkpoint` events arrive (not batched to
 //    turnEnd — a long multi-tool turn shows its file list growing in real
 //    time) and identically on replay. Good for "what did THIS turn touch."
 //  - `sessionFiles`: a single composer-anchored summary bar aggregating

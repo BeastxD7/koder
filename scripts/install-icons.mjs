@@ -1,4 +1,4 @@
-// Installs Koder icons into upstream resources for whichever platforms the
+// Installs LakshX icons into upstream resources for whichever platforms the
 // assets exist for. Called from prepare.sh — cross-platform (pure Node).
 import { copyFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";

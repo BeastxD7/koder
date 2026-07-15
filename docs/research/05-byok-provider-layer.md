@@ -23,7 +23,7 @@
 - **OpenRouter**: ship as a provider entry (1M BYOK req/mo free, then 5%), not as the architecture.
 
 ## Key storage best practice
-Industry norm = OS keychain: VS Code SecretStorage (BYOK GA June 2026, works without GitHub sign-in), Zed system keychain + env override, Cline SecretStorage (its CLI plaintext fallback is the criticized anti-pattern). **Koder TODO Phase 2: Electron safeStorage for keys; env + ${env:VAR} references; never per-project files (committed!); redact from logs; warn on custom baseUrl + existing key (exfiltration vector).** v1 plaintext ~/.koder/providers.json is a stopgap.
+Industry norm = OS keychain: VS Code SecretStorage (BYOK GA June 2026, works without GitHub sign-in), Zed system keychain + env override, Cline SecretStorage (its CLI plaintext fallback is the criticized anti-pattern). **LakshX TODO Phase 2: Electron safeStorage for keys; env + ${env:VAR} references; never per-project files (committed!); redact from logs; warn on custom baseUrl + existing key (exfiltration vector).** v1 plaintext ~/.lakshx/providers.json is a stopgap.
 
 ## Model picker / cost UX
 Group by provider; show ctx window, tool/vision badges, $/M in+out; per-role model choice (agent vs chat vs commit-msg); per-message cost from usage chunk × versioned local pricing catalog (models.dev-style) with remote refresh; running per-task total + context fill meter; fallback chains must surface model switches in transcript, never silent.

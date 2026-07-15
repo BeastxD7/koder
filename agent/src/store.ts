@@ -1,7 +1,7 @@
 /**
  * Local session persistence — makes "resume an old chat" actually restore
  * the agent's working memory (session.history), not just a rendered view.
- * Plain JSON files under ~/.koder/sessions/, atomic writes, debounced.
+ * Plain JSON files under ~/.lakshx/sessions/, atomic writes, debounced.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -39,7 +39,7 @@ export interface StoredSession {
 }
 
 function sessionsDir(): string {
-  const dir = join(homedir(), ".koder", "sessions");
+  const dir = join(homedir(), ".lakshx", "sessions");
   mkdirSync(dir, { recursive: true });
   return dir;
 }

@@ -1,11 +1,11 @@
 {
-  "name": "@koder/agent",
+  "name": "@lakshx/agent",
   "version": "0.0.1",
   "private": true,
-  "description": "Koder Agent Runtime — editor-independent, speaks ACP. Phase 0: ACP client spike driving Claude Code.",
+  "description": "LakshX Agent Runtime — editor-independent, speaks ACP. Phase 0: ACP client spike driving Claude Code.",
   "type": "module",
   "bin": {
-    "koder-agent": "./src/server.ts"
+    "lakshx-agent": "./src/server.ts"
   },
   "scripts": {
     "spike": "tsx src/spike.ts",

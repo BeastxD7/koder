@@ -1,6 +1,6 @@
 # Research: The Memory + Context Layer (July 2026)
 
-Design for what the Koder agent runtime feeds the model per query and follow-up, and what it remembers across process restarts. All storage local (`~/.koder/*`, `<workspace>/.koder/*`). Grounded in the current code: `agent/src/loop.ts`, `server.ts`, `config.ts`, `tools.ts`, `providers/*`.
+Design for what the LakshX agent runtime feeds the model per query and follow-up, and what it remembers across process restarts. All storage local (`~/.lakshx/*`, `<workspace>/.lakshx/*`). Grounded in the current code: `agent/src/loop.ts`, `server.ts`, `config.ts`, `tools.ts`, `providers/*`.
 
 ---
 
@@ -15,8 +15,8 @@ Design for what the Koder agent runtime feeds the model per query and follow-up,
 | Tool results: `grep` and `bash` hard-`slice(0, 60_000)` — pure head truncation, no elision marker, tail (where test failures live) is lost. `read_file` caps at 800 lines but has **no char cap** (one minified line = unbounded). | `tools.ts:141,172,174,40` |
 | No compaction, no token counting, no loop detection, no retry guidance. `MAX_ITERATIONS = 60` is the only brake. | `loop.ts:31,98` |
 | Tool errors go back verbatim (`ERROR: old_string not found in file`) with no recovery hint. | `loop.ts:159-163`, `tools.ts:87` |
-| The extension persists **render transcripts** (webview events) to `~/.koder/chats/<chatId>.json`; "open old chat" replays the view then calls `session/new` — the agent starts amnesiac. | `upstream/extensions/koder-chat/extension.js:167-214, 392-401` |
-| `~/.koder/providers.json` holds plaintext API keys — anything we persist must never embed config/env. | `config.ts:39-67` |
+| The extension persists **render transcripts** (webview events) to `~/.lakshx/chats/<chatId>.json`; "open old chat" replays the view then calls `session/new` — the agent starts amnesiac. | `upstream/extensions/koder-chat/extension.js:167-214, 392-401` |
+| `~/.lakshx/providers.json` holds plaintext API keys — anything we persist must never embed config/env. | `config.ts:39-67` |
 | No tree-sitter, no SDKs; adapters are bare `fetch` + SSE. Adding heavy deps is a real cost. | `providers/*` |
 
 The loop is deliberately thin (mini-SWE-agent lesson). Everything below keeps it thin: **context assembly is code, memory is files, the loop stays ~200 lines.**
@@ -33,7 +33,7 @@ Evidence landscape:
 - **Claude Code** ships **no repo map and no index**: pure agentic search (glob/grep/read by the model), plus `CLAUDE.md` for durable orientation. Boris Cherny (its creator): early prototypes used RAG + a local vector DB, but "agentic search outperformed [RAG] by a lot… [without] the same issues around security, privacy, staleness, and reliability." Anthropic's context-engineering guidance names this "just-in-time retrieval" — keep lightweight identifiers (paths, queries), load content at runtime.
 - **Cline** is explicitly anti-index — confirmed post "Why Cline Doesn't Index Your Codebase (And Why That's a Good Thing)" (`cline.bot/blog`, May 27 2025): chunking for embeddings "tears apart logic" (compares it to hearing 10-second clips of a symphony), indexes drift stale on every merge, vector embeddings double the security surface. Interesting middle path: its **`list_code_definition_names` tool** (`src/services/tree-sitter/index.ts`) — tree-sitter outlines computed *on demand* per tool call, top-level defs only, no persistent index, covering python/js/ts/ruby/go/java/php/rust/c/c++/c#/swift with known per-language reliability gaps (`github.com/cline/cline` issues #4366, #704). **Windsurf** (now folded into Cognition's "Devin Desktop" — see §2.2) was the counter-model: local+remote indexing with a proprietary retrieval engine, server-assisted, not our local-first shape; treat the specific recall-multiplier marketing claim as unverified rather than repeat it.
 
-Conclusion for Koder: agentic grep is the primary retrieval (we have it); a repo map's job is only **orientation** — teach the model the shape of the repo so its first grep/read is aimed well. That's worth ~1k tokens, not more. Tiered design:
+Conclusion for LakshX: agentic grep is the primary retrieval (we have it); a repo map's job is only **orientation** — teach the model the shape of the repo so its first grep/read is aimed well. That's worth ~1k tokens, not more. Tiered design:
 
 | Tier | Content | Tokens | When |
 |---|---|---|---|
@@ -81,12 +81,12 @@ Why paths, not contents: (a) contents are often the wrong file — burned tokens
 | Repo map / hints | Not re-sent per turn (cache poison + redundancy). Session keeps `filesTouched: Set<string>` (from read/edit/write tool inputs) — used to boost map ranking at compaction-refresh and **required content in the compaction summary** so file salience survives. |
 | Conversation-aware boost | Files mentioned in any user message or touched by tools rank first in the refreshed map — this is exactly Aider's PageRank personalization, done with a set instead of a graph. |
 
-### 1.4 Rules files: AGENTS.md / .koder/rules.md
+### 1.4 Rules files: AGENTS.md / .lakshx/rules.md
 
-The `AGENTS.md` convention (agents.md, launched by OpenAI Aug 2025) is the portable project-rules carrier: plain markdown, **no required schema**, "closest AGENTS.md to the edited file wins; explicit user chat prompts override everything," 60k+ OSS projects (confirmed live on agents.md, linked to a GitHub code search) and 25+ tools (Codex, Cursor, Zed, Gemini CLI, Devin, GitHub Copilot, Jules, VS Code…) by mid-2026. It now sits under real governance: on Dec 9, 2025, OpenAI, Anthropic, and Block launched the **Agentic AI Foundation (AAIF)** — a directed fund *under* the Linux Foundation (same relationship as CNCF), Platinum members AWS/Google/Microsoft/Bloomberg/Cloudflare — anchoring three contributions together: MCP (Anthropic), goose (Block), and AGENTS.md (OpenAI). Codex caps combined project-instruction content (its whole loaded hierarchy, not one file) at 32 KiB (`project_doc_max_bytes`, silently truncates — see `openai/codex#7138`). Claude Code notably still reads only its own `CLAUDE.md` hierarchy (managed → user `~/.claude/CLAUDE.md` → project `./CLAUDE.md`/`.claude/CLAUDE.md` → `CLAUDE.local.md`, concatenated not overridden, `@path` imports max depth 4) plus its separate auto-memory system (§2.2) — which is an argument for Koder to read *both* conventions rather than mint yet another mandatory filename. Design:
+The `AGENTS.md` convention (agents.md, launched by OpenAI Aug 2025) is the portable project-rules carrier: plain markdown, **no required schema**, "closest AGENTS.md to the edited file wins; explicit user chat prompts override everything," 60k+ OSS projects (confirmed live on agents.md, linked to a GitHub code search) and 25+ tools (Codex, Cursor, Zed, Gemini CLI, Devin, GitHub Copilot, Jules, VS Code…) by mid-2026. It now sits under real governance: on Dec 9, 2025, OpenAI, Anthropic, and Block launched the **Agentic AI Foundation (AAIF)** — a directed fund *under* the Linux Foundation (same relationship as CNCF), Platinum members AWS/Google/Microsoft/Bloomberg/Cloudflare — anchoring three contributions together: MCP (Anthropic), goose (Block), and AGENTS.md (OpenAI). Codex caps combined project-instruction content (its whole loaded hierarchy, not one file) at 32 KiB (`project_doc_max_bytes`, silently truncates — see `openai/codex#7138`). Claude Code notably still reads only its own `CLAUDE.md` hierarchy (managed → user `~/.claude/CLAUDE.md` → project `./CLAUDE.md`/`.claude/CLAUDE.md` → `CLAUDE.local.md`, concatenated not overridden, `@path` imports max depth 4) plus its separate auto-memory system (§2.2) — which is an argument for LakshX to read *both* conventions rather than mint yet another mandatory filename. Design:
 
-- **Project rules**, first existing of: `<cwd>/.koder/rules.md` → `<cwd>/AGENTS.md` → `<cwd>/CLAUDE.md` (read-compat with the ecosystem; our own file wins). Cap 24 KiB, truncate with marker.
-- **User rules**: `~/.koder/rules.md` (global preferences: "never use emoji in code comments", "prefer pnpm").
+- **Project rules**, first existing of: `<cwd>/.lakshx/rules.md` → `<cwd>/AGENTS.md` → `<cwd>/CLAUDE.md` (read-compat with the ecosystem; our own file wins). Cap 24 KiB, truncate with marker.
+- **User rules**: `~/.lakshx/rules.md` (global preferences: "never use emoji in code comments", "prefer pnpm").
 - **Injection point**: `systemPrompt()` in `loop.ts`, after the mode block, before the env block (see §3 ordering), wrapped in delimiters with provenance:
 
 ```
@@ -103,11 +103,11 @@ Rules are *trusted* (unlike tool output, §3.3) but still delimited so the model
 
 ## 2. Pillar 2 — Memory (persistent, local)
 
-### 2.1 Session persistence + resume (`~/.koder/sessions/`)
+### 2.1 Session persistence + resume (`~/.lakshx/sessions/`)
 
 Today resume is fake: the extension replays render events and opens a fresh `session/new` (extension.js:392-401). The fix is runtime-side, provider-neutral, and small because `ChatMessage[]` is already pure JSON.
 
-**File**: `~/.koder/sessions/<sessionId>.json`
+**File**: `~/.lakshx/sessions/<sessionId>.json`
 
 ```jsonc
 {
@@ -142,7 +142,7 @@ Today resume is fake: the extension replays render events and opens a fresh `ses
 })
 ```
 
-3. **Extension side**: store `sessionId` in the chat JSON (`~/.koder/chats/<chatId>.json` gains a `sessionId` field); "open old chat" renders its own transcript (as today, so replay can be visually suppressed) then calls `session/load` instead of `session/new`. If `session/load` errors (file pruned), fall back to `session/new` and tell the user memory wasn't recoverable.
+3. **Extension side**: store `sessionId` in the chat JSON (`~/.lakshx/chats/<chatId>.json` gains a `sessionId` field); "open old chat" renders its own transcript (as today, so replay can be visually suppressed) then calls `session/load` instead of `session/new`. If `session/load` errors (file pruned), fall back to `session/new` and tell the user memory wasn't recoverable.
 4. Resumed histories that exceed the compaction threshold (§4.2) get compacted lazily on the first new prompt, not at load.
 
 **Pruning**: on server start, keep newest 200 session files and delete files older than 60 days (both configurable). A 100-turn session serializes to ~1–4 MB; 200 files ≈ worst-case few hundred MB, typical tens of MB.
@@ -155,22 +155,22 @@ Patterns worth copying, mid-2026:
 - **Cline Memory Bank**: not a product feature — a custom-instruction methodology (confirmed still true mid-2026, `docs.cline.bot/best-practices/memory-bank`). Structured markdown directory (`projectbrief.md`, `productContext.md`, `activeContext.md`, `systemPatterns.md`, `techContext.md`, `progress.md`) that the *model* maintains on command ("update memory bank"), reading ALL files at the start of EVERY task via prompt text ("I MUST read ALL memory bank files"), not hard-coded product logic. Strength: structure. Weakness: heavyweight ceremony, easily stale, burns tokens every session.
 - **Windsurf Memories** — note the product has since moved: `docs.windsurf.com` now 307-redirects to `docs.devin.ai/desktop/cascade/memories` (Cognition absorbed Windsurf into "Devin Desktop"; `.devin/rules/` is the current primary directory, `.windsurf/rules/` kept only as legacy fallback). The mechanics carry over unchanged: auto-generated memories (Cascade decides mid-task something is worth keeping, stored locally) + user rules — `global_rules.md` capped at **6,000 chars**, workspace rule files at **12,000 chars each**, with per-rule activation modes (`always_on`, `model_decision`, `glob`, manual `@mention` — all four confirmed exact). Strength: zero-friction capture; the `model_decision` mode (only the rule's *description* rides in the system prompt, full text pulled on demand) is a smart token trick. Weakness: opaque capture; users report surprise at what got remembered.
 
-**Koder design — directory (global) + single file (project) + one tool.** We deliberately mirror Claude Code's proven directory+index shape only where unbounded growth is the real risk (global memory accumulates across every project, forever) and stay flat where it isn't (project memory is scoped to one repo's lifetime and, per §2.3, capped at 32 KiB anyway):
+**LakshX design — directory (global) + single file (project) + one tool.** We deliberately mirror Claude Code's proven directory+index shape only where unbounded growth is the real risk (global memory accumulates across every project, forever) and stay flat where it isn't (project memory is scoped to one repo's lifetime and, per §2.3, capped at 32 KiB anyway):
 
 ```
-~/.koder/memory/MEMORY.md       # global user memory — index, loaded every session (cap 8 KiB, §2.2 injection)
-~/.koder/memory/<topic>.md      # global topic files (e.g. providers.md, shell-quirks.md) — read on demand only, never auto-injected
-<workspace>/.koder/memory.md    # project memory — single flat file (build quirks, conventions, gotchas)
+~/.lakshx/memory/MEMORY.md       # global user memory — index, loaded every session (cap 8 KiB, §2.2 injection)
+~/.lakshx/memory/<topic>.md      # global topic files (e.g. providers.md, shell-quirks.md) — read on demand only, never auto-injected
+<workspace>/.lakshx/memory.md    # project memory — single flat file (build quirks, conventions, gotchas)
 ```
 
-Plain markdown bullet lists, one memory per bullet, `- [2026-07-14] pnpm not npm; postinstall needs KODER_SKIP_ELECTRON=1`. Topic files exist from day one of Phase C only as an escape valve for consolidation (§2.3) — the `remember` tool writes to `MEMORY.md` by default and only the model's own consolidation step (or the user) creates topic files, exactly as Claude Code's does.
+Plain markdown bullet lists, one memory per bullet, `- [2026-07-14] pnpm not npm; postinstall needs LAKSHX_SKIP_ELECTRON=1`. Topic files exist from day one of Phase C only as an escape valve for consolidation (§2.3) — the `remember` tool writes to `MEMORY.md` by default and only the model's own consolidation step (or the user) creates topic files, exactly as Claude Code's does.
 
 **Write triggers** (in order of shipping):
 1. **Explicit tool** (`remember`): `{ scope: "project"|"global", text: string }` — appends a dated bullet. Marked `dangerous: false` but announced in the transcript (`kind: "edit"` title "Remember: …") so the user sees every write. The system prompt tells the model to use it *sparingly*: "only durable, generally useful facts you verified — never speculation, never secrets."
 2. **User-initiated**: extension surfaces "remember this" on any message → sends a hidden `remember` instruction. (Claude Code's `#`.)
 3. **End-of-task reflection** (Phase C, opt-in flag): when a turn ends with `end_turn` in approve/auto mode and >N tool calls ran, append one extra cheap-model call: "List 0–3 durable facts learned this session worth persisting (or NONE)." Auto-write only project scope, cap 3/session. This is the Windsurf pattern with a visibility guarantee: each auto-memory is posted to the transcript.
 
-**Injection**: `~/.koder/memory/MEMORY.md` and `<workspace>/.koder/memory.md` into `systemPrompt()` after project rules, same delimiter pattern (`<memory scope=global>…`/`<memory scope=project>…`), **hard cap 8 KiB each at injection** (oldest bullets dropped first — the file keeps everything; only the injected view truncates; a header line tells the model "oldest entries omitted"). Global topic files under `~/.koder/memory/*.md` are never auto-injected — the model `read_file`s one only when a bullet in `MEMORY.md` points at it (`See providers.md for the full OAuth quirk list`), same just-in-time principle as §1.2.
+**Injection**: `~/.lakshx/memory/MEMORY.md` and `<workspace>/.lakshx/memory.md` into `systemPrompt()` after project rules, same delimiter pattern (`<memory scope=global>…`/`<memory scope=project>…`), **hard cap 8 KiB each at injection** (oldest bullets dropped first — the file keeps everything; only the injected view truncates; a header line tells the model "oldest entries omitted"). Global topic files under `~/.lakshx/memory/*.md` are never auto-injected — the model `read_file`s one only when a bullet in `MEMORY.md` points at it (`See providers.md for the full OAuth quirk list`), same just-in-time principle as §1.2.
 
 ### 2.3 What NOT to store, caps, pruning
 
@@ -230,13 +230,13 @@ Ground truth beats estimation, and we already parse it:
 - **OpenAI-compat**: add `stream_options: { include_usage: true }` to the request body (`openai-compat.ts:22`) — one line; the final chunk then carries `usage.prompt_tokens/completion_tokens`, which the adapter already parses (`:48`). Some compat servers (older Ollama etc.) ignore it → fallback estimator.
 - **Fallback estimator**: `Math.ceil(chars/3.6)` over serialized history + system + tool schemas (code-heavy text runs denser than the folk chars/4). Only used until the first real usage arrives, then continuously corrected: `ratio = lastRealInput / lastEstimatedInput` applied to subsequent estimates.
 
-Loop change: `session.inputTokens = result.usage?.inputTokens ?? estimate(...)` right after `runTurn`; expose it in a `koder/usage`-style notification so the panel can render a context meter.
+Loop change: `session.inputTokens = result.usage?.inputTokens ?? estimate(...)` right after `runTurn`; expose it in a `lakshx/usage`-style notification so the panel can render a context meter.
 
 **Context-window table** (in `config.ts`, per-provider default + per-model override in `providers.json`): anthropic 200k, openai 128k (400k for gpt-5.x-class ids), deepseek 128k, groq/cerebras per model, ollama 32k default. `contextWindow?: number` on `ProviderConfig`; `resolveModel` returns it.
 
 ### 4.2 Compaction
 
-- **When**: `inputTokens > 0.70 × contextWindow`, checked at the top of the `runPrompt` iteration loop (before `runTurn`), and once at prompt-start for resumed sessions. **This is deliberately earlier than Claude Code's own threshold, not a match to it** — corrected fact: Claude Code does *not* compact at a low threshold. Its docs describe the mechanism qualitatively ("clears older tool outputs first, then summarizes" as the window fills — `code.claude.com/docs/en/how-claude-code-works`), and the one hard number now published is for Sonnet 5's 1M-token window: auto-compact "at about 967K tokens by default" ≈ **96.7%** fill (`code.claude.com/docs/en/model-config#sonnet-5-context-window`); `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` can only *lower* that ceiling, never raise it. Community reports on smaller/older configs range 83–95%, reflecting drift across versions — there is no single current "~95%" figure to copy. We deliberately compact **earlier, at 70%**, for a reason specific to us: Claude Code's floor is safe because Claude's context windows are large (200K–1M) and homogeneous; Koder is BYOK across providers with much smaller windows in the mix (Ollama defaults as low as 32K, §4.1's table) — compacting at 95% on a 32K-window local model leaves ~1.6K tokens of headroom, not enough to run the compaction call itself plus absorb one more large tool result before the *next* turn overflows. 70% is the conservative, provider-agnostic choice; it can be loosened per-model once we have real usage data.
+- **When**: `inputTokens > 0.70 × contextWindow`, checked at the top of the `runPrompt` iteration loop (before `runTurn`), and once at prompt-start for resumed sessions. **This is deliberately earlier than Claude Code's own threshold, not a match to it** — corrected fact: Claude Code does *not* compact at a low threshold. Its docs describe the mechanism qualitatively ("clears older tool outputs first, then summarizes" as the window fills — `code.claude.com/docs/en/how-claude-code-works`), and the one hard number now published is for Sonnet 5's 1M-token window: auto-compact "at about 967K tokens by default" ≈ **96.7%** fill (`code.claude.com/docs/en/model-config#sonnet-5-context-window`); `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` can only *lower* that ceiling, never raise it. Community reports on smaller/older configs range 83–95%, reflecting drift across versions — there is no single current "~95%" figure to copy. We deliberately compact **earlier, at 70%**, for a reason specific to us: Claude Code's floor is safe because Claude's context windows are large (200K–1M) and homogeneous; LakshX is BYOK across providers with much smaller windows in the mix (Ollama defaults as low as 32K, §4.1's table) — compacting at 95% on a 32K-window local model leaves ~1.6K tokens of headroom, not enough to run the compaction call itself plus absorb one more large tool result before the *next* turn overflows. 70% is the conservative, provider-agnostic choice; it can be loosened per-model once we have real usage data.
 - **How** (`compactHistory(session, adapter, model)` in a new `agent/src/context.ts`):
   1. Choose a cut index `j`: the smallest index ≥ 60% of messages such that `history[j].role === "user"` and every block in it is `text` (never orphan a `tool_use` from its `tool_result` — Anthropic hard-errors on that).
   2. Always keep `history[0]` (the original task statement) verbatim.
@@ -288,7 +288,7 @@ In `runPrompt`, keep `lastSig` + `repeatCount` where `sig = name + ":" + canonic
 | # | Change | File | Sketch |
 |---|---|---|---|
 | A1 | `envBlock(cwd)` appended (last) to system prompt | `loop.ts` | `execSync("git rev-parse --abbrev-ref HEAD")`, `git status --porcelain \| wc -l`, `process.platform/version`, date, top-level `readdirSync` (≤40 entries), package.json name+scripts; every probe in try/catch, 1.5 s timeout; compute once per `runPrompt` call |
-| A2 | Rules injection: `.koder/rules.md` → `AGENTS.md` → `CLAUDE.md` + `~/.koder/rules.md` | `loop.ts` | `loadRules(cwd)` with `(path,mtime)` cache, 24 KiB cap, `<project-rules>` delimiters; inserted between mode block and env |
+| A2 | Rules injection: `.lakshx/rules.md` → `AGENTS.md` → `CLAUDE.md` + `~/.lakshx/rules.md` | `loop.ts` | `loadRules(cwd)` with `(path,mtime)` cache, 24 KiB cap, `<project-rules>` delimiters; inserted between mode block and env |
 | A3 | System prompt reorder + tool guidance + verify contract + anti-injection rule (§3) | `loop.ts` | Pure template edit; stable sections first, env last |
 | A4 | Session persistence + resume | new `store.ts`, `server.ts`, `loop.ts` | `saveSession` (atomic+debounced) called after each history push batch; `loadSession: true`; `session/load` handler with replay (§2.1); extension: save `sessionId` into chat JSON, call `session/load` on reopen |
 | A5 | `clip()` head+tail truncation + read_file char cap | `tools.ts` | §4.3 verbatim |
@@ -307,10 +307,10 @@ Order of a day: A5/A6/A7 (mechanical) → A1/A2/A3 (one prompt rewrite) → A4 (
 
 ### Phase C — long-term memory (2–3 days)
 
-1. `remember` tool + `~/.koder/memory/MEMORY.md` / `<ws>/.koder/memory.md`, injection at 8 KiB caps (§2.2), scrub on write.
+1. `remember` tool + `~/.lakshx/memory/MEMORY.md` / `<ws>/.lakshx/memory.md`, injection at 8 KiB caps (§2.2), scrub on write.
 2. Extension "remember this" affordance → hidden `remember` instruction.
 3. Opt-in end-of-task reflection (cheap model, ≤3 auto-memories/session, always visible in transcript).
-4. Consolidation prompt when `MEMORY.md` (global) or the project file exceeds 32 KiB: model is asked to split stale/topic-specific bullets out into a new `~/.koder/memory/<topic>.md` file and leave a pointer bullet behind — the mechanism that keeps the global index bounded as memory accumulates across projects.
+4. Consolidation prompt when `MEMORY.md` (global) or the project file exceeds 32 KiB: model is asked to split stale/topic-specific bullets out into a new `~/.lakshx/memory/<topic>.md` file and leave a pointer bullet behind — the mechanism that keeps the global index bounded as memory accumulates across projects.
 5. Evidence-gate for Tier-2 repo map: only now evaluate web-tree-sitter + PageRank against ctags-lite on ≥3 real repos (does the model's first grep hit the right file more often?).
 
 ---

@@ -2,7 +2,7 @@
  * End-to-end tests for the agent loop through the real server.
  *
  * We spawn `src/server.ts` (ACP over stdio) as a subprocess with HOME pointed
- * at a temp directory whose .koder/providers.json routes the "fake" provider
+ * at a temp directory whose .lakshx/providers.json routes the "fake" provider
  * to a scripted OpenAI-compatible SSE server on localhost. No real API keys.
  */
 import assert from "node:assert/strict";
@@ -35,7 +35,7 @@ const execFileAsync = promisify(execFile);
  */
 function shadowGitDirFor(fakeHome: string, worktree: string): string {
   const hash = createHash("sha256").update(resolve(worktree)).digest("hex").slice(0, 16);
-  return join(fakeHome, ".koder", "checkpoints", hash, "shadow.git");
+  return join(fakeHome, ".lakshx", "checkpoints", hash, "shadow.git");
 }
 
 /** Run a shadow-git plumbing command against the checkpoint repo for `worktree`, same explicit --git-dir/--work-tree shape checkpoint.ts uses. */
@@ -89,15 +89,15 @@ const lastToolMessage = (fake: FakeOpenAI, toolCallId: string) => {
   return req.messages.find((m) => m.role === "tool" && m.tool_call_id === toolCallId);
 };
 
-test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 }, async (t) => {
+test("lakshx agent e2e over ACP against a scripted provider", { timeout: 120_000 }, async (t) => {
   const fake = new FakeOpenAI();
   await fake.start();
 
-  const home = await mkdtemp(join(tmpdir(), "koder-e2e-home-"));
-  const workspace = await mkdtemp(join(tmpdir(), "koder-e2e-ws-"));
-  await mkdir(join(home, ".koder"), { recursive: true });
+  const home = await mkdtemp(join(tmpdir(), "lakshx-e2e-home-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-e2e-ws-"));
+  await mkdir(join(home, ".lakshx"), { recursive: true });
   await writeFile(
-    join(home, ".koder", "providers.json"),
+    join(home, ".lakshx", "providers.json"),
     JSON.stringify({
       defaultModel: "fake/test-model",
       providers: {
@@ -109,7 +109,7 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
   // Deterministic child env: fake HOME, no real provider keys leaking in.
   const env: Record<string, string | undefined> = { ...process.env, HOME: home };
   for (const preset of Object.values(PRESETS)) delete env[preset.envKey];
-  delete env.KODER_ENABLE_OLLAMA;
+  delete env.LAKSHX_ENABLE_OLLAMA;
 
   const child = spawn(tsxBin, [serverPath], {
     cwd: workspace,
@@ -130,13 +130,13 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
 
   try {
     await acp
-      .client({ name: "koder-e2e-test" })
+      .client({ name: "lakshx-e2e-test" })
       .onRequest(acp.methods.client.session.requestPermission, async (ctx) => {
         permissionRequests.push(ctx.params);
         return { outcome: { outcome: "selected", optionId: permissionAnswer } };
       })
       .onNotification(
-        "koder/plan_ready",
+        "lakshx/plan_ready",
         (v: unknown) => v as { sessionId: string; path: string },
         async (ctx) => void planReady.push(ctx.params),
       )
@@ -147,13 +147,13 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
         });
         assert.equal(init.protocolVersion, acp.PROTOCOL_VERSION);
 
-        await t.test("koder/models reports default model and configured providers", async () => {
-          const models = await ctx.request<{ defaultModel: string; providers: string[] }>("koder/models", {});
+        await t.test("lakshx/models reports default model and configured providers", async () => {
+          const models = await ctx.request<{ defaultModel: string; providers: string[] }>("lakshx/models", {});
           assert.equal(models.defaultModel, "fake/test-model");
           assert.deepEqual(models.providers, ["fake"]); // only our keyed provider; ollama gated off
         });
 
-        await t.test("review mode: dangerous tool is blocked, plan triggers koder/plan_ready", () =>
+        await t.test("review mode: dangerous tool is blocked, plan triggers lakshx/plan_ready", () =>
           ctx.buildSession(workspace).withSession(async (session: any) => {
             // invalid mode ids are ignored — session must stay in review
             await ctx.request(acp.methods.agent.session.setMode, {
@@ -183,13 +183,13 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
             assert.match(upd.content[0].content.text, /declined/i);
             assert.equal(planReady.length, 0, "no plan_ready without a # Plan heading");
 
-            // Turn B: a "# Plan" reply saves a plan file and notifies koder/plan_ready
+            // Turn B: a "# Plan" reply saves a plan file and notifies lakshx/plan_ready
             fake.enqueue(textTurn("Research done.\n\n# Plan\n1. Touch src/x.ts\n2. Run typecheck\n"));
             const b = await runTurn(session, "plan the feature");
             assert.equal(b.response.stopReason, "end_turn");
-            await waitFor(() => planReady.length === 1, "koder/plan_ready notification");
+            await waitFor(() => planReady.length === 1, "lakshx/plan_ready notification");
             assert.equal(planReady[0].sessionId, session.sessionId);
-            assert.ok(planReady[0].path.startsWith(join(workspace, ".koder", "plans")));
+            assert.ok(planReady[0].path.startsWith(join(workspace, ".lakshx", "plans")));
             assert.match(await readFile(planReady[0].path, "utf8"), /# Plan\n1\. Touch src\/x\.ts/);
             // mode must NOT silently advance — no current_mode_update in either turn
             for (const u of [...a.updates, ...b.updates]) {
@@ -234,17 +234,17 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
             });
             const permsBefore = permissionRequests.length;
             fake.enqueue(
-              toolTurn("call_auto1", "bash", { command: "echo koder-auto-ok" }),
+              toolTurn("call_auto1", "bash", { command: "echo lakshx-auto-ok" }),
               textTurn("Done."),
             );
             const { updates, response } = await runTurn(session, "run the echo");
             assert.equal(response.stopReason, "end_turn");
             assert.equal(permissionRequests.length, permsBefore, "auto mode must not ask for permission");
 
-            assert.match(lastToolMessage(fake, "call_auto1")!.content, /koder-auto-ok/);
+            assert.match(lastToolMessage(fake, "call_auto1")!.content, /lakshx-auto-ok/);
             const upd = updates.find((u) => u.sessionUpdate === "tool_call_update" && u.toolCallId === "call_auto1");
             assert.equal(upd.status, "completed");
-            assert.match(upd.content[0].content.text, /koder-auto-ok/);
+            assert.match(upd.content[0].content.text, /lakshx-auto-ok/);
             assert.equal(messageText(updates), "Done.");
 
             await t2.test("thinking: reasoning_content deltas stream as agent_thought_chunk", async () => {
@@ -260,23 +260,23 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
               assert.equal(messageText(r.updates), "Final answer.");
             });
 
-            await t2.test("koder/set_model switches the model used for the session", async () => {
-              await ctx.request("koder/set_model", { sessionId: session.sessionId, model: "fake/other-model" });
+            await t2.test("lakshx/set_model switches the model used for the session", async () => {
+              await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "fake/other-model" });
               fake.enqueue(textTurn("switched"));
               await runTurn(session, "hello");
               assert.equal(fake.requests.at(-1)!.model, "other-model");
               assert.equal(fake.authHeaders.at(-1), "Bearer test-key-123");
             });
 
-            await t2.test("koder/set_model to an unknown provider surfaces a refusal with the error", async () => {
-              await ctx.request("koder/set_model", { sessionId: session.sessionId, model: "nope/ghost-model" });
+            await t2.test("lakshx/set_model to an unknown provider surfaces a refusal with the error", async () => {
+              await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "nope/ghost-model" });
               const r = await runTurn(session, "hello again"); // no scripted turn needed — never reaches provider
               assert.equal(r.response.stopReason, "refusal");
               assert.match(messageText(r.updates), /Unknown provider "nope"/);
             });
 
             await t2.test("auto mode: destructive-command floor hard-blocks force-push — no permission prompt, no execution", async () => {
-              await ctx.request("koder/set_model", { sessionId: session.sessionId, model: "fake/test-model" });
+              await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "fake/test-model" });
               const permsBefore = permissionRequests.length;
               fake.enqueue(
                 toolTurn("call_floor1", "bash", { command: "git push --force origin main" }),
@@ -361,7 +361,7 @@ test("koder agent e2e over ACP against a scripted provider", { timeout: 120_000 
             await t3.test("royal mode: audit log gets a real entry with the right shape", async () => {
               const now = new Date();
               const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-              const auditPath = join(home, ".koder", "royal-audit", `${ym}.jsonl`);
+              const auditPath = join(home, ".lakshx", "royal-audit", `${ym}.jsonl`);
               const lines = (await readFile(auditPath, "utf8")).trim().split("\n").filter(Boolean);
               const entries = lines.map((l) => JSON.parse(l));
 

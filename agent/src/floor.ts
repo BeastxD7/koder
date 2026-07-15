@@ -34,7 +34,7 @@
  * write_file/edit_file) — those are Royal-mode-specific hardening that doc 09
  * explicitly scopes to a later phase, not part of today's auto-mode floor.
  *
- * Cross-platform: Koder ships for macOS, Windows, and Linux (see
+ * Cross-platform: LakshX ships for macOS, Windows, and Linux (see
  * `.github/workflows/build.yml`'s 4-platform matrix), and `tools.ts`'s
  * `resolveShell()` falls back to the platform default shell (cmd.exe) on
  * win32 — so the recursive-delete and pipe-to-shell rules also recognize
@@ -532,7 +532,7 @@ export function floorCheck(name: string, input: any, cwd: string): FloorResult {
 // moment. That net is worthless if Royal can erase it — a log you can erase
 // isn't a log. So this one check exists, separate from `floorCheck()`,
 // covering only the two directories the net itself writes to
-// (`~/.koder/royal-audit/`, `~/.koder/checkpoints/`). It is not a
+// (`~/.lakshx/royal-audit/`, `~/.lakshx/checkpoints/`). It is not a
 // restriction on what Royal can do to the user's project (it can still
 // force-push, rm -rf anywhere in or outside the workspace, rewrite history,
 // publish packages — none of that touches these paths) — it's what makes
@@ -548,7 +548,7 @@ export function floorCheck(name: string, input: any, cwd: string): FloorResult {
 // ---------------------------------------------------------------------------
 
 function guardedRoyalRoots(): string[] {
-  return [join(homedir(), ".koder", "royal-audit"), join(homedir(), ".koder", "checkpoints")];
+  return [join(homedir(), ".lakshx", "royal-audit"), join(homedir(), ".lakshx", "checkpoints")];
 }
 
 function underGuardedRoot(p: string): string | undefined {

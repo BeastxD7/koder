@@ -18068,7 +18068,7 @@ var import_node_util = require("node:util");
 var execFileAsync = (0, import_node_util.promisify)(import_node_child_process.execFile);
 function shadowPaths(cwd) {
   const hash2 = (0, import_node_crypto.createHash)("sha256").update((0, import_node_path.resolve)(cwd)).digest("hex").slice(0, 16);
-  const dir = (0, import_node_path.join)((0, import_node_os.homedir)(), ".koder", "checkpoints", hash2);
+  const dir = (0, import_node_path.join)((0, import_node_os.homedir)(), ".lakshx", "checkpoints", hash2);
   return { dir, gitDir: (0, import_node_path.join)(dir, "shadow.git") };
 }
 async function git(gitDir, worktree, args) {
@@ -18083,8 +18083,8 @@ async function ensureShadowRepo(cwd) {
   if ((0, import_node_fs.existsSync)(gitDir)) return gitDir;
   (0, import_node_fs.mkdirSync)(dir, { recursive: true });
   await execFileAsync("git", [`--git-dir=${gitDir}`, "init", "-q"]);
-  await git(gitDir, worktree, ["config", "user.email", "royal-checkpoints@koder.local"]);
-  await git(gitDir, worktree, ["config", "user.name", "koder-royal-checkpoints"]);
+  await git(gitDir, worktree, ["config", "user.email", "royal-checkpoints@lakshx.local"]);
+  await git(gitDir, worktree, ["config", "user.name", "lakshx-royal-checkpoints"]);
   return gitDir;
 }
 var mutexTail = Promise.resolve();
@@ -18229,7 +18229,7 @@ async function filesChangedSinceCommit(cwd, sha) {
     return [];
   }
 }
-var ROYAL_MIRROR_REF = "refs/koder/royal-mirror";
+var ROYAL_MIRROR_REF = "refs/lakshx/royal-mirror";
 async function advanceRoyalMirror(gitDir, worktree, fallbackParent) {
   try {
     const { stdout: treeOut } = await git(gitDir, worktree, ["write-tree"]);
@@ -18264,7 +18264,7 @@ function isAlive(pid) {
   }
 }
 async function withLock(dir, fn) {
-  const lockPath = (0, import_node_path.join)(dir, "koder.lock");
+  const lockPath = (0, import_node_path.join)(dir, "lakshx.lock");
   const deadline = Date.now() + 2e3;
   let acquired = false;
   for (; ; ) {
@@ -18450,7 +18450,7 @@ async function maybeCompact(cwd) {
         stdout: "master"
       }));
       const mainBranch = curBranchOut.trim() || "master";
-      const tmpBranch = `koder-compact-${Date.now()}`;
+      const tmpBranch = `lakshx-compact-${Date.now()}`;
       await git(gitDir, worktree, ["checkout", "--orphan", tmpBranch]);
       await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", "checkpoint history compacted"]);
       await git(gitDir, worktree, ["branch", "-M", mainBranch]);
@@ -18484,7 +18484,7 @@ var PRESETS = {
 function loadConfig() {
   let fileCfg = {};
   try {
-    fileCfg = JSON.parse((0, import_node_fs2.readFileSync)((0, import_node_path2.join)((0, import_node_os2.homedir)(), ".koder", "providers.json"), "utf8"));
+    fileCfg = JSON.parse((0, import_node_fs2.readFileSync)((0, import_node_path2.join)((0, import_node_os2.homedir)(), ".lakshx", "providers.json"), "utf8"));
   } catch {
   }
   const providers = {};
@@ -18524,13 +18524,13 @@ function resolveModel(cfg, modelString) {
   if (!provider) throw new Error(`Unknown provider "${providerId}". Known: ${Object.keys(cfg.providers).join(", ")}`);
   if (!provider.apiKey) {
     throw new Error(
-      `No API key for "${providerId}". Add it to ~/.koder/providers.json or set ${PRESETS[providerId]?.envKey ?? "its env var"}.`
+      `No API key for "${providerId}". Add it to ~/.lakshx/providers.json or set ${PRESETS[providerId]?.envKey ?? "its env var"}.`
     );
   }
   return { providerId, provider, model };
 }
 function availableProviders(cfg) {
-  return Object.entries(cfg.providers).filter(([id, p]) => p.apiKey && (id !== "ollama" || process.env.KODER_ENABLE_OLLAMA)).map(([id]) => id);
+  return Object.entries(cfg.providers).filter(([id, p]) => p.apiKey && (id !== "ollama" || process.env.LAKSHX_ENABLE_OLLAMA)).map(([id]) => id);
 }
 
 // src/loop.ts
@@ -18593,7 +18593,7 @@ function readRuleFile(path, cap) {
   ruleCache.set(path, { path, mtimeMs, text });
   return text;
 }
-var PROJECT_RULE_CANDIDATES = [".koder/rules.md", "AGENTS.md", "CLAUDE.md"];
+var PROJECT_RULE_CANDIDATES = [".lakshx/rules.md", "AGENTS.md", "CLAUDE.md"];
 var PROJECT_RULE_CAP = 24e3;
 var USER_RULE_CAP = 8e3;
 function loadRules(cwd) {
@@ -18611,7 +18611,7 @@ ${text}
       break;
     }
   }
-  const userText = readRuleFile((0, import_node_path3.join)((0, import_node_os3.homedir)(), ".koder", "rules.md"), USER_RULE_CAP);
+  const userText = readRuleFile((0, import_node_path3.join)((0, import_node_os3.homedir)(), ".lakshx", "rules.md"), USER_RULE_CAP);
   if (userText) {
     blocks.push(`## User preferences
 <user-rules>
@@ -18636,7 +18636,7 @@ function scrubSecrets(text) {
 
 // src/audit.ts
 function auditDir() {
-  const dir = (0, import_node_path4.join)((0, import_node_os4.homedir)(), ".koder", "royal-audit");
+  const dir = (0, import_node_path4.join)((0, import_node_os4.homedir)(), ".lakshx", "royal-audit");
   (0, import_node_fs4.mkdirSync)(dir, { recursive: true });
   return dir;
 }
@@ -18915,7 +18915,7 @@ function floorCheck(name, input, cwd) {
   return SAFE;
 }
 function guardedRoyalRoots() {
-  return [(0, import_node_path5.join)((0, import_node_os5.homedir)(), ".koder", "royal-audit"), (0, import_node_path5.join)((0, import_node_os5.homedir)(), ".koder", "checkpoints")];
+  return [(0, import_node_path5.join)((0, import_node_os5.homedir)(), ".lakshx", "royal-audit"), (0, import_node_path5.join)((0, import_node_os5.homedir)(), ".lakshx", "checkpoints")];
 }
 function underGuardedRoot(p) {
   const resolved = (0, import_node_path5.resolve)(p);
@@ -18950,7 +18950,7 @@ function royalTamperCheck(name, input) {
 
 // src/providers/types.ts
 function streamIdleMs() {
-  const v = Number(process.env.KODER_STREAM_IDLE_MS);
+  const v = Number(process.env.LAKSHX_STREAM_IDLE_MS);
   return Number.isFinite(v) && v > 0 ? v : 45e3;
 }
 async function* sseLines(body, idleMs = streamIdleMs()) {
@@ -19410,7 +19410,7 @@ var TOOLS = [
       required: ["pattern"]
     },
     async run(input, cwd, signal) {
-      const rg = process.env.KODER_RG_PATH ?? "rg";
+      const rg = process.env.LAKSHX_RG_PATH ?? "rg";
       const globArg = input.glob ? `--glob ${JSON.stringify(input.glob)}` : "";
       const target = JSON.stringify(abs(cwd, input.path ?? "."));
       try {
@@ -23650,7 +23650,7 @@ function getTracer(cfg = loadConfig()) {
 var MAX_ITERATIONS = 60;
 var MAX_SUBTASKS_PER_CALL = 6;
 var MAX_SUBTASK_DEPTH = 1;
-var IDENTITY = `You are Koder, the agent inside the Koder IDE \u2014 an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.`;
+var IDENTITY = `You are LakshX, the agent inside the LakshX IDE \u2014 an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.`;
 var PRINCIPLES = `Operating principles:
 1. Gather context before acting: read the relevant files, grep for usages, understand conventions. Never guess file contents.
 2. Act with the smallest correct change. Match the codebase's existing style, naming, and idioms.
@@ -24059,7 +24059,7 @@ var import_node_fs6 = require("node:fs");
 var import_node_os6 = require("node:os");
 var import_node_path7 = require("node:path");
 function sessionsDir() {
-  const dir = (0, import_node_path7.join)((0, import_node_os6.homedir)(), ".koder", "sessions");
+  const dir = (0, import_node_path7.join)((0, import_node_os6.homedir)(), ".lakshx", "sessions");
   (0, import_node_fs6.mkdirSync)(dir, { recursive: true });
   return dir;
 }
@@ -24170,14 +24170,14 @@ var MODES = [
   }
 ];
 function savePlan(cwd, text) {
-  const dir = (0, import_node_path8.join)(cwd, ".koder", "plans");
+  const dir = (0, import_node_path8.join)(cwd, ".lakshx", "plans");
   (0, import_node_fs7.mkdirSync)(dir, { recursive: true });
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:T]/g, "-").slice(0, 19);
   const file2 = (0, import_node_path8.join)(dir, `plan-${stamp}.md`);
   (0, import_node_fs7.writeFileSync)(file2, text.trim() + "\n");
   return file2;
 }
-agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
+agent({ name: "lakshx-agent" }).onRequest("initialize", async () => ({
   protocolVersion: PROTOCOL_VERSION,
   agentCapabilities: { loadSession: true }
 })).onRequest("authenticate", async () => ({})).onRequest("session/new", async (ctx) => {
@@ -24230,15 +24230,15 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
   const s = sessions.get(ctx.params.sessionId);
   if (s && MODES.some((m) => m.id === ctx.params.modeId)) s.mode = ctx.params.modeId;
   return {};
-}).onRequest("koder/models", (v) => v, async () => {
+}).onRequest("lakshx/models", (v) => v, async () => {
   const cfg = loadConfig();
   return { defaultModel: cfg.defaultModel, providers: availableProviders(cfg) };
 }).onRequest(
-  "koder/validate",
+  "lakshx/validate",
   (v) => v,
   async (ctx) => probeProvider(ctx.params.provider, ctx.params.apiKey)
 ).onRequest(
-  "koder/set_model",
+  "lakshx/set_model",
   (v) => v,
   async (ctx) => {
     const s = sessions.get(ctx.params.sessionId);
@@ -24282,7 +24282,7 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
           void notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } });
         },
         onThinking: (t) => void notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: t } }),
-        onUsage: (usage) => void ctx.client.notify("koder/usage", { sessionId, ...usage }),
+        onUsage: (usage) => void ctx.client.notify("lakshx/usage", { sessionId, ...usage }),
         onHistoryChanged: persist,
         onToolStart: (c) => void notify({
           sessionUpdate: "tool_call",
@@ -24316,16 +24316,16 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
         onCheckpoint: (info) => {
           const e = ensureEntry(null);
           e.tools.push({ toolCallId: info.toolCallId, toolName: info.toolName, sha: info.sha, files: info.files });
-          void ctx.client.notify("koder/checkpoint", { sessionId, promptId, ...info });
+          void ctx.client.notify("lakshx/checkpoint", { sessionId, promptId, ...info });
           persist();
         },
         // Live subagent progress (Part 3) — same shape/pattern as
         // onBaseline/onCheckpoint above: one ACP notification per callback,
         // params spread straight through, no server-side state beyond the
         // sessionId this needs to add for the client to route it.
-        onSubagentsStart: (info) => void ctx.client.notify("koder/subagents_start", { sessionId, ...info }),
-        onSubagentActivity: (info) => void ctx.client.notify("koder/subagent_activity", { sessionId, ...info }),
-        onSubagentsEnd: (info) => void ctx.client.notify("koder/subagents_end", { sessionId, ...info })
+        onSubagentsStart: (info) => void ctx.client.notify("lakshx/subagents_start", { sessionId, ...info }),
+        onSubagentActivity: (info) => void ctx.client.notify("lakshx/subagent_activity", { sessionId, ...info }),
+        onSubagentsEnd: (info) => void ctx.client.notify("lakshx/subagents_end", { sessionId, ...info })
       },
       promptId,
       abort.signal,
@@ -24333,10 +24333,10 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
     );
     if (session.mode === "review" && !abort.signal.aborted && /^#{1,3}\s*Plan\b/m.test(finalText)) {
       const planPath = savePlan(session.cwd, finalText);
-      await ctx.client.notify("koder/plan_ready", { sessionId, path: planPath });
+      await ctx.client.notify("lakshx/plan_ready", { sessionId, path: planPath });
     }
     void maybeCompact(session.cwd).then((r) => {
-      if (r.compacted) void ctx.client.notify("koder/checkpoint_compacted", { sessionId });
+      if (r.compacted) void ctx.client.notify("lakshx/checkpoint_compacted", { sessionId });
     });
     return { stopReason: abort.signal.aborted ? "cancelled" : stop };
   } catch (err) {
@@ -24352,7 +24352,7 @@ Error: ${err?.message ?? err}` }
     if (session.pending === abort) session.pending = void 0;
   }
 }).onRequest(
-  "koder/undo_file",
+  "lakshx/undo_file",
   (v) => v,
   async (ctx) => {
     const session = sessions.get(ctx.params.sessionId);
@@ -24366,7 +24366,7 @@ Error: ${err?.message ?? err}` }
     return undoFile(session.cwd, path, target.baselineSha, force);
   }
 ).onRequest(
-  "koder/undo_prompt",
+  "lakshx/undo_prompt",
   (v) => v,
   async (ctx) => {
     const session = sessions.get(ctx.params.sessionId);
@@ -24382,7 +24382,7 @@ Error: ${err?.message ?? err}` }
     return undoPaths(session.cwd, files, target.baselineSha, force);
   }
 ).onRequest(
-  "koder/checkpoint_file_before",
+  "lakshx/checkpoint_file_before",
   (v) => v,
   async (ctx) => {
     const session = sessions.get(ctx.params.sessionId);
@@ -24401,7 +24401,7 @@ Error: ${err?.message ?? err}` }
     import_node_stream.Readable.toWeb(process.stdin)
   )
 );
-process.stderr.write("koder-agent ready (ACP over stdio)\n");
+process.stderr.write("lakshx-agent ready (ACP over stdio)\n");
 /*! Bundled license information:
 
 mustache/mustache.mjs:

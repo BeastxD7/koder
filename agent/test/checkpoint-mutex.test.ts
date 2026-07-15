@@ -71,8 +71,8 @@ test("_withProcessMutexForTests: a throwing caller doesn't wedge the queue for l
 });
 
 test("commitAfterTool: N concurrent calls against the SAME shadow repo all land as distinct commits — no lost/corrupted commits", { timeout: 30_000 }, async () => {
-  const home = await mkdtemp(join(tmpdir(), "koder-cpmutex-home-"));
-  const workspace = await mkdtemp(join(tmpdir(), "koder-cpmutex-ws-"));
+  const home = await mkdtemp(join(tmpdir(), "lakshx-cpmutex-home-"));
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-cpmutex-ws-"));
   const realHome = process.env.HOME;
   process.env.HOME = home;
   _resetGuardCacheForTests();

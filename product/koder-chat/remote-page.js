@@ -1,4 +1,4 @@
-// Koder Remote Access — mobile-optimized single page, view + control
+// LakshX Remote Access — mobile-optimized single page, view + control
 // (docs/research/10-remote-control.md, Phase B).
 // Served as a plain string by remote-server.js (no separate static files,
 // same "one self-contained response" discipline as extension.js's own
@@ -120,10 +120,10 @@ var SCRIPT = [
   "  var qs = new URLSearchParams(location.search);",
   "  var token = qs.get('token');",
   "  if (token) {",
-  "    try { sessionStorage.setItem('koderRemoteToken', token); } catch (e) {}",
+  "    try { sessionStorage.setItem('lakshxRemoteToken', token); } catch (e) {}",
   "    if (window.history && history.replaceState) history.replaceState(null, '', location.pathname);",
   "  } else {",
-  "    try { token = sessionStorage.getItem('koderRemoteToken'); } catch (e) {}",
+  "    try { token = sessionStorage.getItem('lakshxRemoteToken'); } catch (e) {}",
   "  }",
   "",
   "  var messagesEl = document.getElementById('messages');",
@@ -351,7 +351,7 @@ var SCRIPT = [
   "    if (document.visibilityState === 'visible') return; // do not interrupt someone already looking at the tab",
   "    beep();",
   "    if (navigator.vibrate) { try { navigator.vibrate([80, 60, 80]); } catch (e) {} }",
-  "    startTitleFlash('Approval needed — Koder');",
+  "    startTitleFlash('Approval needed — LakshX');",
   "  }",
   "  document.addEventListener('visibilitychange', function () {",
   "    if (document.visibilityState !== 'visible') return;",
@@ -412,7 +412,7 @@ var SCRIPT = [
   "  }",
   "",
   "  function renderSnapshot(snap) {",
-  "    wsNameEl.textContent = snap.workspace || 'Koder';",
+  "    wsNameEl.textContent = snap.workspace || 'LakshX';",
   "    setModeUI(snap.mode || 'review');",
   "    messagesEl.innerHTML = '';",
   "    tools = {};",
@@ -446,7 +446,7 @@ var SCRIPT = [
   "        if (onDone) onDone();",
   "      })",
   "      .catch(function () {",
-  "        bannerEl.textContent = 'Could not reach Koder — check you are still on the same WiFi.';",
+  "        bannerEl.textContent = 'Could not reach LakshX — check you are still on the same WiFi.';",
   "        bannerEl.className = 'show';",
   "      });",
   "  }",
@@ -511,14 +511,14 @@ function renderMobilePage() {
     "<!DOCTYPE html>\n" +
     '<html>\n<head>\n<meta charset="UTF-8">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n' +
-    "<title>Koder Remote</title>\n" +
+    "<title>LakshX Remote</title>\n" +
     "<style>\n" + CSS + "\n</style>\n" +
     "</head>\n<body>\n" +
     '<div id="app">\n' +
     '  <div id="header">\n' +
     '    <div class="headerTop">\n' +
     '      <span id="dot"></span>\n' +
-    '      <span class="ws" id="wsName">Koder</span>\n' +
+    '      <span class="ws" id="wsName">LakshX</span>\n' +
     "    </div>\n" +
     '    <div id="modeBar" role="tablist" aria-label="Agent mode">\n' +
     '      <button type="button" class="modeBtn" data-mode="review">Review</button>\n' +
@@ -533,11 +533,11 @@ function renderMobilePage() {
     '  <div id="reconnectScreen">\n' +
     '    <div class="title">Disconnected</div>\n' +
     '    <div class="hint">Remote Access was turned off in the IDE, or this link expired.<br>' +
-    "Scan a new QR code from Koder to reconnect.</div>\n" +
+    "Scan a new QR code from LakshX to reconnect.</div>\n" +
     "  </div>\n" +
     '  <div id="composerNote"></div>\n' +
     '  <div id="composer">\n' +
-    '    <textarea id="composerInput" rows="1" placeholder="Message Koder…"></textarea>\n' +
+    '    <textarea id="composerInput" rows="1" placeholder="Message LakshX…"></textarea>\n' +
     '    <button id="sendBtn">Send</button>\n' +
     "  </div>\n" +
     "</div>\n" +

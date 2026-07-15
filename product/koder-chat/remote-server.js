@@ -1,7 +1,7 @@
-// Koder Remote Access — LAN mobile view + control of agent progress.
+// LakshX Remote Access — LAN mobile view + control of agent progress.
 // Plain Node `http`, zero new dependencies. Off by default: nothing in this
 // file runs any network code until `start()` is called explicitly, which
-// only happens from the "Koder: Enable Remote Access" command.
+// only happens from the "LakshX: Enable Remote Access" command.
 //
 // Design + security rationale in full: docs/research/10-remote-control.md.
 // This module deliberately does NOT `require("vscode")` — it depends only on
