@@ -48,6 +48,7 @@ html, body {
   padding: 10px 12px;
   border-bottom: 1px solid var(--hairline);
 }
+#topbar > button { flex-shrink: 0; }
 #modes {
   display: flex;
   background: rgba(0, 0, 0, 0.25);
@@ -55,6 +56,7 @@ html, body {
   border-radius: 8px;
   padding: 2px;
   gap: 2px;
+  min-width: 0;
 }
 .mode {
   border: none;
@@ -66,6 +68,10 @@ html, body {
   border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mode:hover { color: var(--fg); }
 .mode.active {
