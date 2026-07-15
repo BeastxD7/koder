@@ -337,6 +337,60 @@ export const TOOLS: ToolSpec[] = [
       }
     },
   },
+  {
+    name: "dispatch_subtasks",
+    kind: "execute",
+    // Not gated behind the permission/floor machinery itself — the
+    // SUBTASK's own tool calls go through that machinery recursively, in
+    // whatever mode the subtask runs under (same as any other tool call in
+    // the main loop), so this dispatch call has nothing dangerous to gate on
+    // its own. See loop.ts's `dispatchSubtasks()` for the actual execution
+    // (this tool is special-cased there, before the generic `spec.run(...)`
+    // path every other tool goes through — `run` below is a defensive stub
+    // that should never actually be invoked).
+    dangerous: false,
+    description:
+      "Run 2-6 independent subtasks concurrently, each in its own isolated context, then get all their results back together. " +
+      "Use this ONLY for genuinely independent, parallelizable work — e.g. \"investigate 3 unrelated files for the same bug pattern\" or \"research 2 different implementation approaches\". " +
+      "Do NOT use it for tasks that depend on each other's output (a subtask cannot see another subtask's results while running) — keep those sequential in your normal tool calls instead. " +
+      "Do NOT dispatch subtasks that are likely to edit the SAME file — there is no file-level lock, only a lock around the checkpoint/commit bookkeeping itself, so two subtasks racing on one file can silently overwrite each other's edits (last write wins). " +
+      "Each subtask starts with an EMPTY history (not your conversation so far) plus exactly what you give it: its own `prompt`, and, only if you explicitly include it, a short `context` string carrying anything from your own investigation the subtask needs (e.g. \"the bug is likely in auth.ts around line 40\") — nothing else about this conversation is shared automatically. " +
+      "At most 6 tasks run per call; extra tasks beyond that are not run and must be resubmitted in a follow-up call. Subtasks cannot themselves call dispatch_subtasks (no nested fan-out).",
+    input_schema: {
+      type: "object",
+      properties: {
+        tasks: {
+          type: "array",
+          minItems: 1,
+          maxItems: 6,
+          description: "2-6 independent subtasks to run concurrently (max 6 per call).",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Short unique id for this task, used to label its result." },
+              prompt: { type: "string", description: "The subtask's instructions — self-contained, this is the ONLY thing the subtask is asked to do." },
+              context: {
+                type: "string",
+                description: "Optional. A short, explicitly-chosen excerpt of what you already know that the subtask needs — NOT your full conversation, just what's relevant.",
+              },
+              mode: {
+                type: "string",
+                enum: ["review", "approve", "auto", "royal"],
+                description: "Optional. Defaults to your own current mode if omitted.",
+              },
+            },
+            required: ["id", "prompt"],
+          },
+        },
+      },
+      required: ["tasks"],
+    },
+    async run() {
+      // Defensive only: loop.ts special-cases `dispatch_subtasks` and never
+      // reaches this — see the comment on this tool's `dangerous` field.
+      throw new Error("dispatch_subtasks must be handled by the loop's dispatch_subtasks branch, not executed generically");
+    },
+  },
 ];
 
 export const toolByName = new Map(TOOLS.map((t) => [t.name, t]));

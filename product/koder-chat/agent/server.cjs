@@ -28,7 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/server.ts
-var import_node_crypto2 = require("node:crypto");
+var import_node_crypto3 = require("node:crypto");
 var import_node_fs7 = require("node:fs");
 var import_node_path8 = require("node:path");
 var import_node_stream = require("node:stream");
@@ -18087,17 +18087,28 @@ async function ensureShadowRepo(cwd) {
   await git(gitDir, worktree, ["config", "user.name", "koder-royal-checkpoints"]);
   return gitDir;
 }
+var mutexTail = Promise.resolve();
+function withProcessMutex(fn) {
+  const run = mutexTail.then(fn, fn);
+  mutexTail = run.then(
+    () => void 0,
+    () => void 0
+  );
+  return run;
+}
 async function checkpointBeforeMutation(cwd, label) {
-  try {
-    const worktree = (0, import_node_path.resolve)(cwd);
-    const gitDir = await ensureShadowRepo(worktree);
-    await git(gitDir, worktree, ["add", "-A", "--", ".", ":!**/.git", ":!**/.git/**"]);
-    await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `royal-checkpoint: ${label}`.slice(0, 500)]);
-    const { stdout } = await git(gitDir, worktree, ["rev-parse", "HEAD"]);
-    return { sha: stdout.trim() || null };
-  } catch {
-    return { sha: null };
-  }
+  return withProcessMutex(async () => {
+    try {
+      const worktree = (0, import_node_path.resolve)(cwd);
+      const gitDir = await ensureShadowRepo(worktree);
+      await git(gitDir, worktree, ["add", "-A", "--", ".", ":!**/.git", ":!**/.git/**"]);
+      await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `royal-checkpoint: ${label}`.slice(0, 500)]);
+      const { stdout } = await git(gitDir, worktree, ["rev-parse", "HEAD"]);
+      return { sha: stdout.trim() || null };
+    } catch {
+      return { sha: null };
+    }
+  });
 }
 var MAX_TRACKED_FILES = 5e4;
 var SKIP_DIRS = /* @__PURE__ */ new Set([
@@ -18288,50 +18299,54 @@ async function withLock(dir, fn) {
   }
 }
 async function checkpointBaseline(cwd, promptId) {
-  try {
-    const worktree = (0, import_node_path.resolve)(cwd);
-    const init = await initShadowRepo(worktree);
-    if (!init.ok) return { sha: null };
-    const { dir, gitDir } = shadowPaths(worktree);
-    return await withLock(dir, async () => {
-      await stageAll(gitDir, worktree);
-      const dirty = await hasStagedChanges(gitDir, worktree);
-      if (!dirty) {
-        const head = await currentHead(gitDir, worktree);
-        if (head) return { sha: head };
-      }
-      await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `baseline:${promptId}`]);
-      return { sha: await currentHead(gitDir, worktree) };
-    });
-  } catch {
-    return { sha: null };
-  }
+  return withProcessMutex(async () => {
+    try {
+      const worktree = (0, import_node_path.resolve)(cwd);
+      const init = await initShadowRepo(worktree);
+      if (!init.ok) return { sha: null };
+      const { dir, gitDir } = shadowPaths(worktree);
+      return await withLock(dir, async () => {
+        await stageAll(gitDir, worktree);
+        const dirty = await hasStagedChanges(gitDir, worktree);
+        if (!dirty) {
+          const head = await currentHead(gitDir, worktree);
+          if (head) return { sha: head };
+        }
+        await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `baseline:${promptId}`]);
+        return { sha: await currentHead(gitDir, worktree) };
+      });
+    } catch {
+      return { sha: null };
+    }
+  });
 }
 async function commitAfterTool(cwd, promptId, toolCallId, toolName, path) {
-  try {
-    const worktree = (0, import_node_path.resolve)(cwd);
-    const init = await initShadowRepo(worktree);
-    if (!init.ok) return { sha: null, files: [] };
-    const { dir, gitDir } = shadowPaths(worktree);
-    return await withLock(dir, async () => {
-      const prevHead = await currentHead(gitDir, worktree);
-      if (path) {
-        try {
-          await git(gitDir, worktree, ["add", "--", path]);
-        } catch {
+  return withProcessMutex(async () => {
+    try {
+      const worktree = (0, import_node_path.resolve)(cwd);
+      const init = await initShadowRepo(worktree);
+      if (!init.ok) return { sha: null, files: [] };
+      const { dir, gitDir } = shadowPaths(worktree);
+      return await withLock(dir, async () => {
+        const prevHead = await currentHead(gitDir, worktree);
+        if (path) {
+          try {
+            await git(gitDir, worktree, ["add", "--", path]);
+          } catch {
+            await stageAll(gitDir, worktree);
+          }
+        } else {
           await stageAll(gitDir, worktree);
         }
-      } else {
-        await stageAll(gitDir, worktree);
-      }
-      await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `tool:${promptId}:${toolCallId}:${toolName}`]);
-      const sha = await currentHead(gitDir, worktree);
-      const files = prevHead && sha ? await diffFiles(gitDir, worktree, prevHead, sha) : [];
-      return { sha, files };
-    });
-  } catch {
-    return { sha: null, files: [] };
-  }
+        await git(gitDir, worktree, ["commit", "-q", "--allow-empty", "-m", `tool:${promptId}:${toolCallId}:${toolName}`]);
+        const sha = await currentHead(gitDir, worktree);
+        const files = prevHead && sha ? await diffFiles(gitDir, worktree, prevHead, sha) : [];
+        return { sha, files };
+      });
+    } catch {
+      return { sha: null, files: [] };
+    }
+  });
 }
 async function diffQuiet(gitDir, worktree, ref, path) {
   try {
@@ -18509,6 +18524,9 @@ function resolveModel(cfg, modelString) {
 function availableProviders(cfg) {
   return Object.entries(cfg.providers).filter(([id, p]) => p.apiKey && (id !== "ollama" || process.env.KODER_ENABLE_OLLAMA)).map(([id]) => id);
 }
+
+// src/loop.ts
+var import_node_crypto2 = require("node:crypto");
 
 // src/audit.ts
 var import_node_fs4 = require("node:fs");
@@ -19401,12 +19419,60 @@ var TOOLS = [
 ${out}`;
       }
     }
+  },
+  {
+    name: "dispatch_subtasks",
+    kind: "execute",
+    // Not gated behind the permission/floor machinery itself — the
+    // SUBTASK's own tool calls go through that machinery recursively, in
+    // whatever mode the subtask runs under (same as any other tool call in
+    // the main loop), so this dispatch call has nothing dangerous to gate on
+    // its own. See loop.ts's `dispatchSubtasks()` for the actual execution
+    // (this tool is special-cased there, before the generic `spec.run(...)`
+    // path every other tool goes through — `run` below is a defensive stub
+    // that should never actually be invoked).
+    dangerous: false,
+    description: 'Run 2-6 independent subtasks concurrently, each in its own isolated context, then get all their results back together. Use this ONLY for genuinely independent, parallelizable work \u2014 e.g. "investigate 3 unrelated files for the same bug pattern" or "research 2 different implementation approaches". Do NOT use it for tasks that depend on each other\'s output (a subtask cannot see another subtask\'s results while running) \u2014 keep those sequential in your normal tool calls instead. Do NOT dispatch subtasks that are likely to edit the SAME file \u2014 there is no file-level lock, only a lock around the checkpoint/commit bookkeeping itself, so two subtasks racing on one file can silently overwrite each other\'s edits (last write wins). Each subtask starts with an EMPTY history (not your conversation so far) plus exactly what you give it: its own `prompt`, and, only if you explicitly include it, a short `context` string carrying anything from your own investigation the subtask needs (e.g. "the bug is likely in auth.ts around line 40") \u2014 nothing else about this conversation is shared automatically. At most 6 tasks run per call; extra tasks beyond that are not run and must be resubmitted in a follow-up call. Subtasks cannot themselves call dispatch_subtasks (no nested fan-out).',
+    input_schema: {
+      type: "object",
+      properties: {
+        tasks: {
+          type: "array",
+          minItems: 1,
+          maxItems: 6,
+          description: "2-6 independent subtasks to run concurrently (max 6 per call).",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Short unique id for this task, used to label its result." },
+              prompt: { type: "string", description: "The subtask's instructions \u2014 self-contained, this is the ONLY thing the subtask is asked to do." },
+              context: {
+                type: "string",
+                description: "Optional. A short, explicitly-chosen excerpt of what you already know that the subtask needs \u2014 NOT your full conversation, just what's relevant."
+              },
+              mode: {
+                type: "string",
+                enum: ["review", "approve", "auto", "royal"],
+                description: "Optional. Defaults to your own current mode if omitted."
+              }
+            },
+            required: ["id", "prompt"]
+          }
+        }
+      },
+      required: ["tasks"]
+    },
+    async run() {
+      throw new Error("dispatch_subtasks must be handled by the loop's dispatch_subtasks branch, not executed generically");
+    }
   }
 ];
 var toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // src/loop.ts
 var MAX_ITERATIONS = 60;
+var MAX_SUBTASKS_PER_CALL = 6;
+var MAX_SUBTASK_DEPTH = 1;
 var IDENTITY = `You are Koder, the agent inside the Koder IDE \u2014 an agentic development environment whose whole purpose is SHIPPED SOFTWARE QUALITY.`;
 var PRINCIPLES = `Operating principles:
 1. Gather context before acting: read the relevant files, grep for usages, understand conventions. Never guess file contents.
@@ -19485,11 +19551,92 @@ function wrapToolOutput(name, path, content) {
 ${safe}
 </tool_output>`;
 }
-async function runPrompt(session, userText, cb, promptId, signal) {
+function buildSubtaskMessage(task) {
+  if (!task.context) return task.prompt;
+  return `<parent_context>
+${task.context}
+</parent_context>
+
+${task.prompt}`;
+}
+async function runSubtask(childSession, task, cb, batchId, promptId, signal, depth) {
+  const toolTitles = /* @__PURE__ */ new Map();
+  const childCb = {
+    onText: (text) => cb.onSubagentActivity?.({ batchId, taskId: task.id, kind: "text", detail: summarizeText(text) }),
+    onThinking: (text) => cb.onSubagentActivity?.({ batchId, taskId: task.id, kind: "thinking", detail: summarizeText(text) }),
+    onToolStart: (c) => {
+      toolTitles.set(c.id, c.title);
+      cb.onSubagentActivity?.({ batchId, taskId: task.id, kind: "tool_start", detail: c.title });
+    },
+    onToolEnd: (c) => cb.onSubagentActivity?.({
+      batchId,
+      taskId: task.id,
+      kind: "tool_end",
+      detail: toolTitles.get(c.id) ?? (c.isError ? "failed" : "done")
+    }),
+    onPermission: (c) => cb.onPermission(c),
+    onUsage: cb.onUsage,
+    // the child's history is throwaway (never persisted, never merged back
+    // into the parent) — nothing here for a persistence hook to do
+    onHistoryChanged: void 0,
+    onBaseline: cb.onBaseline,
+    onCheckpoint: cb.onCheckpoint
+  };
+  try {
+    await runPrompt(childSession, buildSubtaskMessage(task), childCb, promptId, signal, depth + 1);
+    const lastAssistant = [...childSession.history].reverse().find((m) => m.role === "assistant");
+    const text = (lastAssistant?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("");
+    return { id: task.id, output: text || "(no output)", isError: false };
+  } catch (err) {
+    return { id: task.id, output: `ERROR: ${err?.message ?? err}`, isError: true };
+  }
+}
+async function dispatchSubtasks(session, tc, cb, promptId, signal, depth) {
+  if (depth >= MAX_SUBTASK_DEPTH) {
+    return {
+      isError: true,
+      content: `dispatch_subtasks is not available from within a subtask (max nesting depth ${MAX_SUBTASK_DEPTH}) \u2014 a subtask must complete its own work directly rather than fanning out further.`
+    };
+  }
+  const rawTasks = Array.isArray(tc.input?.tasks) ? tc.input.tasks : [];
+  if (rawTasks.length === 0) {
+    return { isError: true, content: `dispatch_subtasks requires a non-empty "tasks" array.` };
+  }
+  let note = "";
+  let tasks = rawTasks;
+  if (rawTasks.length > MAX_SUBTASKS_PER_CALL) {
+    tasks = rawTasks.slice(0, MAX_SUBTASKS_PER_CALL);
+    note = `Note: ${rawTasks.length} tasks were submitted but only ${MAX_SUBTASKS_PER_CALL} run per call (concurrency cap). The remaining ${rawTasks.length - MAX_SUBTASKS_PER_CALL} were NOT run \u2014 resubmit them in a follow-up dispatch_subtasks call.
+
+`;
+  }
+  const batchId = (0, import_node_crypto2.randomUUID)();
+  cb.onSubagentsStart?.({
+    batchId,
+    promptId,
+    tasks: tasks.map((t) => ({ id: t.id, prompt: t.prompt, mode: t.mode ?? session.mode }))
+  });
+  const results = await Promise.all(
+    tasks.map((task) => {
+      const childSession = {
+        cwd: session.cwd,
+        model: session.model,
+        mode: task.mode ?? session.mode,
+        history: []
+      };
+      return runSubtask(childSession, task, cb, batchId, promptId, signal, depth);
+    })
+  );
+  cb.onSubagentsEnd?.({ batchId, results });
+  const merged = results.map((r) => `### Subtask ${r.id}${r.isError ? " (failed)" : ""}
+${r.output}`).join("\n\n");
+  return { content: note + merged, isError: false };
+}
+async function runPrompt(session, userText, cb, promptId, signal, depth = 0) {
   const cfg = loadConfig();
   const { provider, model } = resolveModel(cfg, session.model);
   const adapter = makeAdapter(provider.kind, provider);
-  const allowedTools = session.mode === "review" ? TOOLS.filter((t) => !t.dangerous) : TOOLS;
+  const allowedTools = session.mode === "review" ? TOOLS.filter((t) => !t.dangerous && t.name !== "dispatch_subtasks") : TOOLS;
   session.history.push({ role: "user", content: [{ type: "text", text: userText }] });
   const userMessageIndex = session.history.length - 1;
   session.editFails ??= /* @__PURE__ */ new Map();
@@ -19538,6 +19685,11 @@ async function runPrompt(session, userText, cb, promptId, signal) {
       const title = toolTitle(tc.name, tc.input ?? {});
       if (!spec) {
         results.push({ type: "tool_result", tool_use_id: tc.id, content: `Unknown tool ${tc.name}`, is_error: true });
+        continue;
+      }
+      if (tc.name === "dispatch_subtasks") {
+        const outcome = await dispatchSubtasks(session, tc, cb, promptId, signal, depth);
+        results.push({ type: "tool_result", tool_use_id: tc.id, content: outcome.content, is_error: outcome.isError });
         continue;
       }
       cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
@@ -19814,7 +19966,7 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
   protocolVersion: PROTOCOL_VERSION,
   agentCapabilities: { loadSession: true }
 })).onRequest("authenticate", async () => ({})).onRequest("session/new", async (ctx) => {
-  const sessionId = (0, import_node_crypto2.randomUUID)();
+  const sessionId = (0, import_node_crypto3.randomUUID)();
   sessions.set(sessionId, { cwd: ctx.params.cwd, history: [], mode: "review", checkpoints: [] });
   return {
     sessionId,
@@ -19885,7 +20037,7 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
   session.pending?.abort();
   const abort = new AbortController();
   session.pending = abort;
-  const promptId = ctx.params?._meta?.promptId ?? (0, import_node_crypto2.randomUUID)();
+  const promptId = ctx.params?._meta?.promptId ?? (0, import_node_crypto3.randomUUID)();
   const text = prompt.filter((b) => b.type === "text").map((b) => b.text).join("\n");
   const notify = (update) => ctx.client.notify(methods.client.session.update, { sessionId, update });
   const persist = () => saveSessionSoon({
@@ -19951,7 +20103,14 @@ agent({ name: "koder-agent" }).onRequest("initialize", async () => ({
           e.tools.push({ toolCallId: info.toolCallId, toolName: info.toolName, sha: info.sha, files: info.files });
           void ctx.client.notify("koder/checkpoint", { sessionId, promptId, ...info });
           persist();
-        }
+        },
+        // Live subagent progress (Part 3) — same shape/pattern as
+        // onBaseline/onCheckpoint above: one ACP notification per callback,
+        // params spread straight through, no server-side state beyond the
+        // sessionId this needs to add for the client to route it.
+        onSubagentsStart: (info) => void ctx.client.notify("koder/subagents_start", { sessionId, ...info }),
+        onSubagentActivity: (info) => void ctx.client.notify("koder/subagent_activity", { sessionId, ...info }),
+        onSubagentsEnd: (info) => void ctx.client.notify("koder/subagents_end", { sessionId, ...info })
       },
       promptId,
       abort.signal

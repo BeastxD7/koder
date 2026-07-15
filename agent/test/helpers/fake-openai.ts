@@ -22,15 +22,44 @@ export class FakeOpenAI {
   requests: RecordedRequest[] = [];
   /** Authorization header of every request, in order. */
   authHeaders: Array<string | undefined> = [];
+  /**
+   * `Date.now()` when each request finished arriving (body fully read),
+   * parallel to `requests`. Lets a test prove two requests were genuinely
+   * in flight at the same time via WHEN they were dispatched (which mostly
+   * reflects JS-side scheduling, not artificial response delay) rather than
+   * total round-trip wall-clock time — the latter is sensitive to whatever
+   * else is contending for CPU when the whole suite runs concurrently,
+   * which arrival order is not.
+   */
+  requestTimestamps: number[] = [];
   port = 0;
 
   private script: ScriptedTurn[] = [];
+  // Parallel to `script`, aligned by push order: how long (ms) to hold a
+  // turn's response before writing it. Kept as a separate array (rather than
+  // folding into ScriptedTurn's shape) so plain `enqueue()` — used by every
+  // existing test — is completely unaffected; only `enqueueDelayed()` below
+  // populates a non-zero entry.
+  private scriptDelays: number[] = [];
   private stallScript: ScriptedTurn[] = [];
   private server: Server | undefined;
 
   /** Queue one or more turns; each request consumes one turn FIFO. */
   enqueue(...turns: ScriptedTurn[]): void {
     this.script.push(...turns);
+    for (const _ of turns) this.scriptDelays.push(0);
+  }
+
+  /**
+   * Same as `enqueue`, but the response is held for `delayMs` before being
+   * written. Lets a test prove two requests were genuinely IN FLIGHT AT THE
+   * SAME TIME (e.g. `dispatch_subtasks` fanning out concurrent subagents)
+   * via wall-clock time, rather than just asserting both eventually
+   * happened — a real ordering/timing proof, not just "both ran eventually".
+   */
+  enqueueDelayed(delayMs: number, turn: ScriptedTurn): void {
+    this.script.push(turn);
+    this.scriptDelays.push(delayMs);
   }
 
   /**
@@ -59,6 +88,7 @@ export class FakeOpenAI {
         }
         this.requests.push(parsed);
         this.authHeaders.push(req.headers.authorization);
+        this.requestTimestamps.push(Date.now());
 
         const stall = this.stallScript.shift();
         if (stall) {
@@ -69,15 +99,20 @@ export class FakeOpenAI {
         }
 
         const turn = this.script.shift();
+        const delay = this.scriptDelays.shift() ?? 0;
         if (!turn) {
           res.writeHead(500, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: { message: "fake-openai: script exhausted" } }));
           return;
         }
-        res.writeHead(200, { "content-type": "text/event-stream" });
-        for (const ev of turn) res.write(`data: ${JSON.stringify(ev)}\n\n`);
-        res.write("data: [DONE]\n\n");
-        res.end();
+        const respond = () => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          for (const ev of turn) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+          res.write("data: [DONE]\n\n");
+          res.end();
+        };
+        if (delay > 0) setTimeout(respond, delay);
+        else respond();
       });
     });
     this.server.listen(0, "127.0.0.1");

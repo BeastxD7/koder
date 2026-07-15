@@ -264,6 +264,93 @@ function handleUndoConflict(m) {
   );
 }
 
+// ---------- live subagent progress ("dispatch_subtasks" fan-out) ----------
+// Same registry-of-DOM-elements-by-id pattern as `checkpointCards` above,
+// keyed by `batchId` instead of `promptId` (loop.ts mints one `batchId` per
+// dispatch_subtasks call — see agent/src/loop.ts's `dispatchSubtasks`).
+// Reuses `.checkpoint`'s card chrome (dark card, small header, expandable
+// body) rather than inventing a new visual style, and `.tool`'s
+// running/done/failed dot-pulse classes for each task row's status dot —
+// same visual vocabulary as the rest of the transcript, not a new one.
+const subagentCards = new Map(); // batchId -> { el, bodyEl, headLabelEl, chevronEl, rows: Map(taskId -> {rowEl, dotEl, detailEl}), total, ended }
+
+function applySubagentsStart(m) {
+  clearEmpty();
+  endStream();
+  document.getElementById("thinking")?.remove();
+  const el = document.createElement("div");
+  el.className = "checkpoint subagents";
+  el.innerHTML = `
+    <div class="sa-head" role="button" tabindex="0">
+      <span class="sa-head-label"></span><span class="cpbar-chevron">▾</span>
+    </div>
+    <div class="sa-body"></div>`;
+  const bodyEl = el.querySelector(".sa-body");
+  const headLabelEl = el.querySelector(".sa-head-label");
+  const chevronEl = el.querySelector(".cpbar-chevron");
+  const rows = new Map();
+  for (const t of m.tasks ?? []) {
+    const row = document.createElement("div");
+    row.className = "sa-task";
+    row.innerHTML = `<span class="dot running"></span><div class="sa-task-main"><div class="sa-task-prompt"></div><div class="sa-task-detail"></div></div>`;
+    row.querySelector(".sa-task-prompt").textContent = t.prompt;
+    row.querySelector(".sa-task-detail").textContent = `Starting (${t.mode})…`;
+    bodyEl.appendChild(row);
+    rows.set(t.id, { rowEl: row, dotEl: row.querySelector(".dot"), detailEl: row.querySelector(".sa-task-detail") });
+  }
+  const card = { el, bodyEl, headLabelEl, chevronEl, rows, total: (m.tasks ?? []).length, ended: false };
+  headLabelEl.textContent = `Running ${card.total} subtask${card.total === 1 ? "" : "s"}…`;
+  // Expanded while running (so progress is visible without a click); the
+  // header is always clickable so a curious user can collapse it early too.
+  let expanded = true;
+  const applyExpanded = () => {
+    bodyEl.hidden = !expanded;
+    chevronEl.textContent = expanded ? "▾" : "▸";
+  };
+  applyExpanded();
+  el.querySelector(".sa-head").addEventListener("click", () => {
+    expanded = !expanded;
+    applyExpanded();
+  });
+  card._setExpanded = (v) => { expanded = v; applyExpanded(); };
+  messagesEl.appendChild(el);
+  subagentCards.set(m.batchId, card);
+  scrollBottom();
+}
+
+function applySubagentActivity(m) {
+  const card = subagentCards.get(m.batchId);
+  if (!card) return;
+  const row = card.rows.get(m.taskId);
+  if (!row) return;
+  row.detailEl.textContent = m.detail || "";
+}
+
+function applySubagentsEnd(m) {
+  const card = subagentCards.get(m.batchId);
+  if (!card) return;
+  card.ended = true;
+  let failed = 0;
+  for (const r of m.results ?? []) {
+    const row = card.rows.get(r.id);
+    if (!row) continue;
+    row.dotEl.className = `dot ${r.isError ? "failed" : "done"}`;
+    row.detailEl.textContent = r.isError ? `Failed: ${(r.output || "").slice(0, 200)}` : (r.output || "").slice(0, 200);
+    if (r.isError) failed++;
+  }
+  card.headLabelEl.textContent =
+    failed === 0
+      ? `Ran ${card.total} subtask${card.total === 1 ? "" : "s"}`
+      : `Ran ${card.total} subtask${card.total === 1 ? "" : "s"} — ${failed} failed`;
+  // A finished run collapses by default so it doesn't permanently take up
+  // vertical space in the transcript — same "collapse once done" shape the
+  // composer-anchored checkpoint bar already uses (`cpbarExpanded`), just
+  // applied per-card instead of to one persistent bar. Still togglable via
+  // the header click handler wired in `applySubagentsStart`.
+  card._setExpanded(false);
+  scrollBottom();
+}
+
 // ---------- composer-anchored "files changed this session" summary bar ----------
 // Collapsed by default ("Files changed this session (N)"); expands to a flat,
 // latest-wins-per-path file list with the same per-file Undo + Open-diff
@@ -729,6 +816,9 @@ function applyEvent(m, replaying) {
       break;
     case "checkpoint": applyCheckpoint(m); break;
     case "checkpointReverted": applyRevert(m.paths); break;
+    case "subagentsStart": applySubagentsStart(m); break;
+    case "subagentActivity": applySubagentActivity(m); break;
+    case "subagentsEnd": applySubagentsEnd(m); break;
     case "turnEnd":
       if (replaying) {
         flushBulk();
@@ -863,6 +953,7 @@ window.addEventListener("message", (e) => {
       messagesEl.innerHTML = "";
       tools.clear();
       checkpointCards.clear();
+      subagentCards.clear();
       sessionFiles.clear();
       cpbarExpanded = false;
       renderCheckpointBar(); // hides the bar before replay repopulates it
@@ -893,6 +984,9 @@ window.addEventListener("message", (e) => {
     case "modeChanged": applyEvent(m, false); break;
     case "checkpoint": applyEvent(m, false); break;
     case "checkpointReverted": applyEvent(m, false); break;
+    case "subagentsStart": applyEvent(m, false); break;
+    case "subagentActivity": applyEvent(m, false); break;
+    case "subagentsEnd": applyEvent(m, false); break;
     case "undoConflict": handleUndoConflict(m); break;
     case "permission": {
       currentPermissionId = m.id;
@@ -961,6 +1055,7 @@ window.addEventListener("message", (e) => {
       messagesEl.innerHTML = "";
       tools.clear();
       checkpointCards.clear();
+      subagentCards.clear();
       sessionFiles.clear();
       cpbarExpanded = false;
       renderCheckpointBar();
