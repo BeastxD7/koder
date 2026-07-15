@@ -1,7 +1,7 @@
 {
   "name": "lakshx-ui",
   "displayName": "LakshX UI",
-  "description": "LakshX's visual identity: Koder Dark theme and modern editor defaults.",
+  "description": "LakshX's visual identity: LakshX Dark theme and modern editor defaults.",
   "version": "0.0.1",
   "publisher": "lakshx",
   "license": "MIT",
@@ -10,15 +10,15 @@
   "contributes": {
     "themes": [
       {
-        "label": "Koder Dark",
+        "label": "LakshX Dark",
         "uiTheme": "vs-dark",
-        "path": "./themes/koder-dark-color-theme.json"
+        "path": "./themes/lakshx-dark-color-theme.json"
       }
     ],
     "configurationDefaults": {
-      "workbench.colorTheme": "Koder Dark",
-      "workbench.preferredDarkColorTheme": "Koder Dark",
-      "workbench.preferredLightColorTheme": "Koder Dark",
+      "workbench.colorTheme": "LakshX Dark",
+      "workbench.preferredDarkColorTheme": "LakshX Dark",
+      "workbench.preferredLightColorTheme": "LakshX Dark",
       "window.autoDetectColorScheme": false,
       "workbench.startupEditor": "none",
       "workbench.list.smoothScrolling": true,

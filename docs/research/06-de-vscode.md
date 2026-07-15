@@ -15,7 +15,7 @@ name/applicationName/dataFolder/urlProtocol/bundle ids/win32 ids; licenseUrl/rep
 - Packaging metadata (deb/rpm/snap templates), letterpress SVGs in src/vs/workbench/browser/parts/editor/media/.
 - build/lib/electron.ts: companyName "Microsoft Corporation", copyright, darwinHelpBookName — patch.
 
-## Built-in chat UI: the sanctioned switches (✅ applied via koder-ui configurationDefaults)
+## Built-in chat UI: the sanctioned switches (✅ applied via lakshx-ui configurationDefaults)
 - `chat.disableAIFeatures: true` — global kill switch (hides Chat views + inline chat, disables Copilot extensions)
 - `chat.commandCenter.enabled: false` — title-bar chat button
 - Residual benign log line: "CodeExpectedError: No default agent contributed".

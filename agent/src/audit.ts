@@ -10,7 +10,7 @@
  *
  * Format: one JSON object per line (JSONL), one file per calendar month —
  * `~/.lakshx/royal-audit/<yyyy-mm>.jsonl` — mirroring the exact convention
- * `product/koder-chat/extension.js`'s local feedback log already uses for
+ * `product/lakshx-chat/extension.js`'s local feedback log already uses for
  * `~/.lakshx/feedback/<yyyy-mm>.jsonl`, so this isn't a new pattern in the
  * product. Append-only: opened in append mode only, never truncated or
  * rewritten by the harness.

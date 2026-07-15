@@ -1,6 +1,6 @@
 # Research + Design: Remote Control — LAN Mobile View into Agent Progress (July 2026)
 
-Design for a "watch (and later, nudge) the LakshX agent from your phone" feature: a small HTTP(S) server the extension host starts on demand, serving a mobile-optimized page over the same WiFi/LAN, mirroring the same event vocabulary the desktop panel already renders. Grounded in the current code: `product/koder-chat/extension.js` (`AgentViewProvider`), `product/koder-chat/media/panel.js`, `agent/src/server.ts`. No implementation in this doc — design only.
+Design for a "watch (and later, nudge) the LakshX agent from your phone" feature: a small HTTP(S) server the extension host starts on demand, serving a mobile-optimized page over the same WiFi/LAN, mirroring the same event vocabulary the desktop panel already renders. Grounded in the current code: `product/lakshx-chat/extension.js` (`AgentViewProvider`), `product/lakshx-chat/media/panel.js`, `agent/src/server.ts`. No implementation in this doc — design only.
 
 ---
 
@@ -168,7 +168,7 @@ Visual language: reuse `panel.css`'s CSS custom properties (`--bg`, `--fg`, `--a
 
 ### Phase A — view-only LAN server + QR pairing + basic mobile page
 
-New files (all inside `product/koder-chat/`):
+New files (all inside `product/lakshx-chat/`):
 
 | File | Contents (sketch, not code) |
 |---|---|

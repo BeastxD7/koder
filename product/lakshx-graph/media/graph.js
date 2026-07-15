@@ -12,7 +12,7 @@
 //
 // This file is loaded unmodified both by the real webview (extension.js's
 // panelHtml()) AND by the standalone test harness under
-// product/koder-graph/test/harness — see the bootstrap IIFE at the bottom.
+// product/lakshx-graph/test/harness — see the bootstrap IIFE at the bottom.
 // `acquireVsCodeApi` only exists in the former; the harness instead calls
 // `window.__lakshxGraphApp.setTransport(...)` with fake handlers and feeds
 // `loadGraph(...)` fake data directly, exercising the exact same rendering

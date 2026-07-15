@@ -13,7 +13,7 @@
     "test": "tsx src/test-client.ts",
     "test:unit": "npx tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "bundle": "esbuild src/server.ts --bundle --platform=node --target=node20 --format=cjs --outfile=../product/koder-chat/agent/server.cjs --log-level=warning --external:playwright-core"
+    "bundle": "esbuild src/server.ts --bundle --platform=node --target=node20 --format=cjs --outfile=../product/lakshx-chat/agent/server.cjs --log-level=warning --external:playwright-core"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.2.1",

@@ -1,6 +1,6 @@
 # Design: Prompt IDs + Shadow-Git Checkpoints + Two-Surface Undo (July 2026)
 
-Design only, no implementation. Grounded in `agent/src/loop.ts`, `agent/src/server.ts`, `agent/src/tools.ts`, `agent/src/store.ts`, `agent/src/context.ts`, `product/koder-chat/extension.js`, `product/koder-chat/media/panel.js`/`panel.css`, and `agent/test/session-persistence.test.ts`. Builds directly on `docs/research/07-enterprise-chat-panel.md` P1.1 (shadow-git checkpoints, Cline-derived) and `docs/research/09-royal-mode-autonomous.md` §3.3 (checkpoint/rollback) — this doc **reconciles** the two (they differ on commit timing, see §2.3) and is the first to actually spec the wire protocol, UI, and test plan. External grounding: Cursor checkpoints, Cline's shadow-git implementation (including its documented corruption bugs), VS Code `editor/title` menu contributions and `FileDecorationProvider` — sources §11.
+Design only, no implementation. Grounded in `agent/src/loop.ts`, `agent/src/server.ts`, `agent/src/tools.ts`, `agent/src/store.ts`, `agent/src/context.ts`, `product/lakshx-chat/extension.js`, `product/lakshx-chat/media/panel.js`/`panel.css`, and `agent/test/session-persistence.test.ts`. Builds directly on `docs/research/07-enterprise-chat-panel.md` P1.1 (shadow-git checkpoints, Cline-derived) and `docs/research/09-royal-mode-autonomous.md` §3.3 (checkpoint/rollback) — this doc **reconciles** the two (they differ on commit timing, see §2.3) and is the first to actually spec the wire protocol, UI, and test plan. External grounding: Cursor checkpoints, Cline's shadow-git implementation (including its documented corruption bugs), VS Code `editor/title` menu contributions and `FileDecorationProvider` — sources §11.
 
 `grep -ri checkpoint` across the repo before starting this doc turned up only doc 07/09/PLAN.md's *designs* — nothing built. This is genuinely greenfield; there is no existing mechanism to avoid duplicating.
 
@@ -191,7 +191,7 @@ Emitted from a new `LoopCallbacks.onCheckpoint?(info)` hook (`loop.ts:16-27` int
 
 Both return `{ ok: true, reverted: string[] }` or `{ ok: false, conflict: { paths: string[] } }` (§5) — the client shows a confirmation dialog and re-sends with `force: true` on user confirmation (mirrors the existing permission-request pattern's shape, `server.ts:177-187`, rather than inventing a new confirmation primitive).
 
-### 3.3 Client-side association (`product/koder-chat/extension.js`)
+### 3.3 Client-side association (`product/lakshx-chat/extension.js`)
 
 - Add `"checkpoint"` to `REPLAYABLE` (`extension.js:165`) so it persists into `~/.lakshx/chats/<chatId>.json` and replays on reopen — the chat-panel UI (§7) needs it available immediately on chat load, not only during a live session.
 - `onNotification` (`extension.js:287-292`) gains: `if (method === "lakshx/checkpoint") this.post({ type: "checkpoint", ...params });`
@@ -282,7 +282,7 @@ Since we commit after every mutating tool call (§2.3), shadow-HEAD for a given 
 
 **Placement**: `editor/title` menu group `navigation`, right-aligned icon button, `$(discard)` codicon, label "Undo agent changes" (tooltip; icon-only in the title bar per VS Code convention for that group).
 
-**`package.json` contribution** (`product/koder-chat/package.json`, sketch):
+**`package.json` contribution** (`product/lakshx-chat/package.json`, sketch):
 
 ```json
 "contributes": {
@@ -431,9 +431,9 @@ No client changes in Phase A — this phase is done when `agent/test/` can drive
 
 | # | Change | File | Sketch |
 |---|---|---|---|
-| C1 | `lakshx.undoFileChanges` command + `editor/title` menu contribution + `lakshx.fileHasCheckpoint` context key | `product/koder-chat/package.json`, `extension.js` | §6; `activate()` registers the command alongside existing ones (`extension.js:646-667`) |
+| C1 | `lakshx.undoFileChanges` command + `editor/title` menu contribution + `lakshx.fileHasCheckpoint` context key | `product/lakshx-chat/package.json`, `extension.js` | §6; `activate()` registers the command alongside existing ones (`extension.js:646-667`) |
 | C2 | `fileCheckpoints` map maintenance (live updates + rebuild on `loadChat`) + `onDidChangeActiveTextEditor` wiring | `extension.js` | §3.3, §6 |
-| C3 | (stretch, not required for the core feature) `FileDecorationProvider` badge on files with an available checkpoint, visible in the file tree/tabs before opening | new small module in `product/koder-chat/` or inline in `extension.js` | 2-char badge cap noted in §6; register via `vscode.window.registerFileDecorationProvider`, fire `onDidChangeFileDecorations` when `fileCheckpoints` changes |
+| C3 | (stretch, not required for the core feature) `FileDecorationProvider` badge on files with an available checkpoint, visible in the file tree/tabs before opening | new small module in `product/lakshx-chat/` or inline in `extension.js` | 2-char badge cap noted in §6; register via `vscode.window.registerFileDecorationProvider`, fire `onDidChangeFileDecorations` when `fileCheckpoints` changes |
 
 Sequencing: A is a hard prerequisite for B and C (no data, no UI to build on). B and C are independent of each other and could ship in either order or in parallel once A lands — B is likely higher value first since it's the surface the user asked for by name first ("in the chat UI... a specific undo button for that dedicated list of files").
 
@@ -469,7 +469,7 @@ Unit-level (fast, no process spawn) coverage that should exist alongside the abo
 
 ## 11. Sources
 
-- **This codebase**: `agent/src/loop.ts` (`LoopCallbacks`, `AgentSession`, tool-call loop and mode gate at `loop.ts:199-210`), `agent/src/server.ts` (`session/prompt` handler `server.ts:127-215`, `session/load` replay `server.ts:56-100`), `agent/src/tools.ts` (`TOOLS`, `dangerous` flag), `agent/src/store.ts` (`StoredSession`, `saveSessionSoon`, `pruneSessions`), `agent/src/context.ts` (`scrubSecrets`, pattern to reuse for any checkpoint-adjacent logging), `agent/test/session-persistence.test.ts` (E2E test shape to mirror per §9), `product/koder-chat/extension.js` (`AgentViewProvider`, `REPLAYABLE`, `post()`/`persistSoon()`), `product/koder-chat/media/panel.js`/`panel.css` (`.tool` card pattern, `applyEvent`).
+- **This codebase**: `agent/src/loop.ts` (`LoopCallbacks`, `AgentSession`, tool-call loop and mode gate at `loop.ts:199-210`), `agent/src/server.ts` (`session/prompt` handler `server.ts:127-215`, `session/load` replay `server.ts:56-100`), `agent/src/tools.ts` (`TOOLS`, `dangerous` flag), `agent/src/store.ts` (`StoredSession`, `saveSessionSoon`, `pruneSessions`), `agent/src/context.ts` (`scrubSecrets`, pattern to reuse for any checkpoint-adjacent logging), `agent/test/session-persistence.test.ts` (E2E test shape to mirror per §9), `product/lakshx-chat/extension.js` (`AgentViewProvider`, `REPLAYABLE`, `post()`/`persistSoon()`), `product/lakshx-chat/media/panel.js`/`panel.css` (`.tool` card pattern, `applyEvent`).
 - **`docs/research/07-enterprise-chat-panel.md`** P1.1 — the original shadow-git-checkpoints design this doc builds on and reconciles (§2.3).
 - **`docs/research/09-royal-mode-autonomous.md`** §3.3 — checkpoint/rollback design (`checkpointBefore`, `~/.lakshx/checkpoints/<workspace-hash>/`, "restore is user-triggered only, never a tool the model can call") — reused verbatim where it doesn't conflict with §2.3's reconciliation.
 - **`docs/research/08-memory-context-engineering.md`** §2.1 — session persistence pattern (`~/.lakshx/sessions/<id>.json`, atomic debounced writes, `pruneSessions`) this design's `store.ts` extension and `checkpoint.ts` pruning both mirror.

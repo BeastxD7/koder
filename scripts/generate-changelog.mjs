@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Generates "What's New" changelog candidates for
-// product/koder-chat/changelog.js from real git history, so new entries
+// product/lakshx-chat/changelog.js from real git history, so new entries
 // don't require hand-editing that file from scratch every time. Read
-// product/koder-chat/changelog.js's header comment first — this script
+// product/lakshx-chat/changelog.js's header comment first — this script
 // exists to preserve that file's curation bar ("every entry must trace back
 // to a real commit/feature; no aspirational or noise items"), not relax it.
 //
@@ -11,7 +11,7 @@
 //   1. TRAILER commits — the commit message carries explicit
 //      `Changelog-Title:` / `Changelog-Description:` trailers, e.g.:
 //
-//          koder-chat: add parallel multi-agent subtasks
+//          lakshx-chat: add parallel multi-agent subtasks
 //
 //          <body...>
 //
@@ -57,7 +57,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const changelogPath = join(root, "product", "koder-chat", "changelog.js");
+const changelogPath = join(root, "product", "lakshx-chat", "changelog.js");
 const require = createRequire(import.meta.url);
 
 const FIELD_SEP = "\x1f"; // unit separator — between fields of one record

@@ -15,7 +15,7 @@ Design for what the LakshX agent runtime feeds the model per query and follow-up
 | Tool results: `grep` and `bash` hard-`slice(0, 60_000)` — pure head truncation, no elision marker, tail (where test failures live) is lost. `read_file` caps at 800 lines but has **no char cap** (one minified line = unbounded). | `tools.ts:141,172,174,40` |
 | No compaction, no token counting, no loop detection, no retry guidance. `MAX_ITERATIONS = 60` is the only brake. | `loop.ts:31,98` |
 | Tool errors go back verbatim (`ERROR: old_string not found in file`) with no recovery hint. | `loop.ts:159-163`, `tools.ts:87` |
-| The extension persists **render transcripts** (webview events) to `~/.lakshx/chats/<chatId>.json`; "open old chat" replays the view then calls `session/new` — the agent starts amnesiac. | `upstream/extensions/koder-chat/extension.js:167-214, 392-401` |
+| The extension persists **render transcripts** (webview events) to `~/.lakshx/chats/<chatId>.json`; "open old chat" replays the view then calls `session/new` — the agent starts amnesiac. | `upstream/extensions/lakshx-chat/extension.js:167-214, 392-401` |
 | `~/.lakshx/providers.json` holds plaintext API keys — anything we persist must never embed config/env. | `config.ts:39-67` |
 | No tree-sitter, no SDKs; adapters are bare `fetch` + SSE. Adding heavy deps is a real cost. | `providers/*` |
 

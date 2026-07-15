@@ -48,7 +48,7 @@ What LakshX actually does is **patch and reskin** upstream at build time:
 
 | Piece | What it does |
 |---|---|
-| `scripts/apply-ui.mjs` | Copies custom extensions/themes (`product/koder-chat`, `product/koder-ui`, `product/theme-koder-carbon`, `product/theme-koder-symbols`) into `upstream/extensions/`, and patches specific upstream files in place (e.g. removing Copilot from the default install list, patching `dirs.ts`). Idempotent — safe to re-run. |
+| `scripts/apply-ui.mjs` | Copies custom extensions/themes (`product/lakshx-chat`, `product/lakshx-ui`, `product/theme-lakshx-carbon`, `product/theme-lakshx-symbols`) into `upstream/extensions/`, and patches specific upstream files in place (e.g. removing Copilot from the default install list, patching `dirs.ts`). Idempotent — safe to re-run. |
 | `product/product.overrides.json` | JSON overrides merged into `upstream/product.json` at build time: branding, icons, `win32ContextMenu` CLSIDs, the (currently unset) integrity-checksum field. |
 | `scripts/dev.sh` | Fast local dev loop: `npm run compile-client` then launches Electron directly against `upstream/` (no packaging step) — the way to test changes quickly instead of syncing into a packaged `.app`. |
 | `.github/workflows/build.yml` | CI matrix: macOS arm64/x64, Windows, Linux. A fast `test` job (typecheck + unit tests) gates the expensive `build` job. Full 4-platform builds only run on release tags or manual dispatch, not every push. |
@@ -59,11 +59,11 @@ updates have to be re-applied through this same patch pipeline rather than merge
 
 ### The custom extensions
 
-- **`product/koder-chat`** — the agent chat panel. This is the interesting one; see §4-§6.
-- **`product/koder-ui`** — the "Koder Dark" color theme (`themes/koder-dark-color-theme.json`)
+- **`product/lakshx-chat`** — the agent chat panel. This is the interesting one; see §4-§6.
+- **`product/lakshx-ui`** — the "LakshX Dark" color theme (`themes/lakshx-dark-color-theme.json`)
   plus modern-default settings, registered as the actual default via `configurationDefaults`
-  in its own `package.json` (`"workbench.colorTheme": "Koder Dark"`).
-- **`product/theme-koder-carbon`**, **`product/theme-koder-symbols`** — icon themes.
+  in its own `package.json` (`"workbench.colorTheme": "LakshX Dark"`).
+- **`product/theme-lakshx-carbon`**, **`product/theme-lakshx-symbols`** — icon themes.
 
 ---
 
@@ -75,7 +75,7 @@ all. It's `agent/src/server.ts`, compiled/bundled by esbuild into a single Commo
 
 ```
 esbuild src/server.ts --bundle --platform=node --target=node20 --format=cjs \
-  --outfile=../product/koder-chat/agent/server.cjs --external:playwright-core
+  --outfile=../product/lakshx-chat/agent/server.cjs --external:playwright-core
 ```
 
 `extension.js` spawns that bundle as a **child process** and talks to it over
@@ -104,13 +104,13 @@ assume playwright-core sits at its normal `node_modules/playwright-core/` locati
 flattening it into `server.cjs` moves `__dirname` and breaks both lookups outright (confirmed
 by bundling it in — `require('server.cjs')` throws `MODULE_NOT_FOUND` for `browsers.json` at
 load time, before any tool even runs). So `playwright-core` is NOT bundled into `server.cjs` —
-it stays a real dependency of **`product/koder-chat/package.json`** (not `agent/package.json`
-alone), same pattern `product/koder-db/package.json` already uses for `mongodb`: Node's normal
-`require()` resolution walks up from `product/koder-chat/agent/server.cjs`'s directory and
-finds it in `product/koder-chat/node_modules/`. `scripts/apply-ui.mjs`'s `dirs.ts` patch (which
-already lists `extensions/koder-db` so upstream's own `npm ci` installs its real dependency —
-see that script's comment) lists `extensions/koder-chat` for the identical reason: without it,
-a packaged/CI build never runs `npm install` inside `extensions/koder-chat` and
+it stays a real dependency of **`product/lakshx-chat/package.json`** (not `agent/package.json`
+alone), same pattern `product/lakshx-db/package.json` already uses for `mongodb`: Node's normal
+`require()` resolution walks up from `product/lakshx-chat/agent/server.cjs`'s directory and
+finds it in `product/lakshx-chat/node_modules/`. `scripts/apply-ui.mjs`'s `dirs.ts` patch (which
+already lists `extensions/lakshx-db` so upstream's own `npm ci` installs its real dependency —
+see that script's comment) lists `extensions/lakshx-chat` for the identical reason: without it,
+a packaged/CI build never runs `npm install` inside `extensions/lakshx-chat` and
 `require("playwright-core")` fails at runtime exactly like `require("mongodb")` would have.
 
 ### Why a separate process matters
@@ -323,7 +323,7 @@ dumps.
 
 ## 8. Remote control: your phone as a second ACP-adjacent client
 
-`product/koder-chat/remote-server.js` runs a LAN-local HTTP+SSE server (off by default),
+`product/lakshx-chat/remote-server.js` runs a LAN-local HTTP+SSE server (off by default),
 paired via a QR code (`remote-qr.js`) carrying a session-lifetime random token. Once paired,
 `remote-page.js` (a small mobile web page) can:
 

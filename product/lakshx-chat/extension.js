@@ -84,7 +84,7 @@ function agentSpawnSpec(context) {
       ? { command: "cmd.exe", args: ["/d", "/c", custom], env: runtimeEnv() }
       : { command: "/bin/zsh", args: ["-lc", custom], env: runtimeEnv() };
   }
-  // dev layout: <repo>/upstream/extensions/koder-chat → runtime at <repo>/agent
+  // dev layout: <repo>/upstream/extensions/lakshx-chat → runtime at <repo>/agent
   const candidates = [
     path.resolve(context.extensionPath, "..", "..", "..", "agent"),
     path.resolve(context.extensionPath, "..", "..", "agent"),

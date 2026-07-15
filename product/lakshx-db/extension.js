@@ -1,6 +1,6 @@
 // LakshX Database panel — schema + relationship visualization for a live
 // MongoDB connection, rendered as a Mermaid `erDiagram` in a webview (same
-// createWebviewPanel pattern as product/koder-chat's showRemoteAccessPanel).
+// createWebviewPanel pattern as product/lakshx-chat's showRemoteAccessPanel).
 //
 // MongoDB is a deliberate special case among the engines this panel family
 // targets (Postgres/MySQL/SQLite are FK-enforced and get an authoritative

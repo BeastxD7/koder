@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Applies the Koder UI layer to the upstream tree:
- *  1. copies product/koder-ui into upstream/extensions/koder-ui (built-in ext)
- *  2. injects product/koder-ui/koder.css inline into the workbench HTML files
+ *  1. copies product/lakshx-ui into upstream/extensions/lakshx-ui (built-in ext)
+ *  2. injects product/lakshx-ui/lakshx.css inline into the workbench HTML files
  *     (src/ so future compiles keep it, out/ so it's live without a rebuild)
  * Idempotent: re-running replaces the previous injection between markers.
  */
@@ -19,7 +19,7 @@ if (!existsSync(join(upstream, "package.json"))) {
 }
 
 // 1. built-in extensions
-for (const ext of ["koder-ui", "koder-chat", "koder-graph", "koder-db", "theme-koder-carbon", "theme-koder-symbols"]) {
+for (const ext of ["lakshx-ui", "lakshx-chat", "lakshx-graph", "lakshx-db", "theme-lakshx-carbon", "theme-lakshx-symbols"]) {
   cpSync(join(root, "product", ext), join(upstream, "extensions", ext), { recursive: true });
   console.log(`${ext} extension → extensions/${ext}`);
 }
@@ -55,52 +55,52 @@ console.log("removed extensions/copilot");
     process.exit(1);
   }
 
-  // 1d. the opposite problem: koder-db is the first LakshX built-in
+  // 1d. the opposite problem: lakshx-db is the first LakshX built-in
   // extension with a REAL npm dependency (the `mongodb` driver — see
-  // product/koder-db/package.json). Unlike koder-ui/koder-chat/koder-graph
+  // product/lakshx-db/package.json). Unlike lakshx-ui/lakshx-chat/lakshx-graph
   // (zero deps, so their absence from dirs.ts was harmless), upstream's own
   // `npm ci`/postinstall in extensions/ only installs into directories
-  // listed here — without this entry, extensions/koder-db/node_modules
+  // listed here — without this entry, extensions/lakshx-db/node_modules
   // never gets populated by CI and `require("mongodb")` fails at runtime in
   // a packaged build (works locally only because this repo's own
-  // `npm install` was already run inside product/koder-db by hand).
+  // `npm install` was already run inside product/lakshx-db by hand).
   const beforeDb = patched;
-  patched = patched.replace(/^\t'extensions',\n/m, "\t'extensions',\n\t'extensions/koder-db',\n");
+  patched = patched.replace(/^\t'extensions',\n/m, "\t'extensions',\n\t'extensions/lakshx-db',\n");
   if (patched === beforeDb) {
     console.error(
-      "upstream/build/npm/dirs.ts: expected to find the 'extensions' entry to insert 'extensions/koder-db' after it, but it wasn't there — upstream's dirs.ts format may have changed. Fix scripts/apply-ui.mjs's regex."
+      "upstream/build/npm/dirs.ts: expected to find the 'extensions' entry to insert 'extensions/lakshx-db' after it, but it wasn't there — upstream's dirs.ts format may have changed. Fix scripts/apply-ui.mjs's regex."
     );
     process.exit(1);
   }
 
-  // 1e. koder-chat now has the same real-dependency problem as koder-db
+  // 1e. lakshx-chat now has the same real-dependency problem as lakshx-db
   // above, for the same reason: `agent/src/browser.ts`'s `browser_preview`
   // tool uses `playwright-core`, and `agent/package.json`'s esbuild bundle
   // deliberately marks it `--external` rather than inlining it into
   // `server.cjs` (see docs/architecture.md §3 — playwright-core's own
   // internal `__dirname`-relative lookups, e.g. `browsers.json`, break once
   // flattened into a different file by esbuild). That means
-  // `product/koder-chat/package.json`'s `playwright-core` dependency needs
-  // real `npm install`, same as koder-db's `mongodb` — without this entry,
+  // `product/lakshx-chat/package.json`'s `playwright-core` dependency needs
+  // real `npm install`, same as lakshx-db's `mongodb` — without this entry,
   // `require("playwright-core")` fails at runtime in a packaged build.
   const beforeChat = patched;
-  patched = patched.replace(/^\t'extensions\/koder-db',\n/m, "\t'extensions/koder-db',\n\t'extensions/koder-chat',\n");
+  patched = patched.replace(/^\t'extensions\/lakshx-db',\n/m, "\t'extensions/lakshx-db',\n\t'extensions/lakshx-chat',\n");
   if (patched === beforeChat) {
     console.error(
-      "upstream/build/npm/dirs.ts: expected to find the just-inserted 'extensions/koder-db' entry to insert 'extensions/koder-chat' after it. Fix scripts/apply-ui.mjs's regex."
+      "upstream/build/npm/dirs.ts: expected to find the just-inserted 'extensions/lakshx-db' entry to insert 'extensions/lakshx-chat' after it. Fix scripts/apply-ui.mjs's regex."
     );
     process.exit(1);
   }
 
   writeFileSync(dirsFile, patched);
-  console.log("patched build/npm/dirs.ts (dropped extensions/copilot install target, added extensions/koder-db and extensions/koder-chat)");
+  console.log("patched build/npm/dirs.ts (dropped extensions/copilot install target, added extensions/lakshx-db and extensions/lakshx-chat)");
 }
 
 // 2. CSS injection
-const css = readFileSync(join(root, "product", "koder-ui", "koder.css"), "utf8");
+const css = readFileSync(join(root, "product", "lakshx-ui", "lakshx.css"), "utf8");
 const OPEN = "<!-- KODER-UI-BEGIN -->";
 const CLOSE = "<!-- KODER-UI-END -->";
-const block = `${OPEN}<style id="koder-ui">\n${css}\n</style>${CLOSE}`;
+const block = `${OPEN}<style id="lakshx-ui">\n${css}\n</style>${CLOSE}`;
 
 const htmlFiles = [
   "src/vs/code/electron-browser/workbench/workbench.html",
@@ -128,7 +128,7 @@ for (const rel of htmlFiles) {
 }
 
 // 2b. replace the VS Code letterpress watermark with the Koder spark
-const lpSrcDir = join(root, "product", "koder-ui");
+const lpSrcDir = join(root, "product", "lakshx-ui");
 const lpTargets = [
   "src/vs/workbench/browser/parts/editor/media",
   "out/vs/workbench/browser/parts/editor/media",
@@ -242,4 +242,4 @@ const gulpfileWin32 = join(upstream, "build", "gulpfile.vscode.win32.ts");
   console.log("patched build/gulpfile.vscode.win32.ts (AppX packaging opt-in, not quality-gated)");
 }
 
-console.log("Koder UI applied.");
+console.log("LakshX UI applied.");

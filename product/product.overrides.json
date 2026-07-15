@@ -58,11 +58,11 @@
   "defaultChatAgent": {
     "name": "LakshX",
     "providerName": "LakshX",
-    "extensionId": "koder.inert",
-    "chatExtensionId": "koder.inert",
-    "providerExtensionId": "koder.inert",
-    "completionsAdvancedSetting": "koder.agent",
-    "providerUriSetting": "koder.agent.providerUri",
+    "extensionId": "lakshx.inert",
+    "chatExtensionId": "lakshx.inert",
+    "providerExtensionId": "lakshx.inert",
+    "completionsAdvancedSetting": "lakshx.agent",
+    "providerUriSetting": "lakshx.agent.providerUri",
     "provider": {
       "default": { "id": "lakshx", "name": "LakshX" },
       "enterprise": { "id": "lakshx", "name": "LakshX" }
