@@ -151,11 +151,27 @@ jobs:
       # `dpkg-deb` — already installed by this job's own "Linux build deps"
       # step above (`apt-get install ... fakeroot rpm`), so no new CI
       # tooling needed, same story as Windows's `innosetup` npm dependency.
+      #
+      # First CI attempt at this failed immediately on prepare-deb's own
+      # rimraf step ("clean-amd64") with "Error: spawn /bin/sh ENOENT" —
+      # right after the preceding esbuild-bundle-linux-x64-min step, which is
+      # the heaviest single step in the whole job (~3min of JS bundling/
+      # minification). Same failure signature this project already hit and
+      # fixed on macOS's npm ci step (a transient child_process spawn
+      # failure under resource pressure right after a heavy prior step, not
+      # a real logic bug) — applying the same proven retry-loop fix rather
+      # than a new one.
       - name: Build Linux package
         if: runner.os == 'Linux'
         shell: bash
         working-directory: upstream
-        run: npm run gulp vscode-linux-x64-prepare-deb vscode-linux-x64-build-deb
+        run: |
+          for attempt in 1 2 3; do
+            npm run gulp vscode-linux-x64-prepare-deb vscode-linux-x64-build-deb && exit 0
+            echo "Linux package build failed (attempt $attempt) — retrying in 10s" >&2
+            sleep 10
+          done
+          exit 1
 
       - name: Archive (Linux)
         if: runner.os == 'Linux'
