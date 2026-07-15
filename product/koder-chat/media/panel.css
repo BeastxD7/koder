@@ -1,4 +1,17 @@
 :root {
+  /* This panel is always dark, never OS-dependent — without this, Chromium
+     renders NATIVE form controls (a <select>'s open dropdown list
+     specifically — not the closed control, which the CSS below already
+     styles fine) using light-mode default colors regardless of the page's
+     own dark CSS, since native controls follow the `color-scheme` property
+     rather than arbitrary page styling. That's exactly the "mode/model
+     dropdown options are unreadable, white background with white text"
+     bug — the closed <select> looked dark (real CSS), but its OS-rendered
+     open option list ignored the CSS entirely and used Chromium's light
+     default. Same root cause class as the workbench falling back to
+     unbranded light theme; different subsystem (this is a webview's own
+     HTML, not VS Code's internal color-theme engine). */
+  color-scheme: dark;
   --bg: var(--vscode-sideBar-background, #0e1116);
   --fg: #c8cede;
   --muted: #8a93a8;
@@ -64,6 +77,19 @@ html, body {
   white-space: nowrap;
   outline: none;
   cursor: pointer;
+}
+/* `color-scheme: dark` (see :root) is what makes the OS-rendered option
+   list dark at all, but it only buys Chromium's own generic dark palette —
+   not Koder's actual purple/navy theme. Chromium DOES let you go further
+   and style individual <option> background/color directly (confirmed
+   working below for the royal-mode tint) — using the theme's own solid
+   --bg/--fg here, not the closed control's translucent rgba() overlay
+   (that's composited against the sidebar behind it; the open option list
+   renders on its own opaque OS-level surface, so a translucent color has
+   nothing meaningful to blend with). */
+#modeSelect option, #model option {
+  background: var(--bg);
+  color: var(--fg);
 }
 #modeSelect option[value="royal"] {
   background: rgba(255, 122, 89, 0.16);
