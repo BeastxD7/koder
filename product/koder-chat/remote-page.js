@@ -32,11 +32,6 @@ var CSS = [
   "* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }",
   "html, body { height: 100%; margin: 0; padding: 0; background: var(--bg); color: var(--fg);",
   "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 15px; }",
-  // `100vh`/`100dvh` handle the general case (Safari's collapsing address
-  // bar) but NOT the on-screen keyboard: per spec, viewport units are
-  // explicitly defined to ignore the software keyboard inset, so this line
-  // alone cannot fix the keyboard-covers-composer bug — see the JS
-  // `positionComposer()` below, which is the part that actually does.
   "#app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh;",
   "  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }",
   "#header { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 10px;",
@@ -94,13 +89,14 @@ var CSS = [
   "#reconnectScreen.show { display: block; }",
   "#reconnectScreen .title { color: var(--fg); font-weight: 600; margin-bottom: 8px; font-size: 15px; }",
   "#reconnectScreen .hint { font-size: 12.5px; line-height: 1.6; }",
-  // `position: sticky; bottom: 0` is the no-JS fallback (and the resting
-  // state once the keyboard is closed); `positionComposer()` in the script
-  // below switches this to `position: fixed` with a JS-computed `bottom`
-  // whenever `visualViewport` reports the visible area has shrunk (the
-  // keyboard opening), which sticky positioning alone cannot react to.
+  // `position: sticky; bottom: 0` keeps the composer pinned above the
+  // keyboard using the browser's own scroll-into-view-on-focus behavior —
+  // no JS positioning needed. The extra bottom padding beyond the safe
+  // area is the actual fix for the composer reading as "hidden behind the
+  // keyboard": it gives the sticky element enough clearance that it isn't
+  // flush against the very edge the keyboard slides up from.
   "#composer { display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px;",
-  "  padding-bottom: calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--hairline);",
+  "  padding-bottom: calc(24px + env(safe-area-inset-bottom)); border-top: 1px solid var(--hairline);",
   "  position: sticky; bottom: 0; background: var(--bg); z-index: 6; }",
   "#composerInput { flex: 1; resize: none; min-height: 20px; max-height: 120px; background: rgba(255,255,255,0.06);",
   "  border: 1px solid var(--hairline); border-radius: 10px; color: var(--fg); font: inherit; font-size: 14.5px;",
@@ -136,7 +132,6 @@ var SCRIPT = [
   "  var modeBarEl = document.getElementById('modeBar');",
   "  var bannerEl = document.getElementById('banner');",
   "  var reconnectEl = document.getElementById('reconnectScreen');",
-  "  var composerEl = document.getElementById('composer');",
   "  var inputEl = document.getElementById('composerInput');",
   "  var sendBtnEl = document.getElementById('sendBtn');",
   "  var noteEl = document.getElementById('composerNote');",
@@ -200,42 +195,6 @@ var SCRIPT = [
   "    inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';",
   "  }",
   "  inputEl.addEventListener('input', autoGrow);",
-  "",
-  "  // ---------- keyboard-avoidance ----------",
-  "  // Why 100vh/100dvh alone cannot fix \"composer hidden behind the",
-  "  // keyboard\": viewport units (including dvh/svh) are specified to track",
-  "  // browser-chrome collapse (the address bar hiding/showing), NOT the",
-  "  // on-screen keyboard — opening the keyboard only ever shows up as a",
-  "  // `visualViewport` resize (the visible area shrinks; the layout",
-  "  // viewport that `vh`/`dvh` and `position: sticky` are computed against",
-  "  // does not). So the composer has to be repositioned in direct response",
-  "  // to that event, not just re-sized with a CSS unit swap.",
-  "  function positionComposer() {",
-  "    var vv = window.visualViewport;",
-  "    if (!vv) return; // no visualViewport support — CSS 'position: sticky; bottom: 0' fallback still applies",
-  "    var gap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);",
-  "    composerEl.style.position = 'fixed';",
-  "    composerEl.style.left = '0';",
-  "    composerEl.style.right = '0';",
-  "    composerEl.style.bottom = gap + 'px';",
-  "    messagesEl.style.paddingBottom = (composerEl.offsetHeight + 20) + 'px';",
-  "    scrollBottom();",
-  "  }",
-  "  if (window.visualViewport) {",
-  "    window.visualViewport.addEventListener('resize', positionComposer);",
-  "    window.visualViewport.addEventListener('scroll', positionComposer);",
-  "    positionComposer();",
-  "  }",
-  "  window.addEventListener('orientationchange', function () { setTimeout(positionComposer, 60); });",
-  "  inputEl.addEventListener('focus', function () {",
-  "    // the keyboard animates in over roughly 250-300ms on iOS/Android; a",
-  "    // couple of follow-up checks let the composer settle in the right",
-  "    // place once the keyboard is fully open, not just wherever it landed",
-  "    // on the very first resize tick.",
-  "    setTimeout(positionComposer, 60);",
-  "    setTimeout(positionComposer, 320);",
-  "  });",
-  "  inputEl.addEventListener('blur', function () { setTimeout(positionComposer, 60); });",
   "",
   "  // ---------- mode switcher ----------",
   "  function setModeUI(mode) {",
@@ -403,7 +362,6 @@ var SCRIPT = [
   "    // tab (not just paused it), so re-fetching state on return is cheap",
   "    // insurance against a missed event never being replayed.",
   "    fetchState();",
-  "    if (window.visualViewport) positionComposer();",
   "  });",
   "",
   "  function showPermission(m) {",
