@@ -23683,7 +23683,8 @@ You have: read_file, list_dir, grep, dispatch_subtasks (fan out independent read
   const toolLine = "You have: read_file, write_file, edit_file, list_dir, grep, bash.";
   if (mode === "royal") {
     return `${toolLine}
-CURRENT MODE: ROYAL \u2014 full autonomy, full machine access, no restrictions. Unlike every other mode, there is NO destructive-command floor here: force-push, history rewrites, rm -rf anywhere on disk, package publishes, and any other destructive command run exactly as you issue them, with no pre-execution check and no permission prompt. This is not a hypothetical \u2014 it is really unrestricted. Because there is no human backstop in the moment, you carry the full weight of getting it right the first time: think before you act, don't experiment destructively "to see what happens." Everything you do is still logged (append-only, outside your reach, covers the whole machine) \u2014 but the checkpoint/undo safety net only covers THIS WORKSPACE: a mutation inside it gets a shadow-history commit and can be undone after the fact, while a mutation to a path OUTSIDE the workspace only gets the audit-log record \u2014 no checkpoint, no undo path. Treat any edit outside the workspace with extra care for exactly that reason: if you get it wrong there, nothing but the log survives to tell you what happened. You cannot read, alter, or delete the log or the checkpoints.`;
+CURRENT MODE: ROYAL \u2014 full autonomy, full machine access, no restrictions. Unlike every other mode, there is NO destructive-command floor here: force-push, history rewrites, rm -rf anywhere on disk, package publishes, and any other destructive command run exactly as you issue them, with no pre-execution check and no permission prompt. This is not a hypothetical \u2014 it is really unrestricted. Because there is no human backstop in the moment, you carry the full weight of getting it right the first time: think before you act, don't experiment destructively "to see what happens." Everything you do is still logged (append-only, outside your reach, covers the whole machine) \u2014 but the checkpoint/undo safety net only covers THIS WORKSPACE: a mutation inside it gets a shadow-history commit and can be undone after the fact, while a mutation to a path OUTSIDE the workspace only gets the audit-log record \u2014 no checkpoint, no undo path. Treat any edit outside the workspace with extra care for exactly that reason: if you get it wrong there, nothing but the log survives to tell you what happened. You cannot read, alter, or delete the log or the checkpoints.
+Royal's whole premise is that the human already decided to hand you the wheel \u2014 do not hand it back. Never end your turn on a clarifying question or a request for a decision only the user can make; that is Review mode's job, not this one. Where the request is ambiguous, make the most reasonable judgment call yourself, act on it, and state the assumption plainly in your final report \u2014 deliver a finished end product, not a question. dispatch_subtasks is fully available here (not just in Review mode) and children you spawn inherit royal mode's same full autonomy and no-permission-prompt behavior \u2014 actively reach for it when part of the work is naturally parallel (independent files/investigations/pieces), the same way you would in any other mode, rather than defaulting to doing everything yourself serially.`;
   }
   if (mode === "auto") {
     return `${toolLine}
@@ -23889,8 +23890,12 @@ async function runPromptLoop(session, userText, cb, promptId, trace, model, adap
       return "end_turn";
     }
     const results = [];
+    let cancelledMidLoop = false;
     for (const tc of result.toolCalls) {
-      if (signal?.aborted) return "cancelled";
+      if (signal?.aborted) {
+        cancelledMidLoop = true;
+        break;
+      }
       const spec = toolByName.get(tc.name);
       const title = toolTitle(tc.name, tc.input ?? {});
       if (!spec) {
@@ -24018,8 +24023,22 @@ async function runPromptLoop(session, userText, cb, promptId, trace, model, adap
         results.push({ type: "tool_result", tool_use_id: tc.id, content: msg, is_error: true });
       }
     }
+    if (cancelledMidLoop) {
+      const answered = new Set(results.map((r) => r.tool_use_id));
+      for (const tc of result.toolCalls) {
+        if (!answered.has(tc.id)) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tc.id,
+            content: "Cancelled by user before this tool call ran.",
+            is_error: true
+          });
+        }
+      }
+    }
     session.history.push({ role: "user", content: results });
     cb.onHistoryChanged?.();
+    if (cancelledMidLoop) return "cancelled";
   }
   return "max_turn_requests";
 }

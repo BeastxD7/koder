@@ -1,0 +1,46 @@
+{
+  "name": "lakshx-graph",
+  "displayName": "LakshX Call Graph",
+  "description": "LakshX's native call-graph panel — interactive incoming/outgoing call hierarchy from the symbol under your cursor.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onCommand:lakshx.showCallGraph"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.showCallGraph",
+        "title": "LakshX: Show Call Graph",
+        "icon": "$(graph)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "lakshx.showCallGraph",
+          "when": "editorHasCallHierarchyProvider",
+          "group": "navigation@98"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "lakshx.showCallGraph",
+          "when": "editorHasCallHierarchyProvider",
+          "group": "lakshx@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "lakshx.showCallGraph",
+          "when": "editorHasCallHierarchyProvider"
+        }
+      ]
+    }
+  }
+}

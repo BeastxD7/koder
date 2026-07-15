@@ -19,7 +19,7 @@ if (!existsSync(join(upstream, "package.json"))) {
 }
 
 // 1. built-in extensions
-for (const ext of ["koder-ui", "koder-chat", "theme-koder-carbon", "theme-koder-symbols"]) {
+for (const ext of ["koder-ui", "koder-chat", "koder-graph", "theme-koder-carbon", "theme-koder-symbols"]) {
   cpSync(join(root, "product", ext), join(upstream, "extensions", ext), { recursive: true });
   console.log(`${ext} extension → extensions/${ext}`);
 }
