@@ -147,10 +147,30 @@ jobs:
         if: runner.os == 'Linux'
         run: tar -czf ${{ matrix.artifact }}.tar.gz -C VSCode-${{ matrix.target }} .
 
+      # A proper installer, not a zip of loose files — the same "download,
+      # run one .exe" experience Cursor/VS Code itself ships. The gulp task
+      # (upstream/build/gulpfile.vscode.win32.ts, vscode-win32-x64-system-
+      # setup) runs Inno Setup via the `innosetup` npm devDependency already
+      # installed by the "Install upstream dependencies" step above — no
+      # extra tooling needed on the runner. Requires the win32*AppId GUIDs
+      # in product/product.overrides.json and the AppX-packaging patch in
+      # scripts/apply-ui.mjs (Koder doesn't build Microsoft's separate
+      # Windows Store package, so that branch is opted out rather than
+      # quality-gated — see that script's comment for why).
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: upstream
+        run: npm run gulp vscode-win32-x64-system-setup
+
       - name: Archive (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path "VSCode-${{ matrix.target }}\*" -DestinationPath "${{ matrix.artifact }}.zip"
+        # Absolute-resolved (repoPath in gulpfile.vscode.win32.ts derives from
+        # the module's own file location, not CWD), and this step — like the
+        # original zip-based one it replaces — runs from the job's default
+        # working directory (repo root), not `upstream/`, hence the prefix.
+        run: Copy-Item "upstream\.build\win32-x64\system-setup\VSCodeSetup.exe" "${{ matrix.artifact }}.exe"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -158,6 +178,7 @@ jobs:
           path: |
             ${{ matrix.artifact }}.zip
             ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.exe
           if-no-files-found: error
 
   release:

@@ -148,4 +148,40 @@ const gulpfileVscode = join(upstream, "build", "gulpfile.vscode.ts");
   console.log("patched build/gulpfile.vscode.ts (signtool.exe ENOENT no longer fatal)");
 }
 
+// 3c. build-system tweak: the Windows installer (Inno Setup) task sets
+// AppxPackage/AppxPackageDll/AppxPackageName/FileExplorerContextMenuCLSID
+// definitions whenever product.json's "quality" is "stable"/"insider" —
+// unconditionally, regardless of whether an actual .appx/.dll pair exists on
+// disk to reference. Those files come from Microsoft's own separate Windows
+// Store packaging pipeline, which this fork doesn't build. code.iss (the
+// Inno Setup script) already handles their ABSENCE gracefully — its own
+// comment says "No-op when FileExplorerContextMenuCLSID is not defined
+// (e.g. OSS builds)" — but only if the definition is never set in the first
+// place; Koder's product.overrides.json sets "quality": "stable" for other
+// reasons (branding/update-channel semantics elsewhere), which would
+// otherwise wrongly opt into this Microsoft-only branch and make Inno Setup
+// fail looking for a source file that was never built. Gate the branch
+// behind a new, Koder-specific opt-in flag (win32AppxPackagingEnabled) that
+// product.overrides.json never sets, instead of touching "quality" itself.
+const gulpfileWin32 = join(upstream, "build", "gulpfile.vscode.win32.ts");
+{
+  let src = readFileSync(gulpfileWin32, "utf8");
+  const before = "\t\tif (quality === 'stable' || quality === 'insider') {";
+  const after =
+    "\t\t// Koder: Microsoft's Windows Store (AppX) packaging pipeline isn't built\n" +
+    "\t\t// by this fork — gated behind an explicit opt-in product.json flag that\n" +
+    "\t\t// is never set here, rather than the quality check upstream uses (which\n" +
+    "\t\t// Koder sets to 'stable' for unrelated reasons). See scripts/apply-ui.mjs.\n" +
+    "\t\tif ((product as { win32AppxPackagingEnabled?: boolean }).win32AppxPackagingEnabled === true) {";
+  if (!src.includes(before)) {
+    console.error(
+      "upstream/build/gulpfile.vscode.win32.ts: expected the AppX-definitions quality check to patch, but it wasn't found — upstream's format may have changed. Fix scripts/apply-ui.mjs's patch."
+    );
+    process.exit(1);
+  }
+  src = src.replace(before, after);
+  writeFileSync(gulpfileWin32, src);
+  console.log("patched build/gulpfile.vscode.win32.ts (AppX packaging opt-in, not quality-gated)");
+}
+
 console.log("Koder UI applied.");

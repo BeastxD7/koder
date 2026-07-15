@@ -13,6 +13,10 @@
   "win32RegValueName": "Koder",
   "win32AppUserModelId": "Koder.Koder",
   "win32ShellNameShort": "Koder",
+  "win32x64AppId": "{{68518CFA-0929-4FA1-A525-CA505D289739}",
+  "win32arm64AppId": "{{F7E4B3E1-47BB-440F-9481-23C5AE524BE7}",
+  "win32x64UserAppId": "{{60FCCE60-FD87-402A-92AC-D654C7485E73}",
+  "win32arm64UserAppId": "{{14A38211-46E7-4ECD-AE20-134923B1ADE7}",
   "win32ContextMenu": {
     "x64": { "clsid": "691E9A78-A330-4A49-A432-6D92E5C3DA71" },
     "arm64": { "clsid": "EBF7FB8F-AF6F-45A8-8759-7AA9F21DEB58" },
