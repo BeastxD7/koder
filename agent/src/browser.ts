@@ -1,10 +1,15 @@
 /**
  * `browser_preview` tool implementation — lets the agent load a LOCALHOST-ONLY
  * dev server/webview it just built in a real Chrome/Edge and get back text
- * signals (HTTP status, title, console errors/warnings, page text). v1a is
- * deliberately text-only: no screenshot data is ever fed back to the model
- * (see `runBrowserPreview`'s doc comment below) — that's a separately scoped
- * future phase.
+ * signals (HTTP status, title, console errors/warnings, page text), PLUS the
+ * screenshot itself so a human watching the chat can see the agent's visual
+ * verification happen live (loop.ts/server.ts carry it to the client as a
+ * separate `image` attachment alongside the text — see `ToolRunResult` in
+ * tools.ts). The MODEL still only ever sees the text summary below: no
+ * screenshot bytes are fed back to the model as vision input (see
+ * `runBrowserPreview`'s doc comment below) — that's a separately scoped
+ * future phase (a real `image` ContentBlock variant + provider adapter
+ * support + a model-capability gate).
  *
  * Uses `playwright-core` (NOT the full `playwright` package, which downloads
  * ~170-300MB of bundled Chromium binaries via postinstall — incompatible
@@ -58,6 +63,20 @@ export interface BrowserPreviewInput {
   url: string;
   wait_for_selector?: string;
   timeout_ms?: number;
+}
+
+/**
+ * `runBrowserPreview`'s result: `text` is the same model-facing summary this
+ * tool has always returned (HTTP status, title, console entries, page text,
+ * ...) — untouched by this. `image`, when a screenshot was actually
+ * captured, is an ADDITIVE side-channel for the UI layer only (see
+ * `tools.ts`'s `ToolRunResult`) — `base64` is the exact bytes already
+ * written to `path` on disk, re-used from `page.screenshot()`'s own return
+ * value rather than reading the file back a second time.
+ */
+export interface BrowserPreviewResult {
+  text: string;
+  image?: { mimeType: string; base64: string; path: string };
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -138,15 +157,18 @@ async function launchBrowser() {
 
 /**
  * Run one `browser_preview` tool call: load `input.url` in an isolated
- * browser context, capture load-time signals, save a screenshot to disk for
- * HUMAN review, and return a text summary. Never returns image data — no
- * ContentBlock/provider changes happen here, by design (v1a scope).
+ * browser context, capture load-time signals, save a screenshot to disk, and
+ * return a text summary PLUS the screenshot as a UI-only `image` attachment
+ * (see `BrowserPreviewResult` above). The returned `text` never contains
+ * image data and is exactly what the model sees — no provider/ContentBlock
+ * changes happen here, by design (that's the separately scoped "vision
+ * input" phase).
  */
 export async function runBrowserPreview(
   input: BrowserPreviewInput,
   cwd: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<BrowserPreviewResult> {
   if (signal?.aborted) throw new Error("browser_preview: cancelled before starting");
 
   // §1 — hard, unconditional, pre-browser check. Nothing below this line
@@ -236,12 +258,16 @@ export async function runBrowserPreview(
         .evaluate(() => document.body?.innerText ?? "")
         .catch(() => "");
 
-      // Screenshot for HUMAN review only — saved to a workspace-scoped path,
-      // never read back and sent to the model (v1a is text-signals-only).
+      // Screenshot saved to a workspace-scoped path — never sent to the
+      // model (v1a is text-signals-only for the model), but now ALSO
+      // returned to the caller as `image` below so the UI can render it
+      // inline for a human. `page.screenshot({ path })` both writes the
+      // file AND resolves with the identical bytes, so this reuses that one
+      // buffer rather than reading the file back a second time.
       const shotDir = resolve(cwd, ".lakshx", "tmp");
       await mkdir(shotDir, { recursive: true });
       const shotPath = resolve(shotDir, `preview-${Date.now()}.png`);
-      await page.screenshot({ path: shotPath }).catch(() => {});
+      const screenshotBuf = await page.screenshot({ path: shotPath }).catch(() => null);
 
       const lines: string[] = [];
       lines.push(`URL: ${targetUrl.toString()}`);
@@ -265,10 +291,17 @@ export async function runBrowserPreview(
           ? consoleEntries.map((e) => `  ${summarizeText(e, MAX_CONSOLE_ENTRY_CHARS)}`).join("\n")
           : "  (none)",
       );
-      lines.push(`Screenshot saved (for human review, not sent to the model): ${shotPath}`);
+      lines.push(
+        screenshotBuf
+          ? `Screenshot saved (shown to the human in chat, not sent to you): ${shotPath}`
+          : `Screenshot: capture failed — none saved.`,
+      );
       lines.push(`Page text (capped):\n${summarizeText(pageText, MAX_PAGE_TEXT_CHARS) || "(empty)"}`);
 
-      return lines.join("\n");
+      return {
+        text: lines.join("\n"),
+        image: screenshotBuf ? { mimeType: "image/png", base64: screenshotBuf.toString("base64"), path: shotPath } : undefined,
+      };
     } finally {
       await context.close().catch(() => {});
     }

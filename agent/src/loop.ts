@@ -13,7 +13,7 @@ import { floorCheck, royalTamperCheck } from "./floor.js";
 import { AnthropicAdapter } from "./providers/anthropic.js";
 import { OpenAICompatAdapter } from "./providers/openai-compat.js";
 import type { ChatAdapter, ChatMessage, ContentBlock } from "./providers/types.js";
-import { clip, TOOLS, toolByName, type ToolSpec } from "./tools.js";
+import { clip, TOOLS, toolByName, type ToolImageAttachment, type ToolSpec } from "./tools.js";
 import { getTracer, type PromptTrace } from "./tracing.js";
 
 export type AgentMode = "review" | "approve" | "auto" | "royal";
@@ -22,7 +22,14 @@ export interface LoopCallbacks {
   onText(text: string): void;
   onThinking(text: string): void;
   onToolStart(call: { id: string; name: string; input: any; kind: ToolSpec["kind"]; title: string }): void;
-  onToolEnd(call: { id: string; output: string; isError: boolean }): void;
+  /**
+   * `image`, when present, is an additive side-channel — currently only
+   * `browser_preview` ever sets it (its screenshot, see tools.ts's
+   * `ToolImageAttachment`) — for the client to render inline. It never
+   * affects `output`, which stays exactly what's already been going to the
+   * model via `wrapToolOutput` for every other tool, unchanged.
+   */
+  onToolEnd(call: { id: string; output: string; isError: boolean; image?: ToolImageAttachment }): void;
   /**
    * Fired as raw tool-input JSON fragments arrive for a tool call that has
    * NOT been dispatched yet (docs/research reliability roadmap — live tool
@@ -886,7 +893,14 @@ async function runPromptLoop(
       };
 
       try {
-        let output = clip(await spec.run(tc.input ?? {}, session.cwd, signal), 60_000);
+        const raw = await spec.run(tc.input ?? {}, session.cwd, signal);
+        // Every tool but `browser_preview` still returns a plain string —
+        // normalize once, here, at the single call site (see tools.ts's
+        // `ToolRunResult` doc comment). `image` never touches `output`/the
+        // model-facing tool_result content below — it only ever reaches
+        // `cb.onToolEnd`, an additive UI side-channel.
+        const { text: rawOutput, image } = typeof raw === "string" ? { text: raw, image: undefined } : raw;
+        let output = clip(rawOutput, 60_000);
 
         // failed-edit retry hints: the #1 agent flail is retrying edit_file
         // blindly against a wrong old_string assumption
@@ -920,7 +934,7 @@ async function runPromptLoop(
         if (session.toolRepeatCount === 2) {
           output += "\n[note: identical call repeated — the result has not changed; try a different approach]";
         } else if (session.toolRepeatCount >= 4) {
-          cb.onToolEnd({ id: tc.id, output, isError: false });
+          cb.onToolEnd({ id: tc.id, output, isError: false, image });
           toolSpan.end({ output: summarizeText(output), isError: false });
           auditRun(output, false);
           results.push({
@@ -933,7 +947,7 @@ async function runPromptLoop(
           return "end_turn";
         }
 
-        cb.onToolEnd({ id: tc.id, output, isError: false });
+        cb.onToolEnd({ id: tc.id, output, isError: false, image });
         toolSpan.end({ output: summarizeText(output), isError: false });
         auditRun(output, false);
         results.push({ type: "tool_result", tool_use_id: tc.id, content: wrapToolOutput(tc.name, path, output) });

@@ -13,6 +13,7 @@ import { availableProviders, loadConfig } from "./config.js";
 import { runPrompt, toolTitle, type AgentMode, type AgentSession } from "./loop.js";
 import { probeProvider } from "./providers/validate.js";
 import { loadSessionFile, pruneSessions, saveSessionSoon, type PromptCheckpoint } from "./store.js";
+import { capToolImageBase64 } from "./tool-image-cap.js";
 
 interface Session extends AgentSession {
   pending?: AbortController;
@@ -285,13 +286,33 @@ acp
               rawInput: c.input,
             });
           },
-          onToolEnd: (c) =>
+          onToolEnd: (c) => {
             void notify({
               sessionUpdate: "tool_call_update",
               toolCallId: c.id,
               status: c.isError ? "failed" : "completed",
               content: [{ type: "content", content: { type: "text", text: c.output.slice(0, 4000) } }],
-            }),
+            });
+            // Screenshot side-channel (currently only `browser_preview` ever
+            // sets `image` — see tools.ts's `ToolImageAttachment`). A
+            // CUSTOM notification, not an extension of the standard
+            // `tool_call_update` above — same shape as `lakshx/tool_input_delta`:
+            // one extra ACP notification alongside the unchanged standard
+            // flow, so every other tool's existing text-only contract is
+            // untouched. `dataBase64` is omitted (not truncated) past the
+            // size cap — the client still gets `path` so it can offer
+            // "open the saved file" even when the inline preview is
+            // skipped.
+            if (c.image) {
+              void ctx.client.notify("lakshx/tool_image", {
+                sessionId,
+                toolCallId: c.id,
+                mimeType: c.image.mimeType,
+                path: c.image.path,
+                dataBase64: capToolImageBase64(c.image.base64),
+              });
+            }
+          },
           onToolInputDelta: notifyToolInputDelta,
           onPermission: async (c) => {
             const res = await ctx.client.request(acp.methods.client.session.requestPermission, {

@@ -170,12 +170,42 @@ export function clip(s: string, max = 60_000, headFrac = 0.65): string {
 
 export type ToolKind = "read" | "edit" | "execute" | "search";
 
+/**
+ * Additive, optional side-channel attached to a tool's result for the UI
+ * layer only — see `ToolRunResult` below. Currently only `browser_preview`
+ * (src/browser.ts) ever populates this, to carry its screenshot to the
+ * client for inline rendering (loop.ts -> server.ts -> extension.js ->
+ * panel.js). Never flows into the model-facing tool_result content: only
+ * `ToolRunResult.text` (or a plain string) does that, so this can never
+ * change what the model sees.
+ */
+export interface ToolImageAttachment {
+  mimeType: string;
+  /** Base64-encoded image bytes. */
+  base64: string;
+  /** Absolute path to the file already saved on disk (e.g. for "open full size"). */
+  path: string;
+}
+
+/**
+ * The richer, opt-in shape a tool's `run()` may return instead of a plain
+ * string — same `text` contract every other tool already satisfies (a plain
+ * `string` return still works everywhere `run()` is awaited, see loop.ts's
+ * one dispatch site), plus an optional `image` attachment. This keeps the
+ * shared tool-result contract additive: existing tools returning `string`
+ * needed zero changes.
+ */
+export interface ToolRunResult {
+  text: string;
+  image?: ToolImageAttachment;
+}
+
 export interface ToolSpec extends ToolDef {
   /** ACP tool-call kind for UI rendering */
   kind: ToolKind;
   /** true → must pass through the permission gate */
   dangerous: boolean;
-  run(input: any, cwd: string, signal?: AbortSignal): Promise<string>;
+  run(input: any, cwd: string, signal?: AbortSignal): Promise<string | ToolRunResult>;
 }
 
 function abs(cwd: string, p: string): string {
@@ -346,7 +376,8 @@ export const TOOLS: ToolSpec[] = [
       "Load a LOCALHOST-ONLY dev server or webview you just built in a real browser and get back text signals: " +
       "HTTP status, page title, console errors/warnings captured during load, whether an optional CSS selector " +
       "appeared, and a capped chunk of visible page text. A screenshot is also saved to disk under .lakshx/tmp/ " +
-      "for a HUMAN to look at later — it is NOT shown to you, so don't rely on it to answer visual questions. " +
+      "and shown inline to the HUMAN in chat — it is NOT shown to you, so don't rely on it to answer visual " +
+      "questions; use the text signals above for that. " +
       "Only 127.0.0.1, ::1, and localhost URLs are accepted (with any port/path) — this cannot reach the public " +
       "internet or any other host, and file:// URLs are rejected outright.",
     input_schema: {

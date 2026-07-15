@@ -268,7 +268,11 @@ async function searchWorkspaceFiles(q) {
 // (see notifyReverted below) so a chat reload nets out to the same "does
 // this file currently have an undoable agent change" state live sessions
 // converge to, instead of resurrecting already-reverted files after reload.
-const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
+// "toolImage" is the LIGHTWEIGHT marker only (id/path/mimeType, no pixel
+// data) — see onToolImage below for why the heavy base64 payload is
+// deliberately kept OUT of this set, same live-only treatment as
+// "toolInputDelta".
+const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
 
 function chatsDir() {
   const dir = path.join(os.homedir(), ".lakshx", "chats");
@@ -566,6 +570,7 @@ class AgentViewProvider {
         if (method === "lakshx/subagent_activity") this.onSubagentActivity(params);
         if (method === "lakshx/subagents_end") this.onSubagentsEnd(params);
         if (method === "lakshx/tool_input_delta") this.onToolInputDelta(params);
+        if (method === "lakshx/tool_image") this.onToolImage(params);
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -686,6 +691,44 @@ class AgentViewProvider {
    */
   onToolInputDelta(params) {
     this.post({ type: "toolInputDelta", id: params.toolCallId, name: params.name, field: params.field, value: params.value, path: params.path });
+  }
+
+  /**
+   * `lakshx/tool_image` (agent/src/server.ts, fired from `LoopCallbacks.onToolEnd`'s
+   * `image` field — currently only `browser_preview`'s screenshot, see
+   * agent/src/tools.ts's `ToolImageAttachment`) — the human-visible half of
+   * "browser visuals" (the gap this whole feature closes: the agent already
+   * ran browser_preview, but nobody ever saw the screenshot happen). Split
+   * into two webview message types with deliberately different durability,
+   * mirroring `onToolInputDelta`'s live-only precedent for the heavy part:
+   *
+   *  - "toolImage" (REPLAYABLE): id/path/mimeType ONLY, no pixel data. This
+   *    is what persists to the per-chat JSON and what a paired phone's
+   *    reconnect snapshot replays — cheap enough to keep around indefinitely,
+   *    and enough for panel.js to render a "screenshot saved — click to
+   *    open" affordance after a reload even though the inline picture itself
+   *    is gone.
+   *  - "toolImageData" (NOT REPLAYABLE, live only): the actual base64
+   *    pixels, sent straight to the webview + any connected remote phone via
+   *    postMessage/broadcast, bypassing `post()` so it never lands in
+   *    `this.transcript`/disk/the reconnect snapshot. A chat with several
+   *    browser_preview calls would otherwise rewrite a multi-MB blob into
+   *    the chat's JSON file on every single persistSoon() and re-send it in
+   *    full to every reconnecting phone — this is the same trade-off
+   *    `onToolInputDelta` already makes for its own (smaller, but same
+   *    shape) live-only payload.
+   *
+   * `params.dataBase64` is `undefined` when server.ts's size cap dropped it
+   * (screenshot too large to inline) — "toolImageData" is simply not sent in
+   * that case, and panel.js's placeholder affordance says so.
+   */
+  onToolImage(params) {
+    this.post({ type: "toolImage", id: params.toolCallId, path: params.path, mimeType: params.mimeType, truncated: !params.dataBase64 });
+    if (params.dataBase64) {
+      const payload = { type: "toolImageData", id: params.toolCallId, path: params.path, mimeType: params.mimeType, dataBase64: params.dataBase64 };
+      this.view?.webview.postMessage(payload);
+      this.remote?.broadcast(payload);
+    }
   }
 
   /**
@@ -1179,6 +1222,19 @@ class AgentViewProvider {
       case "openCheckpointFile":
         this.openCheckpointDiff(m.promptId, m.path);
         break;
+      case "openToolImage":
+        // Clicking a `browser_preview` thumbnail — `m.path` is already the
+        // absolute on-disk path (agent/src/browser.ts saves it under
+        // `.lakshx/tmp/`, outside `localResourceRoots`, so this deliberately
+        // does NOT go through `asWebviewUri`). "vscode.open" (same idiom as
+        // the "vscode.diff" command used for checkpoint diffs above) lets
+        // VS Code pick the right editor for a PNG — its built-in image
+        // preview, full resolution — instead of forcing it through
+        // showTextDocument (which treats everything as text).
+        if (typeof m.path === "string" && m.path) {
+          vscode.commands.executeCommand("vscode.open", vscode.Uri.file(m.path));
+        }
+        break;
       case "cancel":
         this.acp?.notify("session/cancel", { sessionId: this.sessionId });
         break;
@@ -1341,7 +1397,7 @@ class AgentViewProvider {
     return `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src ${webview.cspSource}; font-src ${webview.cspSource};">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src ${webview.cspSource}; font-src ${webview.cspSource}; img-src ${webview.cspSource} data:;">
 <link rel="stylesheet" href="${css}">
 ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
 </head><body>

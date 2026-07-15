@@ -245,6 +245,38 @@ html, body {
    case a future style wants to distinguish "guessed title" from confirmed. */
 .tool.pending .title { opacity: 0.85; }
 
+/* browser_preview's inline screenshot (panel.js's applyToolImageData) — a
+   compact thumbnail, not the full-resolution capture, matching this card's
+   already-compact aesthetic; click opens the full-size PNG (see panel.js's
+   openToolImage / extension.js's "openToolImage" handler). */
+.tool-image {
+  margin-left: 14px;
+  display: block;
+  max-width: 220px;
+  max-height: 150px;
+  width: auto;
+  height: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  cursor: pointer;
+  object-fit: contain;
+  background: var(--card);
+}
+.tool-image:hover { border-color: var(--accent); }
+/* Shown instead of `.tool-image` until the live pixel payload arrives (or in
+   its place, on replay, since the heavy payload is deliberately never
+   persisted — see extension.js's onToolImage doc comment) — same chip
+   treatment as `.tool-preview`, just a single line, always clickable. */
+.tool-image-link {
+  margin-left: 14px;
+  padding: 4px 8px;
+  border-left: 1px solid var(--hairline);
+  font-size: 11px;
+  color: var(--faint);
+  cursor: pointer;
+}
+.tool-image-link:hover { color: var(--accent); }
+
 /* ---------- checkpoints: "Files changed" card + undo (docs/research/11 §7) ---------- */
 /* Reuses the .tool card's visual language (left hairline border, muted color,
    monospace file names) rather than inventing a new pattern. */

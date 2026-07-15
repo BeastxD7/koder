@@ -162,17 +162,30 @@ test("e2e: browser_preview reports status, title, console errors/warnings, and s
   try {
     await withTmp(async (dir) => {
       const result = await runBrowserPreview({ url: page.url, wait_for_selector: "#app" }, dir);
-      assert.match(result, /HTTP status: 200/);
-      assert.match(result, /Page title: Test Page/);
-      assert.match(result, /\[error\] boom/);
-      assert.match(result, /\[warning\] careful/);
-      assert.match(result, /wait_for_selector "#app": found/);
-      assert.match(result, /Screenshot saved/);
+      assert.match(result.text, /HTTP status: 200/);
+      assert.match(result.text, /Page title: Test Page/);
+      assert.match(result.text, /\[error\] boom/);
+      assert.match(result.text, /\[warning\] careful/);
+      assert.match(result.text, /wait_for_selector "#app": found/);
+      assert.match(result.text, /Screenshot saved/);
 
       // Screenshot actually landed under the workspace-scoped .lakshx/tmp path.
       const shots = await readdir(join(dir, ".lakshx", "tmp"));
       assert.equal(shots.length, 1);
       assert.match(shots[0], /^preview-\d+\.png$/);
+
+      // The same screenshot is ALSO returned as an `image` attachment (the
+      // UI side-channel loop.ts/server.ts carry to the client — see
+      // tools.ts's ToolImageAttachment) — proves the returned base64 is
+      // real image bytes, not just a stub, and that its `path` matches the
+      // file actually saved to disk.
+      assert.ok(result.image, "expected an image attachment");
+      assert.equal(result.image!.mimeType, "image/png");
+      assert.equal(result.image!.path, join(dir, ".lakshx", "tmp", shots[0]));
+      const bytes = Buffer.from(result.image!.base64, "base64");
+      assert.ok(bytes.length > 8, "expected non-trivial image bytes");
+      // PNG magic number — confirms this decodes to a real PNG, not garbage.
+      assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     });
   } finally {
     await page.close();
@@ -188,7 +201,7 @@ test("e2e: browser_preview reports a missing selector without failing the call",
   try {
     await withTmp(async (dir) => {
       const result = await runBrowserPreview({ url: page.url, wait_for_selector: "#does-not-exist", timeout_ms: 2000 }, dir);
-      assert.match(result, /wait_for_selector "#does-not-exist": NOT found/);
+      assert.match(result.text, /wait_for_selector "#does-not-exist": NOT found/);
     });
   } finally {
     await page.close();
@@ -209,7 +222,7 @@ test(
 </body></html>`);
     try {
       await withTmp(async (dir) => {
-        let result: string | undefined;
+        let result: { text: string; image?: { mimeType: string; base64: string; path: string } } | undefined;
         let thrown: unknown;
         try {
           result = await runBrowserPreview({ url: page.url, timeout_ms: 5000 }, dir);
@@ -223,11 +236,11 @@ test(
           assert.match(String((thrown as Error).message ?? thrown), /blocked/i);
         } else {
           assert.ok(result, "expected a result when not thrown");
-          assert.match(result!, /SECURITY: blocked/);
-          assert.match(result!, /evil\.invalid\.test/);
+          assert.match(result!.text, /SECURITY: blocked/);
+          assert.match(result!.text, /evil\.invalid\.test/);
           // The original page's title must still be intact — proof the
           // browser never actually navigated to the disallowed host.
-          assert.match(result!, /Page title: Redirect Attempt/);
+          assert.match(result!.text, /Page title: Redirect Attempt/);
         }
       });
     } finally {

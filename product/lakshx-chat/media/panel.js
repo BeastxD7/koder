@@ -212,6 +212,69 @@ function toolInputDeltaTitle(m) {
   return m.path ? `${label} ${m.path}` : label;
 }
 
+// ---------- browser_preview screenshot (inline visual verification) ----------
+// `toolImage` (durable, lightweight — id/path/mimeType only, REPLAYABLE) and
+// `toolImageData` (live-only, the actual base64 pixels — see extension.js's
+// `onToolImage` doc comment for why these are split) both target the SAME
+// `.tool` card `addTool()`/`applyToolInputDelta()` already created, keyed by
+// `id`. Whichever arrives — almost always both, `toolImage` first — renders
+// into the same card, right under its `.tool-preview`/title row, exactly
+// where a live "typing" preview would have been.
+function applyToolImage(m) {
+  const el = tools.get(m.id);
+  if (!el) return;
+  // The real pixels (from "toolImageData", live-only) already rendered —
+  // the lightweight marker has nothing further to add. Guards against the
+  // marker arriving second (or a replay-then-live edge case) clobbering an
+  // already-inlined image with a plain "click to open" chip.
+  if (el.querySelector(".tool-image")) return;
+  let link = el.querySelector(".tool-image-link");
+  if (!link) {
+    link = document.createElement("div");
+    link.className = "tool-image-link";
+    link.setAttribute("role", "button");
+    link.tabIndex = 0;
+    link.addEventListener("click", () => openToolImage(link.dataset.path));
+    link.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); link.click(); }
+    });
+    el.appendChild(link);
+  }
+  link.dataset.path = m.path ?? "";
+  link.textContent = m.truncated
+    ? "Screenshot saved (too large to preview inline) — click to open"
+    : "Screenshot saved — click to open";
+  scrollBottom();
+}
+
+/** Live-only — see extension.js's `onToolImage` doc comment for why this never replays. */
+function applyToolImageData(m) {
+  const el = tools.get(m.id);
+  if (!el || !m.dataBase64) return;
+  el.querySelector(".tool-image-link")?.remove(); // the real picture supersedes the "click to open" placeholder
+  let img = el.querySelector(".tool-image");
+  if (!img) {
+    img = document.createElement("img");
+    img.className = "tool-image";
+    img.alt = "browser_preview screenshot";
+    img.title = "Click to open full size";
+    img.setAttribute("role", "button");
+    img.tabIndex = 0;
+    img.addEventListener("click", () => openToolImage(img.dataset.path));
+    img.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); img.click(); }
+    });
+    el.appendChild(img);
+  }
+  img.dataset.path = m.path ?? "";
+  img.src = `data:${m.mimeType};base64,${m.dataBase64}`;
+  scrollBottom();
+}
+
+function openToolImage(path) {
+  if (path) vscode.postMessage({ type: "openToolImage", path });
+}
+
 // ---------- prompt checkpoints + "Files changed" undo (docs/research/11 §7) ----------
 // Two surfaces, same underlying "checkpoint"/"checkpointReverted" event
 // stream, same undo primitives:
@@ -1097,6 +1160,7 @@ function applyEvent(m, replaying) {
       if (el) el.className = `tool ${m.status === "completed" ? "done" : m.status === "failed" ? "failed" : "running"}`;
       break;
     }
+    case "toolImage": applyToolImage(m); break;
     case "system": addMsg("system", m.text); break;
     case "modeChanged":
       setModeUI(m.mode);
@@ -1273,6 +1337,11 @@ window.addEventListener("message", (e) => {
       applyToolInputDelta(m);
       break;
     case "toolUpdate": applyEvent(m, false); break;
+    case "toolImage": applyEvent(m, false); break;
+    // Live-only heavy payload (never replayed — see extension.js's
+    // `onToolImage` doc comment): applyToolImageData is called directly,
+    // not through applyEvent, since it must never run during a replay pass.
+    case "toolImageData": applyToolImageData(m); break;
     case "modeChanged": applyEvent(m, false); break;
     case "checkpoint": applyEvent(m, false); break;
     case "checkpointReverted": applyEvent(m, false); break;
