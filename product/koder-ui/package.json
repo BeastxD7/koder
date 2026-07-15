@@ -17,6 +17,9 @@
     ],
     "configurationDefaults": {
       "workbench.colorTheme": "Koder Dark",
+      "workbench.preferredDarkColorTheme": "Koder Dark",
+      "workbench.preferredLightColorTheme": "Koder Dark",
+      "window.autoDetectColorScheme": false,
       "workbench.startupEditor": "none",
       "workbench.list.smoothScrolling": true,
       "workbench.tree.indent": 14,
