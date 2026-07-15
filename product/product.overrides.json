@@ -32,7 +32,18 @@
     "extensionUrlTemplate": "https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest",
     "resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}"
   },
-  "extensionRecommendations": {},
+  "extensionRecommendations": {
+    "cweijan.vscode-mysql-client2": {
+      "onFileOpen": [
+        { "pathGlob": "{**/*.sql}", "important": false }
+      ]
+    },
+    "LuoZhihao.call-graph": {
+      "onFileOpen": [
+        { "pathGlob": "{**/*.ts,**/*.js,**/*.py,**/*.go,**/*.java,**/*.rs}", "important": false }
+      ]
+    }
+  },
   "keymapExtensionTips": [],
   "webExtensionTips": [],
   "languageExtensionTips": [],
