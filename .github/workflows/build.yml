@@ -215,11 +215,31 @@ jobs:
       # ("tools/*") — running system-setup alone leaves that directory
       # empty and Inno Setup aborts with "No files found matching
       # ...\tools\*" (found the hard way on the first CI attempt at this).
+      #
+      # These two task names were previously passed to a SINGLE `npm run
+      # gulp` invocation, relying on CLI argument order to guarantee
+      # sequencing. That's the same shape as the Linux .deb race (see
+      # "Build Linux package" above): gulp-cli's own source
+      # (node_modules/gulp-cli/lib/versioned/^4.0.0/index.js) runs multiple
+      # CLI task arguments via gulp.parallel() unless --series is passed,
+      # and vscode-win32-x64-system-setup (build/gulpfile.vscode.win32.ts,
+      # task.series(cleanTask, buildWin32Setup)) is never task.series-
+      # chained with vscode-win32-x64-inno-updater — they're independent
+      # task graphs. Microsoft's own pipeline (build/azure-pipelines/win32/
+      # steps/product-build-win32-compile.yml) runs inno-updater as its own
+      # separate `exec { npm run gulp ... }` step, never combined with
+      # system-setup on one command line. Whether the combined form here
+      # actually lost the race is unconfirmed (the tiny tools/ copy likely
+      # finishes before ISCC.exe gets around to globbing it, so it can pass
+      # by luck) — but the ordering was never actually enforced, so split
+      # it the same way the Linux fix did rather than rely on that luck.
       - name: Build Windows installer
         if: runner.os == 'Windows'
         shell: bash
         working-directory: upstream
-        run: npm run gulp vscode-win32-x64-inno-updater vscode-win32-x64-system-setup
+        run: |
+          npm run gulp vscode-win32-x64-inno-updater
+          npm run gulp vscode-win32-x64-system-setup
 
       - name: Archive (Windows)
         if: runner.os == 'Windows'
@@ -249,9 +269,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # The build matrix produces .zip (macOS), .deb (Linux), and .exe
+      # (Windows) — see the matching Archive/Package steps in the `build`
+      # job above. Nothing in this pipeline ever produces a .tar.gz (a
+      # stale leftover, likely from before the .deb/.exe packaging was
+      # added); the old *.zip/*.tar.gz-only glob silently dropped the
+      # Linux and Windows installers from the GitHub Release — the release
+      # would have shipped the macOS build only. fail_on_unmatched_files is
+      # left at its default (false) so one platform's build job failing
+      # under fail-fast: false doesn't fail the whole release.
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             *.zip
-            *.tar.gz
+            *.deb
+            *.exe
           generate_release_notes: true

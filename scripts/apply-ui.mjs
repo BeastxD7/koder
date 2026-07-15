@@ -39,7 +39,14 @@ console.log("removed extensions/copilot");
 // Drop the entry so postinstall never tries to install into it.
 {
   const dirsFile = join(upstream, "build", "npm", "dirs.ts");
-  const dirsSrc = readFileSync(dirsFile, "utf8");
+  // Normalize CRLF->LF before matching: on Windows CI, core.autocrlf=true
+  // checks upstream/ out with CRLF line endings (confirmed for this same
+  // repo by the git-apply --ignore-whitespace fix in scripts/prepare.sh),
+  // and this regex's trailing \n would never match a `,\r\n` sequence,
+  // silently or loudly depending on the check below. Writing back LF-only
+  // is safe — this is a disposable, gitignored build tree, and TypeScript
+  // doesn't care about line-ending style.
+  const dirsSrc = readFileSync(dirsFile, "utf8").replace(/\r\n/g, "\n");
   const patched = dirsSrc.replace(/^\t'extensions\/copilot',\n/m, "");
   if (patched === dirsSrc) {
     console.error(
@@ -107,7 +114,11 @@ for (const dir of lpTargets) {
 // pipeline's ripgrep-shim step must skip instead of throwing.
 const copilotBuild = join(upstream, "build", "lib", "copilot.ts");
 if (existsSync(copilotBuild)) {
-  let src = readFileSync(copilotBuild, "utf8");
+  // Normalize CRLF->LF defensively (this particular match is single-line so
+  // it's unaffected today, but a future upstream reflow that wraps it across
+  // lines would silently re-expose the same CRLF issue fixed below for
+  // dirs.ts/gulpfile.vscode.ts — cheap insurance to normalize unconditionally).
+  let src = readFileSync(copilotBuild, "utf8").replace(/\r\n/g, "\n");
   const throwLine = "throw new Error(`[prepareBuiltInCopilotRipgrepShim] Copilot SDK directory not found at ${copilotSdkBase}`);";
   const skipLine = "console.log(`[koder] copilot extension not bundled — skipping ripgrep shim`); return;";
   if (src.includes(throwLine)) {
@@ -127,7 +138,13 @@ if (existsSync(copilotBuild)) {
 // error; genuine signtool failures (SDK present, real error) still reject.
 const gulpfileVscode = join(upstream, "build", "gulpfile.vscode.ts");
 {
-  let src = readFileSync(gulpfileVscode, "utf8");
+  // Normalize CRLF->LF before matching: this `before` literal spans two
+  // lines joined by a literal \n, so on Windows CI (upstream/ checked out
+  // CRLF, same root cause as scripts/prepare.sh's --ignore-whitespace fix
+  // for patches/*.patch) the \r before each \n breaks the match outright.
+  // Confirmed locally against a CRLF-converted copy of the pristine file —
+  // this pattern fails to match without the normalization below.
+  let src = readFileSync(gulpfileVscode, "utf8").replace(/\r\n/g, "\n");
   const before = "\t\tproc.on('error', reject);\n\t\tproc.on('exit', code => resolve(code === 0));";
   const after =
     "\t\tproc.on('error', (err) => {\n" +
@@ -165,7 +182,10 @@ const gulpfileVscode = join(upstream, "build", "gulpfile.vscode.ts");
 // product.overrides.json never sets, instead of touching "quality" itself.
 const gulpfileWin32 = join(upstream, "build", "gulpfile.vscode.win32.ts");
 {
-  let src = readFileSync(gulpfileWin32, "utf8");
+  // Normalize CRLF->LF defensively — see the copilot.ts comment above for
+  // why this unconditional normalization is applied even to matches that
+  // are single-line-safe today.
+  let src = readFileSync(gulpfileWin32, "utf8").replace(/\r\n/g, "\n");
   const before = "\t\tif (quality === 'stable' || quality === 'insider') {";
   const after =
     "\t\t// Koder: Microsoft's Windows Store (AppX) packaging pipeline isn't built\n" +

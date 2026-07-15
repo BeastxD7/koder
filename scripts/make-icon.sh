@@ -8,8 +8,11 @@ cd "$(dirname "$0")/.."
 [ -f assets/koder.icns ] || { echo "assets/koder.icns missing — run node scripts/render-icon.mjs" >&2; exit 1; }
 
 cp assets/koder.icns upstream/resources/darwin/code.icns
-APP=upstream/.build/electron/Koder.app
-if [ -d "$APP" ]; then
+# .app name derives from product.nameLong (upstream/build/lib/electron.ts),
+# not a fixed "Koder.app" — glob for whatever actually landed, same fix as
+# scripts/install-icons.mjs and .github/workflows/build.yml's macOS Archive step.
+APP=$(ls -d upstream/.build/electron/*.app 2>/dev/null | head -1 || true)
+if [ -n "$APP" ] && [ -d "$APP" ]; then
   for f in "$APP"/Contents/Resources/*.icns; do
     cp assets/koder.icns "$f"
   done

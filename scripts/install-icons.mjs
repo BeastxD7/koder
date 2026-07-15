@@ -85,11 +85,22 @@ if (existsSync(win32AssetsDir) && existsSync(win32Dest)) {
   console.log(`icon: ${count} Inno Setup wizard bitmaps → resources/win32/`);
 }
 
-// live dev bundle on macOS, if present
-const app = join(upstream, ".build/electron/Koder.app/Contents/Resources");
-if (existsSync(app) && existsSync(join(assets, "koder.icns"))) {
-  for (const f of readdirSync(app).filter((f) => f.endsWith(".icns"))) {
-    copyFileSync(join(assets, "koder.icns"), join(app, f));
+// live dev bundle on macOS, if present. The .app name derives from
+// product.nameLong (see upstream/build/lib/electron.ts's
+// `productAppName: product.nameLong`), not a fixed "Koder.app" — same
+// rebrand-staleness class as the "Archive (macOS)" step in
+// .github/workflows/build.yml. Not CI-reachable (this path only exists
+// after a local `dev.sh`/`scripts/code.sh` run, never created by the CI
+// pipeline), but glob for whatever .app actually landed instead of
+// hardcoding a name that will go stale on the next rebrand too.
+const electronDir = join(upstream, ".build/electron");
+if (existsSync(electronDir) && existsSync(join(assets, "koder.icns"))) {
+  const appDir = readdirSync(electronDir).find((f) => f.endsWith(".app"));
+  const app = appDir ? join(electronDir, appDir, "Contents/Resources") : null;
+  if (app && existsSync(app)) {
+    for (const f of readdirSync(app).filter((f) => f.endsWith(".icns"))) {
+      copyFileSync(join(assets, "koder.icns"), join(app, f));
+    }
+    console.log("icon: refreshed dev bundle");
   }
-  console.log("icon: refreshed dev bundle");
 }
