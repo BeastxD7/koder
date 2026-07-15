@@ -1,0 +1,23 @@
+diff --git a/build/darwin/create-dmg.ts b/build/darwin/create-dmg.ts
+index 82c15aff..5acb277d 100644
+--- a/build/darwin/create-dmg.ts
++++ b/build/darwin/create-dmg.ts
+@@ -162,10 +162,16 @@ async function main(buildDir?: string, outDir?: string): Promise<void> {
+ 	const artifactPath = path.join(outDir, `${dmgName}.dmg`);
+ 	const backgroundPath = path.join(import.meta.dirname, `dmg-background-${quality}.tiff`);
+ 	const diskIconPath = path.join(root, 'resources', 'darwin', 'code.icns');
+-	let title = 'Code OSS';
++	// LakshX: this used to be a hardcoded "VS Code"/"Code OSS" string per
++	// quality, becoming the DMG's VOLUME NAME (window title + Finder mount
++	// name) — unlike appName above, it never derived from product.nameLong,
++	// so the app inside was correctly "LakshX.app" while the disk image
++	// itself still opened as "VS Code" (found by actually mounting a built
++	// DMG). Use product.nameLong directly; there's no LakshX-specific
++	// insider/exploration quality variant to special-case.
++	let title = product.nameLong;
+ 	switch (quality) {
+ 		case 'stable':
+-			title = 'VS Code';
+ 			break;
+ 		case 'insider':
+ 			title = 'VS Code Insiders';
