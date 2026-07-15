@@ -556,8 +556,26 @@ async function runPromptLoop(
     }
 
     const results: ContentBlock[] = [];
+    // Set when `session/cancel` lands BETWEEN two tool calls of the same
+    // assistant turn (the model asked for several, we finished tool call N,
+    // cancel fired before tool call N+1 started). Break rather than an early
+    // `return` here — the assistant message for this turn (pushed above,
+    // before this loop) already carries a `tool_use` block for EVERY call in
+    // `result.toolCalls`, including the ones we're about to skip. Returning
+    // immediately would leave those `tool_use` blocks with no matching
+    // `tool_result`, which is invalid history: the next model call (retry, or
+    // simply the next turn on this same session) sends an assistant message
+    // with dangling tool calls that most providers reject outright — the
+    // session is left silently unusable. Falling through to the synthesis
+    // loop right below instead answers every un-run call with an explicit
+    // "cancelled" result before this history entry is pushed, keeping
+    // tool_use/tool_result strictly paired the same way a normal turn does.
+    let cancelledMidLoop = false;
     for (const tc of result.toolCalls) {
-      if (signal?.aborted) return "cancelled";
+      if (signal?.aborted) {
+        cancelledMidLoop = true;
+        break;
+      }
       const spec = toolByName.get(tc.name);
       const title = toolTitle(tc.name, tc.input ?? {});
       if (!spec) {
@@ -762,8 +780,27 @@ async function runPromptLoop(
         results.push({ type: "tool_result", tool_use_id: tc.id, content: msg, is_error: true });
       }
     }
+
+    if (cancelledMidLoop) {
+      // Answer every `tool_use` this assistant turn emitted that we didn't
+      // get to (see the `break` above) so `results` — and thus the history
+      // entry pushed right below — never leaves a `tool_use` unanswered.
+      const answered = new Set(results.map((r) => (r as Extract<ContentBlock, { type: "tool_result" }>).tool_use_id));
+      for (const tc of result.toolCalls) {
+        if (!answered.has(tc.id)) {
+          results.push({
+            type: "tool_result",
+            tool_use_id: tc.id,
+            content: "Cancelled by user before this tool call ran.",
+            is_error: true,
+          });
+        }
+      }
+    }
+
     session.history.push({ role: "user", content: results });
     cb.onHistoryChanged?.();
+    if (cancelledMidLoop) return "cancelled";
   }
   return "max_turn_requests";
 }
