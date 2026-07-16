@@ -1,6 +1,16 @@
 // LakshX agent panel UI. No frameworks — small, fast, ours.
 const vscode = acquireVsCodeApi();
 
+// Security audit finding (2026-07-17): a small number of innerHTML template
+// strings interpolate values that ultimately trace back to a live provider
+// API response (model ids) rather than hardcoded config — escape those
+// before interpolation. The CSP already blocks any resulting script
+// execution; this closes the narrower "attribute/markup corruption from a
+// compromised or spoofed provider endpoint" gap.
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 const messagesEl = document.getElementById("messages");
 const inputEl = document.getElementById("input");
 const sendBtn = document.getElementById("send");
@@ -1078,11 +1088,24 @@ function renderAttachments() {
     chip.className = "chip";
     const base = a.path.split("/").pop();
     const label = a.startLine ? `${base}:${a.startLine}-${a.endLine}` : base;
-    chip.innerHTML = `<span class="chip-label"></span><button class="chip-x" title="Remove" aria-label="Remove ${base}">&#10005;</button>`;
-    const labelEl = chip.querySelector(".chip-label");
+    // Security audit finding (2026-07-17): `base` is a workspace filename —
+    // untrusted text (a malicious/compromised repo can name a file
+    // `foo".onmouseover="...` on Linux/macOS). Build the chip via
+    // createElement/setAttribute/textContent, never interpolate it into an
+    // innerHTML template — the CSP already blocks script execution from
+    // this, but an attribute-breakout is still real DOM corruption to close.
+    const labelEl = document.createElement("span");
+    labelEl.className = "chip-label";
     labelEl.textContent = label;
     labelEl.title = a.path;
-    chip.querySelector(".chip-x").addEventListener("click", () => removeAttachment(i));
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "chip-x";
+    removeBtn.title = "Remove";
+    removeBtn.setAttribute("aria-label", `Remove ${base}`);
+    removeBtn.textContent = "✕";
+    chip.appendChild(labelEl);
+    chip.appendChild(removeBtn);
+    removeBtn.addEventListener("click", () => removeAttachment(i));
     attachRow.appendChild(chip);
   });
 }
@@ -1998,7 +2021,7 @@ function renderSettings() {
     <div class="field">
       <label>Model ${liveModels[providerId] ? `<span class="pill">${liveModels[providerId].length} live</span>` : ""}</label>
       <select id="modelSelect" class="big">
-        ${(liveModels[providerId] ?? p.models).map((m) => `<option value="${m}" ${`${providerId}/${m}` === currentDefault ? "selected" : ""}>${m}</option>`).join("")}
+        ${(liveModels[providerId] ?? p.models).map((m) => `<option value="${escapeHtml(m)}" ${`${providerId}/${m}` === currentDefault ? "selected" : ""}>${escapeHtml(m)}</option>`).join("")}
         <option value="__custom__">custom&hellip;</option>
       </select>
       <input id="customModel" placeholder="model id" hidden>
