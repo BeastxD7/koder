@@ -37,12 +37,20 @@ export default function Hero() {
 
       <div className="relative flex items-center justify-between">
         <Logo variant="light" />
-        <Link
-          href="/docs"
-          className="rounded-full border border-white/25 bg-white/10 px-4 py-1.5 text-sm text-white backdrop-blur-sm transition hover:bg-white/20"
-        >
-          Docs
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/changelog"
+            className="rounded-full border border-white/25 bg-white/10 px-4 py-1.5 text-sm text-white backdrop-blur-sm transition hover:bg-white/20"
+          >
+            Changelog
+          </Link>
+          <Link
+            href="/docs"
+            className="rounded-full border border-white/25 bg-white/10 px-4 py-1.5 text-sm text-white backdrop-blur-sm transition hover:bg-white/20"
+          >
+            Docs
+          </Link>
+        </div>
       </div>
 
       <div className="relative flex flex-1 items-center justify-center py-10">

@@ -65,6 +65,12 @@ export default function DocsChrome({ children }: { children: ReactNode }) {
 
           <div className="flex items-center gap-2 sm:gap-3">
             <Link
+              href="/changelog"
+              className="hidden items-center gap-1 rounded-full px-3 py-2 text-sm text-white/70 transition hover:text-white sm:inline-flex"
+            >
+              Changelog <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
+            <Link
               href="/"
               className="hidden items-center gap-1 rounded-full px-3 py-2 text-sm text-white/70 transition hover:text-white sm:inline-flex"
             >
