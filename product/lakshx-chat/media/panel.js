@@ -12,6 +12,9 @@ const composerEl = document.getElementById("composer");
 const attachRow = document.getElementById("attachRow");
 const attachBtn = document.getElementById("attachBtn");
 const diagBtn = document.getElementById("diagBtn");
+// Only present when lakshx.voice.enabled is true (extension.js's html()
+// conditionally renders it) — every use below is guarded.
+const micBtn = document.getElementById("micBtn");
 const mentionPopup = document.getElementById("mentionPopup");
 const checkpointBarEl = document.getElementById("checkpointBar");
 const cpbarHead = document.getElementById("cpbarHead");
@@ -1086,6 +1089,151 @@ function renderAttachments() {
 
 attachBtn.addEventListener("click", () => vscode.postMessage({ type: "attachActiveFile" }));
 
+// ---------- voice mode (push-to-talk STT, docs/research/14-voice-mode.md) ----------
+//
+// Capture uses `new AudioContext({ sampleRate: 16000 })` + a
+// ScriptProcessorNode — NOT AudioWorklet — specifically because AudioWorklet
+// requires loading a separate module script, which this webview's CSP
+// (`default-src 'none'`) blocks; ScriptProcessorNode runs its callback
+// inline with no extra script load. ScriptProcessorNode is deprecated in
+// favor of AudioWorklet upstream but is not removed, and this constraint is
+// exactly why the design doc calls for it here.
+//
+// NOTE: none of this has been exercised against a live getUserMedia call in
+// this build — no browser/Extension Host was available (see the project's
+// build report). It is wired per the design doc but unverified at runtime.
+
+/**
+ * Mirrors voice.js's insertAtCaret() (tested there via test/voice.test.js)
+ * — duplicated here because this file runs inside the sandboxed webview
+ * with no module loader (CSP `default-src 'none'`), so it can't require()
+ * voice.js. Keep the two in lockstep if this changes. Module-scope (not
+ * nested under the mic-button guard below) so it stays a plain, pure,
+ * easily-diffed-against-its-twin function.
+ */
+function insertTranscribedText(value, selectionStart, selectionEnd, insertText) {
+  const before = value.slice(0, selectionStart);
+  const after = value.slice(selectionEnd);
+  if (!insertText) return { value: before + after, caret: before.length };
+  const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
+  const inserted = needsLeadingSpace ? " " + insertText : insertText;
+  return { value: before + inserted + after, caret: (before + inserted).length };
+}
+
+/** Insert-don't-send: splice transcribed text at the caret, focus, but never auto-submit — the user reviews/edits before sending. */
+function insertTranscribedTextIntoComposer(text) {
+  const { value, caret } = insertTranscribedText(inputEl.value, inputEl.selectionStart, inputEl.selectionEnd, text);
+  inputEl.value = value;
+  inputEl.focus();
+  inputEl.setSelectionRange(caret, caret);
+  // Same auto-grow trigger the rest of the composer relies on for
+  // programmatic value changes (mirrors pickMention's caret-set-then-focus
+  // pattern above) so the textarea resizes if the transcript is long.
+  inputEl.dispatchEvent(new Event("input"));
+}
+
+// `transcribing`/`endVoiceTranscribing` are module-scope (not nested under
+// the `if (micBtn)` guard) so the "transcribeAudioDone" case in the inbound
+// message listener further down can always call endVoiceTranscribing() —
+// even on a build where micBtn doesn't exist, this is just a no-op.
+let voiceTranscribing = false;
+function endVoiceTranscribing() {
+  voiceTranscribing = false;
+  if (micBtn) {
+    micBtn.classList.remove("transcribing");
+    micBtn.disabled = false;
+  }
+}
+
+if (micBtn) {
+  let mediaStream = null;
+  let audioCtx = null;
+  let sourceNode = null;
+  let scriptNode = null;
+  let pcmChunks = [];
+  let recording = false;
+
+  function setMicState(state) {
+    // state: "idle" | "recording" | "transcribing"
+    micBtn.classList.toggle("recording", state === "recording");
+    micBtn.classList.toggle("transcribing", state === "transcribing");
+    micBtn.disabled = state === "transcribing";
+  }
+
+  function teardownCapture() {
+    try { scriptNode && scriptNode.disconnect(); } catch { /* already disconnected */ }
+    try { sourceNode && sourceNode.disconnect(); } catch { /* already disconnected */ }
+    try { mediaStream && mediaStream.getTracks().forEach((t) => t.stop()); } catch { /* already stopped */ }
+    try { audioCtx && audioCtx.close(); } catch { /* already closed */ }
+    scriptNode = null;
+    sourceNode = null;
+    mediaStream = null;
+    audioCtx = null;
+  }
+
+  async function startRecording() {
+    if (recording || voiceTranscribing) return;
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      // Covers both a user denial and the (currently likely, on an
+      // unpatched build) case where getUserMedia is blocked entirely by the
+      // webview's permission policy — same message either way, since the
+      // fix ("check your OS privacy settings") is the only actionable one
+      // we can give from here; a stock-build failure is a LakshX-fork build
+      // gap, not something the user's privacy settings can fix, but we
+      // can't distinguish the two from a rejected promise alone.
+      addMsg("system", "Microphone access denied — check your OS privacy settings.");
+      return;
+    }
+    recording = true;
+    pcmChunks = [];
+    setMicState("recording");
+    audioCtx = new AudioContext({ sampleRate: 16000 });
+    sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+    scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    scriptNode.onaudioprocess = (e) => {
+      // Float32Array from getChannelData is a live view into the
+      // AudioContext's internal buffer — copy it, or every chunk we've
+      // pushed silently changes underneath us on the next callback.
+      pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    sourceNode.connect(scriptNode);
+    // ScriptProcessorNode only fires onaudioprocess while connected into the
+    // graph all the way to a destination.
+    scriptNode.connect(audioCtx.destination);
+  }
+
+  function stopRecording() {
+    if (!recording) return;
+    recording = false;
+    teardownCapture();
+
+    let total = 0;
+    for (const c of pcmChunks) total += c.length;
+    if (total === 0) {
+      pcmChunks = [];
+      setMicState("idle");
+      return;
+    }
+    const merged = new Float32Array(total);
+    let offset = 0;
+    for (const c of pcmChunks) { merged.set(c, offset); offset += c.length; }
+    pcmChunks = [];
+
+    voiceTranscribing = true;
+    setMicState("transcribing");
+    vscode.postMessage({ type: "transcribeAudio", pcm: merged.buffer });
+  }
+
+  micBtn.addEventListener("mousedown", (e) => { e.preventDefault(); startRecording(); });
+  micBtn.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); });
+  micBtn.addEventListener("mouseup", stopRecording);
+  micBtn.addEventListener("touchend", stopRecording);
+  micBtn.addEventListener("mouseleave", () => { if (recording) stopRecording(); });
+  window.addEventListener("blur", () => { if (recording) stopRecording(); });
+}
+
 // ---------- diagnostics (full session report -> clipboard) ----------
 // extension.js assembles the report (it holds the full transcript, incl.
 // fields this webview doesn't keep around, like raw tool input) and copies
@@ -2043,6 +2191,10 @@ window.addEventListener("message", (e) => {
     case "planReady": showPlanBar(m.path); break;
     case "system": addMsg("system", m.text); break;
     case "addAttachment": addAttachment(m.attachment); break;
+    // Voice mode (docs/research/14-voice-mode.md): insert-don't-send — text
+    // lands at the caret for the user to review/edit, never auto-submitted.
+    case "transcribedText": insertTranscribedTextIntoComposer(m.text); break;
+    case "transcribeAudioDone": endVoiceTranscribing(); break;
     case "fileResults":
       if (mentionActive && m.seq === mentionSeq) renderMentionResults(m.files);
       break;

@@ -1018,6 +1018,21 @@ button.ghost:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
 button.allow { background: #2e8f68; color: #fff; padding: 4px 12px; }
 button.deny { background: rgba(255, 255, 255, 0.1); color: var(--fg); padding: 4px 12px; }
 
+/* Voice mode (docs/research/14-voice-mode.md) — push-to-talk mic button.
+   Held-down state reuses the same `pulse` keyframe the running-tool/task
+   dots already use (see the `.tool.running .dot` etc. rules above) so this
+   doesn't introduce a second animation vocabulary. */
+#micBtn.recording {
+  background: #d64a4a;
+  color: #fff;
+  animation: pulse 1s ease-in-out infinite;
+}
+#micBtn.transcribing {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+
 /* ---------- overlays: settings + history + what's new ---------- */
 #settingsPanel, #historyPanel, #whatsNewPanel {
   position: absolute;

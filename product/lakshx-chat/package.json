@@ -13,7 +13,8 @@
     "test:unit": "node --test test/*.test.js"
   },
   "dependencies": {
-    "playwright-core": "^1.61.1"
+    "playwright-core": "^1.61.1",
+    "smart-whisper": "^0.8.1"
   },
   "activationEvents": [
     "onStartupFinished"
@@ -145,6 +146,11 @@
           "type": "boolean",
           "default": false,
           "description": "Zero-click: automatically send the crash context to LakshX as soon as a debug session stops on an unhandled exception, instead of showing a notification first. Off by default."
+        },
+        "lakshx.voice.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the mic (push-to-talk dictation) button in the chat composer. The button renders regardless of this fork's Electron build — on a stock/unpatched build it fails gracefully with a clear message instead of transcribing, since microphone access in the webview requires LakshX's own patched Electron (docs/research/14-voice-mode.md)."
         }
       }
     }

@@ -10,6 +10,25 @@ const diagnostics = require("./diagnostics.js");
 const { discoverCommands, expandCommandBody } = require("./commands.js");
 const { AcpClient } = require("./acp-client.js");
 const { buildCrashContext } = require("./crash-context.js");
+const voice = require("./voice.js");
+
+// ---------- voice mode (docs/research/14-voice-mode.md) ----------
+//
+// panel.js postMessages the captured audio as `{ type: "transcribeAudio",
+// pcm }` where `pcm` is meant to travel as a transferable ArrayBuffer (see
+// media/panel.js's stopRecording()). This host side has NOT been exercised
+// against a live webview in this build (no Extension Host here — see the
+// report), so this conversion is defensive: it also accepts a plain array
+// of numbers or a Node Buffer in case the webview postMessage bridge ends
+// up JSON-serializing the payload instead of transferring a real
+// ArrayBuffer, rather than assuming one exact shape untested.
+function pcmFromMessage(raw) {
+  if (raw instanceof Float32Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Float32Array(raw);
+  if (ArrayBuffer.isView(raw)) return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+  if (Array.isArray(raw)) return Float32Array.from(raw);
+  throw new Error("unrecognized audio payload shape");
+}
 
 // ---------- runtime discovery ----------
 const isWin = process.platform === "win32";
@@ -1858,6 +1877,42 @@ class AgentViewProvider {
         }
         break;
       }
+      case "transcribeAudio": {
+        // Wrapped so a bad payload or a transcription failure NEVER crashes
+        // the host — it becomes a clean `system` chat message instead, per
+        // docs/research/14-voice-mode.md's wiring notes. voice.js's own
+        // handleTranscribeAudio() already wraps its network/native-addon
+        // work in the same discipline; this outer try/catch only guards
+        // the payload conversion, which runs before that.
+        let pcm;
+        try {
+          pcm = pcmFromMessage(m.pcm);
+        } catch (err) {
+          // Same terminal "transcribeAudioDone" contract as
+          // handleTranscribeAudio below — panel.js needs it here too, or a
+          // malformed payload leaves the mic button stuck in "Transcribing…".
+          this.view?.webview.postMessage({ type: "system", text: `Voice transcription failed: could not read the recording (${err.message}).` });
+          this.view?.webview.postMessage({ type: "transcribeAudioDone" });
+          break;
+        }
+        try {
+          await voice.handleTranscribeAudio({
+            pcm,
+            isModelDownloaded: () => voice.isModelDownloaded(),
+            ensureModel: (opts) => voice.ensureModel(opts),
+            runTranscribe: (buf) => voice.transcribe(buf),
+            post: (msg) => this.view?.webview.postMessage(msg),
+          });
+        } catch (err) {
+          // Belt-and-suspenders: handleTranscribeAudio already try/catches
+          // internally (including its own transcribeAudioDone) and should
+          // never reject, but never let voice mode take the extension host
+          // down if it somehow does.
+          this.view?.webview.postMessage({ type: "system", text: `Voice transcription failed: ${err.message}` });
+          this.view?.webview.postMessage({ type: "transcribeAudioDone" });
+        }
+        break;
+      }
       case "boot": {
         // Do NOT spawn the agent runtime just because the panel loaded —
         // that used to call ensureAgent() unconditionally on every webview
@@ -1932,6 +1987,13 @@ class AgentViewProvider {
     const mdjs = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "markdown.js")) + "?v=" + stamp("markdown.js");
     const mdcss = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "markdown.css")) + "?v=" + stamp("markdown.css");
     const hasMd = fs.existsSync(path.join(this.context.extensionPath, "media", "markdown.js"));
+    // Voice mode (docs/research/14-voice-mode.md): the button renders on
+    // every build (patched or stock) whenever this config is on — it just
+    // fails gracefully with a clear "microphone access denied" message on a
+    // stock/unpatched Electron build, since getUserMedia is blocked there
+    // (microsoft/vscode#250568). This config only controls whether the
+    // button exists in the composer at all, not whether it will work.
+    const voiceEnabled = vscode.workspace.getConfiguration("lakshx").get("voice.enabled", true);
     return `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
@@ -2008,6 +2070,9 @@ ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
       </button>
       <div class="spacer"></div>
+      ${voiceEnabled ? `<button id="micBtn" class="ghost" title="Hold to dictate (push-to-talk)" aria-label="Hold to dictate">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+      </button>` : ""}
       <button id="stop" class="ghost" hidden>Stop</button>
       <button id="send">Send</button>
     </div>

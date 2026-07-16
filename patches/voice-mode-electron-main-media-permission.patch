@@ -1,0 +1,60 @@
+diff --git a/src/vs/code/electron-main/app.ts b/src/vs/code/electron-main/app.ts
+index 3823d3ff..1fd7bfe4 100644
+--- a/src/vs/code/electron-main/app.ts
++++ b/src/vs/code/electron-main/app.ts
+@@ -200,6 +200,55 @@ export class CodeApplication extends Disposable {
+ 			// TODO(deepak1556): Should be removed once migration is complete
+ 			// https://github.com/microsoft/vscode/issues/239228
+ 			'deprecated-sync-clipboard-read',
++			// LakshX: voice mode (push-to-talk STT in the chat composer,
++			// docs/research/14-voice-mode.md) needs getUserMedia({audio:true})
++			// to work from the LakshX chat webview, which stock VS Code blocks
++			// (microsoft/vscode#250568) by leaving 'media' out of this set.
++			//
++			// SECURITY TRADEOFF, taken deliberately rather than silently:
++			// this is a BLANKET grant to every webview, not scoped to the
++			// LakshX chat view alone. We looked for a clean way to scope it
++			// via `details.requestingUrl` (both handlers below already
++			// branch on `isUrlFromWebview(details.requestingUrl)`, so in
++			// principle a second, narrower check felt like it should drop
++			// in here) and concluded it isn't feasible without deeper
++			// surgery:
++			//   - `details.requestingUrl` for a webview is
++			//     `vscode-webview://<origin>/...`, and `<origin>` is
++			//     `initInfo.origin ?? generateUuid()` — a per-instance
++			//     random UUID minted fresh each time a webview is created
++			//     (see WebviewElement in
++			//     src/vs/workbench/contrib/webview/browser/webviewElement.ts,
++			//     `protected readonly id = generateUuid()` /
++			//     `this.origin = initInfo.origin ?? this.id`).
++			//   - Nothing plumbs the webview's viewType or owning
++			//     extension id down to this electron-main permission
++			//     handler, so there is no stable substring/pattern in
++			//     `requestingUrl` this process can match against "is this
++			//     the LakshX chat webview" — every webview's origin is
++			//     equally opaque here.
++			//   - Doing this properly would mean threading a per-viewType
++			//     identity (e.g. a fixed `initInfo.origin` for
++			//     `lakshx.chatView` plus a lookup table here, or a new IPC
++			//     round-trip from main to the window to ask "whose webview
++			//     is this origin") through main-process code that
++			//     currently has zero webview-identity awareness by design
++			//     — real surgery, not a 3-line patch, and risk we're not
++			//     taking on for a v1 behind a fork-only feature.
++			// Residual risk accepted: ANY webview in the app (a third-party
++			// extension's webview, not just LakshX's) can now successfully
++			// request microphone access. Mitigations that remain in place:
++			// (1) the two other voice-mode patches only add `microphone *`
++			// to the LakshX chat webview's own iframe `allow` chain — other
++			// webviews still need their own iframe to permit it, so this
++			// permission-handler grant is necessary but not sufficient;
++			// (2) OS-level mic permission (e.g. macOS TCC) is a fully
++			// separate gate outside Electron; (3) getUserMedia is only
++			// ever invoked in response to the user's own explicit
++			// push-to-talk action, not silently. Follow-up if this needs
++			// tightening: revisit once/if upstream threads viewType into
++			// `WebContents`-level permission requests.
++			'media',
+ 		]);
+ 
+ 		const allowedPermissionsInCore = new Set([

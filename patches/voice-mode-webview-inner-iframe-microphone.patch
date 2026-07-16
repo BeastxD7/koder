@@ -1,0 +1,21 @@
+diff --git a/src/vs/workbench/contrib/webview/browser/pre/index.html b/src/vs/workbench/contrib/webview/browser/pre/index.html
+index 1b722167..4b003ffb 100644
+--- a/src/vs/workbench/contrib/webview/browser/pre/index.html
++++ b/src/vs/workbench/contrib/webview/browser/pre/index.html
+@@ -1035,6 +1035,16 @@
+ 				if (!isFirefox && options.allowScripts) {
+ 					allowRules.push('clipboard-read;', 'clipboard-write;');
+ 				}
++				// LakshX: voice mode (docs/research/14-voice-mode.md). This is
++				// the INNER frame — the one that actually loads panel.js and
++				// runs getUserMedia() from the composer's mic button — nested
++				// one level deeper than the outer frame patched in
++				// webviewElement.ts. Same cross-origin-delegation subtlety
++				// applies here, one level down: bare `microphone` defaults to
++				// same-origin delegation, and this frame's origin differs
++				// from its parent's, so it needs the explicit `*` form too or
++				// the permission silently fails to propagate this last hop.
++				allowRules.push('microphone *;');
+ 				newFrame.setAttribute('allow', allowRules.join(' '));
+ 				// We should just be able to use srcdoc, but I wasn't
+ 				// seeing the service worker applying properly.
