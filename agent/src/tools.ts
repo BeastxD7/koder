@@ -455,10 +455,15 @@ export const TOOLS: ToolSpec[] = [
       "Do NOT dispatch subtasks that are likely to edit the SAME file — there is no file-level lock, only a lock around the checkpoint/commit bookkeeping itself, so two subtasks racing on one file can silently overwrite each other's edits (last write wins). " +
       "Each subtask starts with an EMPTY history (not your conversation so far) plus exactly what you give it: its own `prompt`, and, only if you explicitly include it, a short `context` string carrying anything from your own investigation the subtask needs (e.g. \"the bug is likely in auth.ts around line 40\") — nothing else about this conversation is shared automatically. " +
       "At most 6 tasks run per call; extra tasks beyond that are not run and must be resubmitted in a follow-up call. Subtasks cannot themselves call dispatch_subtasks (no nested fan-out). " +
-      "Available in review mode too, for parallel read-only research — but if YOU are currently in review mode, every subtask is forced to run in review mode as well no matter what `mode` you request for it, so it can only read/list/grep, never write or run commands.",
+      "Available in review mode too, for parallel read-only research — but if YOU are currently in review mode, every subtask is forced to run in review mode as well no matter what `mode` you request for it, so it can only read/list/grep, never write or run commands. " +
+      "Set `background:true` to run the subtasks NON-BLOCKING: this call returns task ids immediately, the subtasks keep running while YOU stay interactive (and the user can keep chatting), and each completion arrives as a notification in a LATER turn. When you background subtasks their results are NOT available in this turn — do not report, assume, or predict them; use check_tasks/wait_for_tasks/send_to_task to interact with them. Background subtasks cannot run in approve mode (a permission prompt with nobody watching would deadlock); royal is only inherited from a royal parent, otherwise a requested royal is downgraded to auto. Because there is no worktree isolation yet, background subtasks share this workspace — never background work that edits files the main conversation is actively editing (last write wins).",
     input_schema: {
       type: "object",
       properties: {
+        background: {
+          type: "boolean",
+          description: "Run the subtasks non-blocking (return task ids immediately; completions arrive as notifications in a later turn). Default false = block until all subtasks finish.",
+        },
         tasks: {
           type: "array",
           minItems: 1,
@@ -489,6 +494,77 @@ export const TOOLS: ToolSpec[] = [
       // Defensive only: loop.ts special-cases `dispatch_subtasks` and never
       // reaches this — see the comment on this tool's `dangerous` field.
       throw new Error("dispatch_subtasks must be handled by the loop's dispatch_subtasks branch, not executed generically");
+    },
+  },
+  // ---- Background-subtask management tools (Royal Mode 2.0) ----
+  // All three are special-cased in loop.ts (before the generic spec.run path),
+  // depth-0 only (a subtask can neither spawn background work nor manage it),
+  // and read/write the in-memory BackgroundTaskRegistry (tasks.ts). `run`
+  // below is a defensive stub, same pattern as dispatch_subtasks/db_query.
+  {
+    name: "check_tasks",
+    kind: "read",
+    dangerous: false,
+    description:
+      "Check the status of background subtasks you launched with dispatch_subtasks {background:true}. " +
+      "Returns, per task: status (running/done/failed/cancelled), elapsed time, the last few activity lines, and the full final report once it has finished. " +
+      "Reading a finished task's report here counts as receiving it — you will not also get a duplicate completion notification for it. " +
+      "Omit taskIds to check every background task in this conversation.",
+    input_schema: {
+      type: "object",
+      properties: {
+        taskIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional. Specific bg_ task ids to check. Omit to check all background tasks in this conversation.",
+        },
+      },
+    },
+    async run() {
+      throw new Error("check_tasks must be handled by the loop's background-tasks branch, not executed generically");
+    },
+  },
+  {
+    name: "send_to_task",
+    kind: "execute",
+    dangerous: false,
+    description:
+      "Send a steering message to a running background subtask — additional instructions, a correction, or a follow-up question it will act on after its current step. " +
+      "The message is delivered when the subtask reaches the end of its current turn; it then keeps running with your message as new input. " +
+      "If the subtask has already finished, this returns its final report instead (with a note that it was already complete) rather than failing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "The bg_ id of the background subtask to steer." },
+        message: { type: "string", description: "The steering message to deliver to that subtask." },
+      },
+      required: ["taskId", "message"],
+    },
+    async run() {
+      throw new Error("send_to_task must be handled by the loop's background-tasks branch, not executed generically");
+    },
+  },
+  {
+    name: "wait_for_tasks",
+    kind: "execute",
+    dangerous: false,
+    description:
+      "Block YOUR turn until the named background subtasks finish (or a timeout elapses), then return their final reports — an explicit join when you cannot continue without their results. " +
+      "On timeout it returns each task's partial status rather than failing, so you can decide whether to keep waiting. " +
+      "Omit taskIds to wait for every still-running background task in this conversation. Prefer ending your turn and letting completion notifications arrive on their own unless you genuinely need to block here.",
+    input_schema: {
+      type: "object",
+      properties: {
+        taskIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional. Specific bg_ task ids to wait for. Omit to wait for all still-running background tasks.",
+        },
+        timeoutSeconds: { type: "number", description: "Max seconds to wait before returning partial statuses. Default 300." },
+      },
+    },
+    async run() {
+      throw new Error("wait_for_tasks must be handled by the loop's background-tasks branch, not executed generically");
     },
   },
   {

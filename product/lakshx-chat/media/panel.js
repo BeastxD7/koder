@@ -16,6 +16,9 @@ const mentionPopup = document.getElementById("mentionPopup");
 const checkpointBarEl = document.getElementById("checkpointBar");
 const cpbarHead = document.getElementById("cpbarHead");
 const cpbarBody = document.getElementById("cpbarBody");
+const taskTrayEl = document.getElementById("taskTray");
+const trayHead = document.getElementById("trayHead");
+const trayBody = document.getElementById("trayBody");
 
 let streamEl = null;
 let streamRaw = "";
@@ -681,6 +684,164 @@ function renderCheckpointBar() {
 cpbarHead.addEventListener("click", () => {
   cpbarExpanded = !cpbarExpanded;
   renderCheckpointBar();
+});
+
+// ---------- running-agents tray (background subtasks — Royal Mode 2.0) ----------
+// A persistent, composer-anchored tray — same anchoring precedent as the
+// checkpoint bar just above (collapsed-by-default pill, expands to rows) —
+// but PERSISTENT PAST turnEnd, unlike the per-turn subagentCards above:
+// background tasks are explicitly detached from any one turn, so their rows
+// must keep living (and updating) after the turn that launched them ends.
+// `bgTasks`: taskId -> { taskId, batchId, prompt, mode, status, startedAt,
+// endedAt, lastActivity, result, lost, steerExpanded }. `lost` is set only by
+// `applyTasksReconcile` (reload reconcile — see its own doc comment) and
+// overrides the status label/dot without touching `status` itself, so a
+// later real event for the same taskId (which cannot arrive once the backing
+// process is gone, but this keeps the two concerns cleanly separate) would
+// still make sense to apply.
+const bgTasks = new Map();
+let trayExpanded = false;
+
+function trayStatusLabel(t) {
+  if (t.lost) return "lost — agent restarted";
+  return t.status;
+}
+
+function trayDotClass(t) {
+  if (t.lost) return "lost";
+  return t.status; // running | done | failed | cancelled
+}
+
+function renderTray() {
+  const tasks = [...bgTasks.values()];
+  taskTrayEl.hidden = tasks.length === 0; // never show an empty tray
+  if (tasks.length === 0) {
+    trayBody.innerHTML = "";
+    return;
+  }
+  const running = tasks.filter((t) => t.status === "running" && !t.lost).length;
+  trayHead.innerHTML = `<span class="tray-label"></span><span class="tray-badge"></span><span class="cpbar-chevron">${trayExpanded ? "▾" : "▸"}</span>`;
+  trayHead.querySelector(".tray-label").textContent =
+    running > 0 ? `${running} agent${running === 1 ? "" : "s"} running` : `${tasks.length} background task${tasks.length === 1 ? "" : "s"}`;
+  trayHead.querySelector(".tray-badge").textContent = String(tasks.length);
+  trayBody.hidden = !trayExpanded;
+  if (!trayExpanded) {
+    trayBody.innerHTML = "";
+    return;
+  }
+  trayBody.innerHTML = "";
+  for (const t of tasks) trayBody.appendChild(buildTrayRow(t));
+}
+
+function buildTrayRow(t) {
+  const row = document.createElement("div");
+  row.className = "tray-row";
+  row.innerHTML = `
+    <div class="tray-row-head">
+      <span class="dot"></span>
+      <span class="tray-row-prompt"></span>
+      <span class="tray-row-status"></span>
+    </div>
+    <div class="tray-row-detail"></div>
+    <div class="tray-row-actions" hidden>
+      <input class="tray-steer-input" placeholder="Steer this agent…">
+      <button class="tray-steer-send ghost" type="button">Send</button>
+      <button class="tray-stop ghost" type="button">Stop</button>
+    </div>`;
+  row.querySelector(".dot").className = `dot ${trayDotClass(t)}`;
+  row.querySelector(".tray-row-prompt").textContent = t.prompt;
+  row.querySelector(".tray-row-status").textContent = trayStatusLabel(t);
+  row.querySelector(".tray-row-detail").textContent = t.lastActivity || "";
+
+  const actions = row.querySelector(".tray-row-actions");
+  const canSteer = t.status === "running" && !t.lost;
+  actions.hidden = !canSteer;
+  if (canSteer) {
+    const input = actions.querySelector(".tray-steer-input");
+    const send = () => {
+      const msg = input.value.trim();
+      if (!msg) return;
+      vscode.postMessage({ type: "sendToTask", taskId: t.taskId, message: msg });
+      input.value = "";
+    };
+    actions.querySelector(".tray-steer-send").addEventListener("click", send);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        send();
+      }
+    });
+    actions.querySelector(".tray-stop").addEventListener("click", () => vscode.postMessage({ type: "cancelTask", taskId: t.taskId }));
+  }
+  return row;
+}
+
+function applyTaskStart(m) {
+  bgTasks.set(m.taskId, {
+    taskId: m.taskId,
+    batchId: m.batchId,
+    promptId: m.promptId,
+    prompt: m.prompt,
+    mode: m.mode,
+    status: "running",
+    startedAt: m.startedAt,
+    lastActivity: "Starting…",
+    lost: false,
+  });
+  renderTray();
+}
+
+function applyTaskActivity(m) {
+  const t = bgTasks.get(m.taskId);
+  if (!t) return; // e.g. a reload without a matching taskStart replayed (older chat) — nothing to attach this to
+  if (m.kind === "tool_start") t.lastActivity = `Running: ${m.detail}`;
+  else if (m.kind === "tool_end") t.lastActivity = `${m.isError ? "Failed" : "Done"}: ${m.detail}`;
+  else t.lastActivity = m.detail || t.lastActivity;
+  renderTray();
+}
+
+function applyTaskDone(m) {
+  const t = bgTasks.get(m.taskId);
+  if (!t) return;
+  t.status = m.status;
+  t.endedAt = Date.now();
+  t.result = m.result;
+  const summary = (m.result?.output || "").slice(0, 240);
+  t.lastActivity = m.status === "failed" ? `Failed: ${summary}` : m.status === "cancelled" ? "Cancelled" : summary || t.lastActivity;
+  renderTray();
+}
+
+function applyTaskSteered(m) {
+  const t = bgTasks.get(m.taskId);
+  if (!t) return;
+  t.lastActivity = `Steering: ${m.message}`;
+  renderTray();
+}
+
+/**
+ * Reload reconcile (Royal Mode 2.0 §8): fired after a "replay" round-trip with
+ * the live registry's own view of this session's tasks (`lakshx/tasks_list`,
+ * extension.js's "replayRequest" handler). Any row the replayed transcript
+ * still shows as "running" but this list no longer contains means the
+ * in-memory registry doesn't know it anymore — v1 has no persistence across
+ * an agent-process restart (see agent/src/tasks.ts's module doc), so that is
+ * the ONLY way a replayed-running row and an empty/mismatched live list can
+ * disagree. Flips it to "lost — agent restarted" rather than leaving a
+ * spinner that will never resolve. A row already settled (done/failed/
+ * cancelled) from replay is left exactly as-is — there is nothing to
+ * reconcile for a task that already has a real final status.
+ */
+function applyTasksReconcile(m) {
+  const known = new Set((m.tasks ?? []).map((t) => t.taskId));
+  for (const t of bgTasks.values()) {
+    if (t.status === "running" && !known.has(t.taskId)) t.lost = true;
+  }
+  renderTray();
+}
+
+trayHead.addEventListener("click", () => {
+  trayExpanded = !trayExpanded;
+  renderTray();
 });
 
 // ---------- conversation rewind (Accept / "Rewind to here" under USER bubbles) ----------
@@ -1580,6 +1741,10 @@ function applyEvent(m, replaying) {
     case "subagentsStart": applySubagentsStart(m); break;
     case "subagentActivity": applySubagentActivity(m); break;
     case "subagentsEnd": applySubagentsEnd(m); break;
+    case "taskStart": applyTaskStart(m); break;
+    case "taskActivity": applyTaskActivity(m); break;
+    case "taskDone": applyTaskDone(m); break;
+    case "taskSteered": applyTaskSteered(m); break;
     case "turnEnd":
       if (replaying) {
         flushBulk();
@@ -1715,6 +1880,9 @@ window.addEventListener("message", (e) => {
       tools.clear();
       checkpointCards.clear();
       subagentCards.clear();
+      bgTasks.clear();
+      trayExpanded = false;
+      renderTray(); // hides the tray before replay repopulates it; a "tasksReconcile" may follow separately
       sessionFiles.clear();
       resetRewindRows();
       cpbarExpanded = false;
@@ -1761,6 +1929,15 @@ window.addEventListener("message", (e) => {
     case "subagentsStart": applyEvent(m, false); break;
     case "subagentActivity": applyEvent(m, false); break;
     case "subagentsEnd": applyEvent(m, false); break;
+    case "taskStart": applyEvent(m, false); break;
+    case "taskActivity": applyEvent(m, false); break;
+    case "taskDone": applyEvent(m, false); break;
+    case "taskSteered": applyEvent(m, false); break;
+    // Not itself a REPLAYABLE transcript event (see extension.js's
+    // "replayRequest" handler doc comment) — a one-off round-trip that
+    // reconciles whatever the "replay" just rebuilt against the live
+    // registry, so it's applied directly rather than through applyEvent.
+    case "tasksReconcile": applyTasksReconcile(m); break;
     case "undoConflict": handleUndoConflict(m); break;
     case "permission": {
       currentPermissionId = m.id;
@@ -1847,6 +2024,9 @@ window.addEventListener("message", (e) => {
       tools.clear();
       checkpointCards.clear();
       subagentCards.clear();
+      bgTasks.clear();
+      trayExpanded = false;
+      renderTray();
       sessionFiles.clear();
       resetRewindRows();
       cpbarExpanded = false;

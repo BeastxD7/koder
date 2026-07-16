@@ -172,11 +172,23 @@ test("lakshx agent e2e over ACP against a scripted provider", { timeout: 120_000
 
             // request 1 only offered the read-only tools, plus dispatch_subtasks
             // (allowed in review mode since its own children are forced back
-            // into review mode too — see loop.ts's dispatchSubtasks) and
-            // db_query (kind:"read", dangerous:false — its consent gate lives
-            // in lakshx-db, so it's usable in review mode; docs/research/13)
+            // into review mode too — see loop.ts's dispatchSubtasks), db_query
+            // (kind:"read", dangerous:false — its consent gate lives in
+            // lakshx-db, so it's usable in review mode; docs/research/13), and
+            // the three background-task management tools (check_tasks/
+            // send_to_task/wait_for_tasks — non-dangerous observe/steer/join
+            // operations on the registry, not workspace mutations).
             const offered = fake.requests.at(-2)!.tools.map((tl) => tl.function.name).sort();
-            assert.deepEqual(offered, ["db_query", "dispatch_subtasks", "grep", "list_dir", "read_file"]);
+            assert.deepEqual(offered, [
+              "check_tasks",
+              "db_query",
+              "dispatch_subtasks",
+              "grep",
+              "list_dir",
+              "read_file",
+              "send_to_task",
+              "wait_for_tasks",
+            ]);
             // request 2 carries the declined tool result back to the model
             assert.match(lastToolMessage(fake, "call_rev1")!.content, /declined/i);
             // and the client saw the tool call fail
@@ -385,6 +397,66 @@ test("lakshx agent e2e over ACP against a scripted provider", { timeout: 120_000
               assert.equal(fpEntry.decision, "allowed"); // allowed by the (absent) floor; failed on its own merits
             });
           }),
+        );
+
+        await t.test(
+          "client-driven auto-wake: a _meta.wake prompt never aborts a REAL turn already in flight",
+          () =>
+            ctx.buildSession(workspace).withSession(async (session: any) => {
+              await ctx.request(acp.methods.agent.session.setMode, { sessionId: session.sessionId, modeId: "auto" });
+
+              // The real turn's model response is deliberately held so the turn
+              // is still genuinely in-flight (session.pending set server-side)
+              // when the wake prompt lands.
+              fake.enqueueDelayed(500, toolTurn("call_wake_real", "bash", { command: "echo real-turn-ok" }));
+              fake.enqueue(textTurn("Done with the real turn."));
+
+              const realTurnDone = session.prompt("do something slow");
+              await new Promise((r) => setTimeout(r, 120)); // let the real turn's request actually land
+
+              // A wake prompt (extension.js's client-driven auto-wake) arrives
+              // while the real turn is still running. server.ts must treat this
+              // as a no-op — NOT call session.pending?.abort() — since a wake
+              // exists only to drain a completed background task's notification
+              // into an IDLE session, never to interrupt a real user turn.
+              const wakeRes: any = await ctx.request("session/prompt", {
+                sessionId: session.sessionId,
+                prompt: [{ type: "text", text: "(wake placeholder)" }],
+                _meta: { wake: true },
+              });
+              assert.equal(wakeRes.stopReason, "end_turn", "a wake prompt with a real turn pending must resolve immediately as a no-op");
+
+              // Drain the real turn's updates and confirm it completed NORMALLY —
+              // if the wake had aborted it, this would resolve "cancelled" instead.
+              const updates: any[] = [];
+              for (;;) {
+                const msg = await session.nextUpdate();
+                if (msg.kind === "stop") {
+                  assert.equal(msg.response.stopReason, "end_turn", "the real turn must not have been aborted by the wake prompt");
+                  break;
+                }
+                updates.push(msg.update);
+              }
+              await realTurnDone;
+              assert.match(messageText(updates), /Done with the real turn/);
+            }),
+        );
+
+        await t.test(
+          "client-driven auto-wake: a _meta.wake prompt is a no-op when nothing is queued for the session",
+          () =>
+            ctx.buildSession(workspace).withSession(async (session: any) => {
+              const requestsBefore = fake.requests.length;
+              const wakeRes: any = await ctx.request("session/prompt", {
+                sessionId: session.sessionId,
+                prompt: [{ type: "text", text: "(wake placeholder)" }],
+                _meta: { wake: true },
+              });
+              assert.equal(wakeRes.stopReason, "end_turn");
+              // No request should have reached the provider for a no-op wake —
+              // it must short-circuit before ever calling runPrompt.
+              assert.equal(fake.requests.length, requestsBefore, "a no-op wake must never reach the model");
+            }),
         );
       });
   } finally {

@@ -276,7 +276,13 @@ async function searchWorkspaceFiles(q) {
 // "rewindAccepted" persists the purely-visual Accept dismissal of a user
 // message's rewind row (conversation-rewind feature) so a reload keeps the
 // row dismissed — replayed the same event-sourced way "checkpointReverted" is.
-const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "rewindAccepted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
+// "taskStart"/"taskActivity"/"taskDone"/"taskSteered" are the background-
+// subtask (Royal Mode 2.0) equivalents of "subagentsStart"/"subagentActivity"/
+// "subagentsEnd" above — replayed the same way so the running-agents tray
+// (panel.js) rebuilds on reload, then gets reconciled against the live
+// registry via a "tasksReconcile" round-trip (NOT itself replayable — see
+// the "replayRequest" handler below).
+const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "rewindAccepted", "subagentsStart", "subagentActivity", "subagentsEnd", "taskStart", "taskActivity", "taskDone", "taskSteered"]);
 
 function chatsDir() {
   const dir = path.join(os.homedir(), ".lakshx", "chats");
@@ -576,6 +582,10 @@ class AgentViewProvider {
         if (method === "lakshx/subagents_end") this.onSubagentsEnd(params);
         if (method === "lakshx/tool_input_delta") this.onToolInputDelta(params);
         if (method === "lakshx/tool_image") this.onToolImage(params);
+        if (method === "lakshx/task_start") this.onTaskStart(params);
+        if (method === "lakshx/task_activity") this.onTaskActivity(params);
+        if (method === "lakshx/task_done") this.onTaskDone(params);
+        if (method === "lakshx/task_steered") this.onTaskSteered(params);
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
@@ -705,6 +715,109 @@ class AgentViewProvider {
 
   onSubagentsEnd(params) {
     this.post({ type: "subagentsEnd", batchId: params.batchId, results: params.results });
+  }
+
+  /**
+   * `lakshx/task_start`/`lakshx/task_activity`/`lakshx/task_done`/
+   * `lakshx/task_steered` (agent/src/tasks.ts's BackgroundTaskRegistry —
+   * `dispatch_subtasks {background:true}`, Royal Mode 2.0). Same pure-relay
+   * pattern as `onSubagentsStart` et al above: panel.js's running-agents tray
+   * does the actual rendering, keyed off `taskId`. The one thing that IS
+   * extension.js's own job, unlike the blocking-subagent notifications: these
+   * can arrive with NO turn in flight at all (the whole point of background
+   * work), so `lakshx/task_done` also schedules the client-driven auto-wake
+   * (see `scheduleAutoWake`/`triggerWake` below) — a completed background task
+   * needs to reach the model even if nobody is actively chatting right now.
+   */
+  onTaskStart(params) {
+    this.post({
+      type: "taskStart",
+      taskId: params.taskId,
+      batchId: params.batchId,
+      promptId: params.promptId,
+      prompt: params.prompt,
+      mode: params.mode,
+      startedAt: params.startedAt,
+    });
+  }
+
+  onTaskActivity(params) {
+    this.post({
+      type: "taskActivity",
+      taskId: params.taskId,
+      batchId: params.batchId,
+      kind: params.kind,
+      detail: params.detail,
+      path: params.path,
+      isError: params.isError,
+    });
+  }
+
+  onTaskDone(params) {
+    this.post({
+      type: "taskDone",
+      taskId: params.taskId,
+      batchId: params.batchId,
+      status: params.status,
+      durationMs: params.durationMs,
+      result: params.result,
+    });
+    this.scheduleAutoWake();
+  }
+
+  onTaskSteered(params) {
+    this.post({ type: "taskSteered", taskId: params.taskId, message: params.message });
+  }
+
+  /**
+   * Client-driven auto-wake (Royal Mode 2.0 §6): debounce ~1.5s so several
+   * background completions arriving close together coalesce into ONE wake
+   * turn rather than one per task. Deliberately does NOT check
+   * `this.turnInProgress` here — that's `triggerWake()`'s job, re-checked at
+   * fire time (a real user prompt may well start during the debounce window).
+   */
+  scheduleAutoWake() {
+    clearTimeout(this._autoWakeTimer);
+    this._autoWakeTimer = setTimeout(() => void this.triggerWake(), 1500);
+  }
+
+  /**
+   * Send a `_meta:{wake:true}` prompt so a completed background task's
+   * notification (injected server-side ahead of the drained queue's user
+   * text — see server.ts's `session/prompt` handler) actually reaches the
+   * model even though nobody is actively chatting. Guarantees mirrored from
+   * server.ts: a wake NEVER fires while a real turn is in progress (checked
+   * here AND server-side, which also never calls `session.pending?.abort()`
+   * for a wake — belt and suspenders, since this client-side check alone
+   * can't rule out a race with a just-started real turn) and is capped at 10
+   * per chat (reset whenever a real user prompt is sent — see `sendPrompt`)
+   * so a pathological completion loop can't auto-wake forever unattended.
+   * Posts a "system" transcript line, NEVER a fake "user" bubble — the
+   * turn's actual content (whatever the model does with the notification)
+   * streams in normally through the same onSessionUpdate path a real turn
+   * uses.
+   */
+  async triggerWake() {
+    if (this.turnInProgress) return;
+    if (!this.acp || !this.sessionId) return;
+    if ((this.autoWakeCount ?? 0) >= 10) return;
+    this.autoWakeCount = (this.autoWakeCount ?? 0) + 1;
+    this.turnInProgress = true;
+    try {
+      this.post({ type: "system", text: "Background task finished — reviewing results" });
+      this.post({ type: "turnStart" });
+      const res = await this.acp.request("session/prompt", {
+        sessionId: this.sessionId,
+        prompt: [{ type: "text", text: "(background task completed — see the notification above)" }],
+        _meta: { wake: true },
+      });
+      this.post({ type: "turnEnd", stopReason: res.stopReason });
+    } catch (err) {
+      this.post({ type: "system", text: `auto-wake failed: ${err.message}` });
+      this.post({ type: "turnEnd", stopReason: "error" });
+    } finally {
+      this.turnInProgress = false;
+    }
   }
 
   /**
@@ -971,6 +1084,10 @@ class AgentViewProvider {
     const displayText = text || (attachments.length ? attachments.map((a) => `@${a.path}`).join(" ") : "");
     if (!displayText) return;
     this.turnInProgress = true;
+    // A genuine user prompt resets the auto-wake budget (Royal Mode 2.0 §6) —
+    // the 10-per-chat cap guards against a pathological unattended completion
+    // loop, not against a human who is actively back in the conversation.
+    this.autoWakeCount = 0;
     // doc 11 §1: minted client-side, before the request goes out, so it can
     // be attached to this same optimistic "user" post — the client already
     // knows it just sent one prompt and is receiving updates until turnEnd,
@@ -1276,6 +1393,25 @@ class AgentViewProvider {
           const rel = path.relative(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "", this.pendingPlan);
           this.view?.webview.postMessage({ type: "planReady", path: rel });
         }
+        // Running-agents tray reconcile (Royal Mode 2.0 §8): the replay above
+        // rebuilds whatever task cards the persisted transcript remembers,
+        // purely client-side and with no idea whether the agent PROCESS
+        // behind them is still alive. If it's a fresh process (crash/restart —
+        // the in-memory registry is v1's deliberate persistence boundary, see
+        // agent/src/tasks.ts's module doc), `lakshx/tasks_list` simply won't
+        // know those taskIds, and panel.js flips any card still showing
+        // "running" to "lost — agent restarted" rather than spinning forever.
+        // Only attempted when a connection already exists — this must never
+        // itself spawn the agent runtime (same "boot never spawns" rule the
+        // "boot" case above documents).
+        if (this.acp && this.sessionId) {
+          try {
+            const res = await this.acp.request("lakshx/tasks_list", { sessionId: this.sessionId });
+            this.view?.webview.postMessage({ type: "tasksReconcile", tasks: res?.tasks ?? [] });
+          } catch (err) {
+            this.log.appendLine(`lakshx/tasks_list reconcile failed: ${err.message}`);
+          }
+        }
         break;
       case "planDecision":
         await this.planDecision(m.decision);
@@ -1414,6 +1550,31 @@ class AgentViewProvider {
         break;
       case "cancel":
         this.acp?.notify("session/cancel", { sessionId: this.sessionId });
+        break;
+      case "cancelTask":
+        // Tray "Stop" on one background task (Royal Mode 2.0 §7) — explicit
+        // kill, deliberately separate from "cancel" above: session/cancel
+        // never touches detached background children, only session.pending.
+        if (this.acp && this.sessionId) {
+          try {
+            await this.acp.request("lakshx/task_cancel", { sessionId: this.sessionId, taskId: m.taskId });
+          } catch (err) {
+            this.view?.webview.postMessage({ type: "system", text: `Could not stop ${m.taskId}: ${err.message}` });
+          }
+        }
+        break;
+      case "sendToTask":
+        // Tray steer input (mirrors the send_to_task tool the model itself has).
+        if (this.acp && this.sessionId) {
+          try {
+            const res = await this.acp.request("lakshx/task_send", { sessionId: this.sessionId, taskId: m.taskId, message: m.message });
+            if (!res?.ok) {
+              this.view?.webview.postMessage({ type: "system", text: `Could not steer ${m.taskId}: ${res?.reason ?? "unknown error"}` });
+            }
+          } catch (err) {
+            this.view?.webview.postMessage({ type: "system", text: `send_to_task failed: ${err.message}` });
+          }
+        }
         break;
       case "newChat":
         this.newChat();
@@ -1632,6 +1793,10 @@ ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
     <div id="checkpointBar" class="checkpointbar" hidden>
       <button id="cpbarHead" class="cpbar-head" type="button"></button>
       <div id="cpbarBody" class="cpbar-body" hidden></div>
+    </div>
+    <div id="taskTray" class="tasktray" hidden>
+      <button id="trayHead" class="tray-head" type="button"></button>
+      <div id="trayBody" class="tray-body" hidden></div>
     </div>
     <div class="input-wrap">
       <div id="mentionPopup" class="mention-popup" hidden></div>

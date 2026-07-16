@@ -14,6 +14,7 @@ import { runPrompt, toolTitle, type AgentMode, type AgentSession } from "./loop.
 import { toolResultText } from "./providers/types.js";
 import { probeProvider } from "./providers/validate.js";
 import { loadSessionFile, pruneSessions, saveSessionSoon, type PromptCheckpoint, type PromptMarker } from "./store.js";
+import { backgroundTasks, formatTaskNotifications } from "./tasks.js";
 import { capToolImageBase64 } from "./tool-image-cap.js";
 
 interface Session extends AgentSession {
@@ -55,6 +56,11 @@ function laterOverlap(checkpoints: PromptCheckpoint[], promptId: string): Record
 
 const sessions = new Map<string, Session>();
 
+/** Persist a session's durable state (shared by the turn's `persist` closure and the background-checkpoint hooks that outlive any turn). */
+function persistSession(id: string, s: Session): void {
+  saveSessionSoon({ id, cwd: s.cwd, mode: s.mode, model: s.model, history: s.history, checkpoints: s.checkpoints, prompts: s.prompts });
+}
+
 // housekeeping: bound ~/.lakshx/sessions/ so it never grows unbounded
 pruneSessions();
 
@@ -80,7 +86,7 @@ function savePlan(cwd: string, text: string): string {
   return file;
 }
 
-acp
+const agentApp = acp
   .agent({ name: "lakshx-agent" })
   .onRequest("initialize", async () => ({
     protocolVersion: acp.PROTOCOL_VERSION,
@@ -184,7 +190,18 @@ acp
     const session = sessions.get(sessionId);
     if (!session) throw new Error(`unknown session ${sessionId}`);
 
-    session.pending?.abort();
+    // Client-driven auto-wake (extension.js): a wake prompt exists only to
+    // drain a completed background task's notification into a fresh turn when
+    // the session is idle. It must NEVER kill a real user turn — so, unlike a
+    // real prompt, a wake prompt does NOT call session.pending?.abort(). If a
+    // real turn is already in flight, or there is nothing queued to wake for,
+    // it ends immediately as a no-op and leaves session.pending untouched.
+    const isWake = !!(ctx.params as any)?._meta?.wake;
+    if (isWake && (session.pending || backgroundTasks.pendingFor(sessionId).length === 0)) {
+      return { stopReason: "end_turn" };
+    }
+
+    if (!isWake) session.pending?.abort();
     const abort = new AbortController();
     session.pending = abort;
 
@@ -211,10 +228,28 @@ acp
     session.prompts = session.prompts.filter((p) => p.index < session.history.length);
     session.prompts.push({ promptId, index: session.history.length, createdAt: Date.now() });
 
-    const text = prompt
+    let text = prompt
       .filter((b: any) => b.type === "text")
       .map((b: any) => b.text)
       .join("\n");
+
+    // Notification injection: prepend any completed-background-task events as a
+    // clearly-framed NON-USER block (formatTaskNotifications) ahead of the real
+    // user text. Tasks already delivered via check_tasks/wait_for_tasks were
+    // removed from the pending queue at delivery, so they are not re-injected.
+    const drainedTasks = backgroundTasks.drainPending(sessionId).filter((t) => !t.delivered);
+    if (drainedTasks.length) {
+      text = formatTaskNotifications(
+        drainedTasks.map((t) => ({
+          taskId: t.taskId,
+          status: t.status,
+          durationMs: (t.endedAt ?? Date.now()) - t.startedAt,
+          prompt: t.prompt,
+          output: t.result?.output ?? "(no result)",
+        })),
+        text,
+      );
+    }
 
     const notify = (update: any) =>
       ctx.client.notify(acp.methods.client.session.update, { sessionId, update });
@@ -554,14 +589,84 @@ acp
       return { content };
     },
   )
+  // Background subtasks (Royal Mode 2.0): list the registry's live/finished
+  // tasks for a session — the tray's reconcile-on-reload source of truth.
+  // After an agent-process restart the (in-memory) registry is empty, so this
+  // returns [] and the client flips its replayed cards to "lost — restarted".
+  .onRequest(
+    "lakshx/tasks_list",
+    (v: unknown) => v as { sessionId: string },
+    async (ctx) => ({ tasks: backgroundTasks.listForSession(ctx.params.sessionId).map((t) => backgroundTasks.serialize(t)) }),
+  )
+  // Explicit kill of one background task (tray Stop). Deliberately separate
+  // from session/cancel, which never touches detached background children.
+  .onRequest(
+    "lakshx/task_cancel",
+    (v: unknown) => v as { sessionId: string; taskId: string },
+    async (ctx) => {
+      const task = backgroundTasks.get(ctx.params.taskId);
+      if (!task || task.sessionId !== ctx.params.sessionId) return { ok: false };
+      return { ok: backgroundTasks.cancel(ctx.params.taskId) };
+    },
+  )
+  // Steer a running background task from the tray (mirror of the send_to_task tool).
+  .onRequest(
+    "lakshx/task_send",
+    (v: unknown) => v as { sessionId: string; taskId: string; message: string },
+    async (ctx) => {
+      const task = backgroundTasks.get(ctx.params.taskId);
+      if (!task || task.sessionId !== ctx.params.sessionId) return { ok: false, reason: "unknown task" };
+      if (task.status !== "running") return { ok: false, reason: "already completed" };
+      return { ok: backgroundTasks.steer(ctx.params.taskId, ctx.params.message) };
+    },
+  )
   .onNotification("session/cancel", async (ctx) => {
     sessions.get(ctx.params.sessionId)?.pending?.abort();
-  })
-  .connect(
-    acp.ndJsonStream(
-      Writable.toWeb(process.stdout),
-      Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
-    ),
-  );
+  });
+
+// Capture the connection (its `.client` is the connection-LIFETIME notifier —
+// distinct from a per-request `ctx.client`, and the only way to notify with no
+// turn in flight, which is exactly what a detached background task needs).
+const conn = agentApp.connect(
+  acp.ndJsonStream(
+    Writable.toWeb(process.stdout),
+    Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>,
+  ),
+);
+
+// Wire the background-task registry: out-of-turn notifications go through the
+// lifetime client notifier, and background checkpoints/baselines persist into
+// the owning Session (so background edits stay undoable) via the same
+// PromptCheckpoint structure a foreground turn builds — keyed by the task's
+// OWN promptId so they group under their own "Files changed" card.
+backgroundTasks.wire({
+  notify: (method, params) => {
+    void conn.client.notify(method, params);
+  },
+  onBackgroundBaseline: (sessionId, promptId, sha) => {
+    const s = sessions.get(sessionId);
+    if (!s) return;
+    let entry = s.checkpoints.find((c) => c.promptId === promptId);
+    if (!entry) {
+      entry = { promptId, baselineSha: sha ?? "", tools: [], createdAt: Date.now() };
+      s.checkpoints.push(entry);
+    } else if (!entry.baselineSha && sha) {
+      entry.baselineSha = sha;
+    }
+    persistSession(sessionId, s);
+  },
+  onBackgroundCheckpoint: (sessionId, promptId, info) => {
+    const s = sessions.get(sessionId);
+    if (!s) return;
+    let entry = s.checkpoints.find((c) => c.promptId === promptId);
+    if (!entry) {
+      entry = { promptId, baselineSha: "", tools: [], createdAt: Date.now() };
+      s.checkpoints.push(entry);
+    }
+    entry.tools.push({ toolCallId: info.toolCallId, toolName: info.toolName, sha: info.sha, files: info.files });
+    void conn.client.notify("lakshx/checkpoint", { sessionId, promptId, ...info });
+    persistSession(sessionId, s);
+  },
+});
 
 process.stderr.write("lakshx-agent ready (ACP over stdio)\n");

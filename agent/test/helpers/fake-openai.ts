@@ -44,12 +44,30 @@ export class FakeOpenAI {
   private stallScript: ScriptedTurn[] = [];
   private continuousScript: Array<{ intervalMs: number; factory: (i: number) => SseEvent }> = [];
   private activeIntervals: Set<ReturnType<typeof setInterval>> = new Set();
+  private matchedScript: Array<{ match: (req: RecordedRequest) => boolean; turn: ScriptedTurn; delayMs: number }> = [];
   private server: Server | undefined;
 
   /** Queue one or more turns; each request consumes one turn FIFO. */
   enqueue(...turns: ScriptedTurn[]): void {
     this.script.push(...turns);
     for (const _ of turns) this.scriptDelays.push(0);
+  }
+
+  /**
+   * Queue a turn keyed by CONTENT rather than arrival order — checked (in
+   * registration order, first unconsumed match wins) BEFORE the plain FIFO
+   * `script` queue. Needed whenever two logically-distinct request streams
+   * are genuinely concurrent (e.g. a background subtask's own request race
+   * against the spawning turn's own next model call) — plain FIFO position
+   * is nondeterministic there (which one's HTTP request body finishes
+   * arriving first depends on JS/event-loop scheduling, not test intent), so
+   * asserting "the Nth request gets the Nth enqueued turn" is flaky. Matching
+   * on the request's own `messages` (e.g. a specific tool_call_id's result, or
+   * a child's distinctive first user-message text) makes the routing
+   * independent of arrival order entirely.
+   */
+  enqueueMatched(match: (req: RecordedRequest) => boolean, turn: ScriptedTurn, delayMs = 0): void {
+    this.matchedScript.push({ match, turn, delayMs });
   }
 
   /**
@@ -111,6 +129,20 @@ export class FakeOpenAI {
           res.writeHead(200, { "content-type": "text/event-stream" });
           for (const ev of stall) res.write(`data: ${JSON.stringify(ev)}\n\n`);
           // deliberately no [DONE], no res.end() — the socket stays open and silent
+          return;
+        }
+
+        const matchedIdx = this.matchedScript.findIndex((m) => m.match(parsed));
+        if (matchedIdx !== -1) {
+          const { turn, delayMs } = this.matchedScript.splice(matchedIdx, 1)[0];
+          const respondMatched = () => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            for (const ev of turn) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+            res.write("data: [DONE]\n\n");
+            res.end();
+          };
+          if (delayMs > 0) setTimeout(respondMatched, delayMs);
+          else respondMatched();
           return;
         }
 

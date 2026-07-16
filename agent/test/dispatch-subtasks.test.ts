@@ -293,9 +293,22 @@ test(
       assert.equal(stop, "end_turn");
 
       // The tool offered to the PARENT for its own turn is still read-only +
-      // dispatch_subtasks + db_query (a read-kind tool usable in review mode).
+      // dispatch_subtasks + db_query (a read-kind tool usable in review mode) +
+      // the three background-task management tools (check_tasks/send_to_task/
+      // wait_for_tasks are non-dangerous observe/steer/join operations on the
+      // registry, not workspace mutations — review mode's guarantee is about
+      // write_file/edit_file/bash, which stay excluded below).
       const offeredToParent = fake.requests[0]!.tools.map((tl: any) => tl.function.name).sort();
-      assert.deepEqual(offeredToParent, ["db_query", "dispatch_subtasks", "grep", "list_dir", "read_file"]);
+      assert.deepEqual(offeredToParent, [
+        "check_tasks",
+        "db_query",
+        "dispatch_subtasks",
+        "grep",
+        "list_dir",
+        "read_file",
+        "send_to_task",
+        "wait_for_tasks",
+      ]);
 
       // The child's announced mode is "review", NOT the "auto" the task asked for.
       assert.equal(cb.subagentsStart[0].tasks[0].mode, "review");

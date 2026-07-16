@@ -48,6 +48,10 @@
       <button id="cpbarHead" class="cpbar-head" type="button"></button>
       <div id="cpbarBody" class="cpbar-body" hidden></div>
     </div>
+    <div id="taskTray" class="tasktray" hidden>
+      <button id="trayHead" class="tray-head" type="button"></button>
+      <div id="trayBody" class="tray-body" hidden></div>
+    </div>
     <div class="input-wrap">
       <div id="mentionPopup" class="mention-popup" hidden></div>
       <div id="slashPopup" class="mention-popup" hidden></div>
@@ -81,13 +85,63 @@
 
   // Mini event-sourced transcript, mirroring extension.js's REPLAYABLE
   // handling just enough to exercise the conversation-rewind flow: user/
-  // chunk/checkpoint/system/turnEnd/rewindAccepted events are recorded so
-  // "rewindToPrompt" can truncate at the matching user event and push a full
-  // replay — exactly what extension.js's applyRewind does.
-  const REPLAYABLE = new Set(["user", "chunk", "system", "turnEnd", "checkpoint", "rewindAccepted", "modeChanged"]);
+  // chunk/checkpoint/system/turnEnd/rewindAccepted/task* events are recorded
+  // so "rewindToPrompt" can truncate at the matching user event and push a
+  // full replay — exactly what extension.js's applyRewind does. "task*" is
+  // included so the running-agents tray survives a simulated reload the same
+  // way extension.js's real REPLAYABLE set does (see extension.js).
+  const REPLAYABLE = new Set(["user", "chunk", "system", "turnEnd", "checkpoint", "rewindAccepted", "modeChanged", "taskStart", "taskActivity", "taskDone", "taskSteered"]);
   const transcript = [];
   const post = (msg) => { if (REPLAYABLE.has(msg.type)) transcript.push(msg); reply(msg); };
   let promptSeq = 0;
+  let bgSeq = 0;
+
+  /**
+   * Background-subtask (Royal Mode 2.0) demo lifecycle, triggered by typing
+   * "/bgdemo" into the composer — feeds taskStart -> taskActivity (x2) ->
+   * taskDone at realistic intervals so the tray's live states (running dot,
+   * activity line updates, collapse-to-settled) can be eyeballed without a
+   * real agent process.
+   */
+  function runBgDemo() {
+    const taskId = "bg_demo" + (++bgSeq);
+    const startedAt = Date.now();
+    post({ type: "taskStart", taskId, batchId: "batch_demo", promptId: "pr_bgdemo", prompt: "Audit the auth module for stale sessions", mode: "auto", startedAt });
+    setTimeout(() => post({ type: "taskActivity", taskId, batchId: "batch_demo", kind: "tool_start", detail: "Read auth/session.ts" }), 400);
+    setTimeout(() => post({ type: "taskActivity", taskId, batchId: "batch_demo", kind: "tool_end", detail: "Read auth/session.ts", isError: false }), 900);
+    setTimeout(() => post({ type: "taskActivity", taskId, batchId: "batch_demo", kind: "text", detail: "Found 2 stale-session code paths, checking tests next…" }), 1300);
+    setTimeout(() => {
+      post({
+        type: "taskDone",
+        taskId,
+        batchId: "batch_demo",
+        status: "done",
+        durationMs: Date.now() - startedAt,
+        result: { output: "Audited auth/session.ts: found 2 stale-session paths, added regression tests for both. No behavior change needed elsewhere.", isError: false },
+      });
+    }, 2200);
+    return taskId;
+  }
+
+  /**
+   * "/bglost" demo: starts a background task that never finishes, then — after
+   * a short delay — simulates a full webview reload (a "replay" of the
+   * transcript, exactly what a real window reload triggers) followed by a
+   * "tasksReconcile" reply with an EMPTY tasks list, simulating an agent
+   * process restart that forgot about it. panel.js should flip that row from
+   * a spinning "running" dot to "lost — agent restarted" rather than leaving
+   * it spinning forever.
+   */
+  function runBgLostDemo() {
+    const taskId = "bg_lost" + (++bgSeq);
+    post({ type: "taskStart", taskId, batchId: "batch_lost", promptId: "pr_bglost", prompt: "Long-running migration dry run", mode: "auto", startedAt: Date.now() });
+    setTimeout(() => post({ type: "taskActivity", taskId, batchId: "batch_lost", kind: "text", detail: "Scanning migrations…" }), 300);
+    setTimeout(() => {
+      reply({ type: "replay", events: transcript.slice() });
+      setTimeout(() => reply({ type: "tasksReconcile", tasks: [] }), 50);
+    }, 900);
+    return taskId;
+  }
 
   window.acquireVsCodeApi = () => ({
     getState() {}, setState() {},
@@ -104,7 +158,42 @@
         case "setMode":
           post({ type: "modeChanged", mode: m.mode, auto: false });
           break;
+        case "cancelTask":
+          console.log("[harness] cancelTask", m.taskId);
+          post({ type: "taskDone", taskId: m.taskId, batchId: "batch_demo", status: "cancelled", durationMs: 0, result: { output: "Cancelled from the tray.", isError: false } });
+          break;
+        case "sendToTask":
+          console.log("[harness] sendToTask", m.taskId, m.message);
+          post({ type: "taskSteered", taskId: m.taskId, message: m.message });
+          break;
         case "send": {
+          // Deliberately NOT "/"-prefixed: panel.js intercepts any composer
+          // text starting with "/" as a slash command client-side (see its
+          // "slash commands" section) and never forwards an unrecognized one
+          // as a plain "send" postMessage at all — so these demo triggers use
+          // plain text instead of trying to register as fake slash commands.
+          if (m.text.trim() === "bgdemo") {
+            const promptId = "pr_harness_" + (++promptSeq);
+            post({ type: "user", text: m.text, promptId });
+            reply({ type: "turnStart" });
+            runBgDemo();
+            setTimeout(() => {
+              post({ type: "chunk", text: "(harness) launched a demo background task — watch the tray near the composer." });
+              post({ type: "turnEnd" });
+            }, 100);
+            break;
+          }
+          if (m.text.trim() === "bglost") {
+            const promptId = "pr_harness_" + (++promptSeq);
+            post({ type: "user", text: m.text, promptId });
+            reply({ type: "turnStart" });
+            runBgLostDemo();
+            setTimeout(() => {
+              post({ type: "chunk", text: "(harness) launched a background task, then simulated a reload+reconcile in ~1s — watch it flip to 'lost'." });
+              post({ type: "turnEnd" });
+            }, 100);
+            break;
+          }
           const promptId = "pr_harness_" + (++promptSeq);
           post({ type: "user", text: m.text, promptId });
           reply({ type: "turnStart" });
