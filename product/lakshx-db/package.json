@@ -13,7 +13,9 @@
     "test:unit": "node --test test/*.test.js"
   },
   "dependencies": {
-    "mongodb": "^7.5.0"
+    "mongodb": "^7.5.0",
+    "mysql2": "^3.23.0",
+    "pg": "^8.22.0"
   },
   "activationEvents": [
     "onStartupFinished"
@@ -22,7 +24,7 @@
     "commands": [
       {
         "command": "lakshx.db.showPanel",
-        "title": "LakshX: Show Database Panel (MongoDB)",
+        "title": "LakshX: Show Database Panel",
         "icon": "$(database)"
       },
       {
@@ -32,8 +34,12 @@
     ],
     "menus": {
       "commandPalette": [
-        { "command": "lakshx.db.showPanel" },
-        { "command": "lakshx.db.forgetCredentials" }
+        {
+          "command": "lakshx.db.showPanel"
+        },
+        {
+          "command": "lakshx.db.forgetCredentials"
+        }
       ]
     }
   }

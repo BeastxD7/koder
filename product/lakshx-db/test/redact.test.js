@@ -29,6 +29,36 @@ test("redactConnectionString is a no-op on non-string input and doesn't throw", 
   assert.equal(redactConnectionString(null), null);
 });
 
+test("redactConnectionString hides credentials in PostgreSQL URIs (both postgres:// and postgresql://)", () => {
+  assert.equal(
+    redactConnectionString("postgres://alice:s3cr3t@db.example.net:5432/mydb"),
+    "postgres://***:***@db.example.net:5432/mydb",
+  );
+  assert.equal(
+    redactConnectionString("postgresql://alice:s3cr3t@db.example.net/mydb?sslmode=require"),
+    "postgresql://***:***@db.example.net/mydb?sslmode=require",
+  );
+  assert.equal(redactConnectionString("postgres://tokenonly@host/db"), "postgres://***@host/db");
+});
+
+test("redactConnectionString hides credentials in MySQL URIs", () => {
+  assert.equal(
+    redactConnectionString("mysql://root:hunter2@127.0.0.1:3306/shop"),
+    "mysql://***:***@127.0.0.1:3306/shop",
+  );
+  assert.equal(redactConnectionString("mysql://localhost:3306/shop"), "mysql://localhost:3306/shop");
+});
+
+test("redactText redacts pg/mysql URIs embedded inside a larger error message", () => {
+  const msg = 'connection to server failed for postgres://admin:pw1@10.0.0.5/db and mysql://bob:pw2@10.0.0.6/db2 — retry';
+  const redacted = redactText(msg);
+  assert.equal(redacted.includes("pw1"), false);
+  assert.equal(redacted.includes("pw2"), false);
+  assert.match(redacted, /postgres:\/\/\*\*\*:\*\*\*@10\.0\.0\.5\/db/);
+  assert.match(redacted, /mysql:\/\/\*\*\*:\*\*\*@10\.0\.0\.6\/db2/);
+  assert.match(redacted, /retry/);
+});
+
 test("redactText finds and redacts a connection string embedded inside a larger error message", () => {
   const msg = 'connect ECONNREFUSED, tried mongodb://admin:hunter2@10.0.0.5:27017/db — check network';
   const redacted = redactText(msg);

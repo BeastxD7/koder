@@ -1,30 +1,24 @@
 // LakshX Database panel — schema + relationship visualization for a live
-// MongoDB connection, rendered as a Mermaid `erDiagram` in a webview (same
-// createWebviewPanel pattern as product/lakshx-chat's showRemoteAccessPanel).
+// database connection (MongoDB, PostgreSQL, MySQL, or SQLite), rendered as
+// a Mermaid `erDiagram` in a webview (same createWebviewPanel pattern as
+// product/lakshx-chat's showRemoteAccessPanel).
 //
-// MongoDB is a deliberate special case among the engines this panel family
-// targets (Postgres/MySQL/SQLite are FK-enforced and get an authoritative
-// schema straight from information_schema/PRAGMA equivalents): Mongo has no
-// schema and no enforced foreign keys, so everything shown here is INFERRED
-// from a bounded sample of live documents, and every relationship is a
-// heuristic suggestion, never a fact. See lib/schema.js, lib/relationships.js,
-// lib/mermaid.js for where that distinction is actually enforced (visually
-// and in the copy), not just asserted in this comment.
+// All engine specifics live behind the driver interface in lib/engines.js /
+// lib/drivers/*. The one distinction that matters everywhere: the SQL
+// engines (Postgres/MySQL/SQLite) have an AUTHORITATIVE schema — their
+// foreign keys come from information_schema/pg_catalog/PRAGMA and render as
+// solid FK edges — while MongoDB has no schema and no enforced foreign
+// keys, so its panel shows a shape INFERRED from a bounded sample of live
+// documents with every relationship a dashed, amber "suggestion". See
+// lib/mermaid.js and media/db.js for where that distinction is actually
+// enforced (visually and in the copy), not just asserted in this comment.
 "use strict";
 
 const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
-const { MongoClient } = require("mongodb");
-const { inferCollectionSchema } = require("./lib/schema.js");
-const { detectRelationships } = require("./lib/relationships.js");
-const { buildErDiagram } = require("./lib/mermaid.js");
-const { redactConnectionString, redactText } = require("./lib/redact.js");
-
-const SECRET_KEY = "lakshx.db.mongo.connectionString";
-const SAMPLE_SIZE = 100; // bounded sample per collection — see lib/schema.js header
-const COLLECTION_LIMIT = 40; // guardrail against a huge database fanning out into hundreds of $sample round-trips
-const SYSTEM_DB_NAMES = new Set(["admin", "local", "config"]);
+const { listEngines, getDriver } = require("./lib/engines.js");
+const { redactText } = require("./lib/redact.js");
 
 const log = vscode.window.createOutputChannel("LakshX Database");
 
@@ -35,156 +29,101 @@ function logLine(text) {
   log.appendLine(redactText(String(text)));
 }
 
-async function promptForConnectionString(prefillRedactedHint) {
+/** Engine-appropriate connection input: a masked input box for URI engines
+ * (mongo/postgres/mysql), a file-open dialog for file engines (sqlite).
+ * Returns the connection string / file path, or undefined if cancelled. */
+async function promptForConnection(driver) {
+  if (driver.connectionKind === "file") {
+    const picked = await vscode.window.showOpenDialog({
+      title: driver.prompt.title,
+      canSelectMany: false,
+      canSelectFolders: false,
+      openLabel: "Open Read-Only",
+      filters: driver.prompt.fileFilters,
+    });
+    return picked?.[0]?.fsPath;
+  }
   return vscode.window.showInputBox({
-    title: "LakshX Database: MongoDB Connection String",
-    prompt: prefillRedactedHint
-      ? `Enter a new MongoDB connection string (previous: ${prefillRedactedHint})`
-      : "mongodb://user:password@host:27017/mydb or a mongodb+srv:// Atlas URI",
-    placeHolder: "mongodb://localhost:27017/mydb",
+    title: driver.prompt.title,
+    prompt: driver.prompt.example,
+    placeHolder: driver.prompt.placeHolder,
     password: true, // masked input — never echoed to the UI or history
     ignoreFocusOut: true,
     validateInput: (value) => {
-      if (!value || !/^mongodb(\+srv)?:\/\//i.test(value.trim())) {
-        return "Must start with mongodb:// or mongodb+srv://";
+      if (!value || !driver.prompt.schemeRe.test(value.trim())) {
+        return driver.prompt.schemeError;
       }
       return null;
     },
   });
 }
 
-/** Connects, verifies with a ping, and disconnects — used to validate a
- * freshly entered connection string before it's persisted to SecretStorage.
- * Returns null on success, or a redacted error message on failure. */
-async function testConnection(uri) {
-  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
-  try {
-    await client.connect();
-    await client.db().admin().ping();
-    return null;
-  } catch (err) {
-    return redactText(String(err?.message ?? err));
-  } finally {
-    await client.close().catch(() => {});
-  }
-}
-
-async function pickDatabase(client) {
-  let candidates = null;
-  try {
-    const { databases } = await client.db().admin().listDatabases({ nameOnly: true });
-    candidates = databases.map((d) => d.name).filter((n) => !SYSTEM_DB_NAMES.has(n));
-  } catch (err) {
-    // Common for a least-privilege user without the clusterMonitor role —
-    // fall back to whatever database the connection string itself names.
-    logLine(`listDatabases unavailable (${err?.message ?? err}); falling back to the connection string's default database.`);
-  }
-
-  const defaultDb = client.db(); // driver-resolved default (from the URI path), if any
-  if (!candidates || candidates.length === 0) {
-    if (!defaultDb.databaseName || defaultDb.databaseName === "test") {
-      throw new Error(
-        "Couldn't determine which database to open: this user can't list databases, and the connection string doesn't name one. Add /yourDbName to the connection string.",
-      );
-    }
-    return defaultDb.databaseName;
-  }
-  if (candidates.length === 1) return candidates[0];
-  if (defaultDb.databaseName && candidates.includes(defaultDb.databaseName)) return defaultDb.databaseName;
-
-  const picked = await vscode.window.showQuickPick(candidates, {
+/** The chooser UI a driver's resolveDatabase calls when several databases
+ * are visible on one connection (mongo, mysql-without-a-db-in-the-uri). */
+async function quickPickDatabase(candidates) {
+  return vscode.window.showQuickPick(candidates, {
     title: "LakshX Database: choose a database",
     placeHolder: "Multiple databases are visible on this connection",
   });
-  if (!picked) throw new Error("No database selected.");
-  return picked;
-}
-
-/** Connects, samples every collection in `dbName` (bounded, see SAMPLE_SIZE/
- * COLLECTION_LIMIT), infers a schema shape for each, and detects suggested
- * relationships across the set. Returns the payload the webview renders. */
-async function introspect(client, dbName) {
-  const db = client.db(dbName);
-  const allCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
-    .map((c) => c.name)
-    .filter((n) => !n.startsWith("system."))
-    .sort((a, b) => a.localeCompare(b));
-
-  const collectionNames = allCollections.slice(0, COLLECTION_LIMIT);
-  const truncatedCollectionCount = Math.max(0, allCollections.length - collectionNames.length);
-
-  const schemasByCollection = {};
-  for (const name of collectionNames) {
-    // $sample gives a uniform random sample straight from the server,
-    // rather than an insertion-order-biased "first N" scan.
-    const sampleDocs = await db.collection(name).aggregate([{ $sample: { size: SAMPLE_SIZE } }]).toArray();
-    schemasByCollection[name] = inferCollectionSchema(sampleDocs, { limit: SAMPLE_SIZE });
-  }
-
-  const relationships = detectRelationships(schemasByCollection);
-  const mermaidSource = buildErDiagram(schemasByCollection, relationships);
-
-  return {
-    databaseName: dbName,
-    collections: collectionNames.map((name) => ({
-      name,
-      sampledCount: schemasByCollection[name].sampledCount,
-      fieldCount: schemasByCollection[name].fields.length,
-    })),
-    truncatedCollectionCount,
-    relationships,
-    mermaidSource,
-    sampleSize: SAMPLE_SIZE,
-  };
 }
 
 class DbSession {
-  constructor(context) {
+  constructor(context, engineId) {
     this.context = context;
+    this.engineId = engineId;
+    this.driver = getDriver(engineId);
     this.panel = null;
-    this.client = null;
+    this.handle = null;
     this.dbName = null;
   }
 
-  async ensureClient() {
-    if (this.client) return this.client;
-    let uri = await this.context.secrets.get(SECRET_KEY);
-    if (!uri) {
-      uri = await promptForConnectionString();
-      if (!uri) throw new Error("cancelled");
-      const err = await testConnection(uri);
+  async ensureHandle() {
+    if (this.handle) return this.handle;
+    let conn = await this.context.secrets.get(this.driver.secretKey);
+    if (!conn) {
+      conn = await promptForConnection(this.driver);
+      if (!conn) throw new Error("cancelled");
+      const err = await this.driver.testConnection(conn);
       if (err) throw new Error(`Couldn't connect: ${err}`);
-      await this.context.secrets.store(SECRET_KEY, uri);
-      vscode.window.showInformationMessage("LakshX Database: connection saved to VS Code's secret storage.");
+      await this.context.secrets.store(this.driver.secretKey, conn);
+      vscode.window.showInformationMessage(`LakshX Database: ${this.driver.label} connection saved to VS Code's secret storage.`);
     }
-    this.client = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
     try {
-      await this.client.connect();
+      this.handle = await this.driver.connect(conn);
     } catch (err) {
-      this.client = null;
+      this.handle = null;
       throw new Error(`Couldn't connect: ${redactText(String(err?.message ?? err))}`);
     }
-    return this.client;
+    return this.handle;
   }
 
   async refresh() {
-    this.panel?.webview.postMessage({ type: "loading" });
+    this.panel?.webview.postMessage({ type: "loading", engineLabel: this.driver.label });
     try {
-      const client = await this.ensureClient();
-      if (!this.dbName) this.dbName = await pickDatabase(client);
-      const payload = await introspect(client, this.dbName);
+      const handle = await this.ensureHandle();
+      if (!this.dbName) {
+        this.dbName = await this.driver.resolveDatabase(handle, { pick: quickPickDatabase, log: logLine });
+      }
+      const payload = await this.driver.introspect(handle, this.dbName);
       this.panel?.webview.postMessage({ type: "schema", ...payload });
-      logLine(`Introspected "${this.dbName}": ${payload.collections.length} collection(s), ${payload.relationships.length} suggested relationship(s).`);
+      logLine(
+        `[${this.driver.label}] Introspected "${this.dbName}": ${payload.collections.length} ${payload.authoritative ? "table(s)" : "collection(s)"}, ` +
+          `${payload.relationships.length} ${payload.authoritative ? "foreign key(s)" : "suggested relationship(s)"}.`,
+      );
     } catch (err) {
       const message = redactText(String(err?.message ?? err));
-      logLine(`Introspection failed: ${message}`);
+      logLine(`[${this.driver.label}] Introspection failed: ${message}`);
       this.panel?.webview.postMessage({ type: "error", message });
     }
   }
 
+  async forgetOwnCredentials() {
+    await this.context.secrets.delete(this.driver.secretKey);
+  }
+
   async dispose() {
-    await this.client?.close().catch(() => {});
-    this.client = null;
+    await this.driver.close(this.handle);
+    this.handle = null;
     this.dbName = null;
   }
 }
@@ -212,20 +151,20 @@ function panelHtml(context, webview) {
 </head><body>
 <div id="app">
   <div id="toolbar">
-    <span id="title">MongoDB Schema</span>
+    <span id="title">Database Schema</span>
     <div class="spacer"></div>
-    <button id="refresh" class="ghost" title="Re-sample and redraw">Refresh</button>
+    <button id="refresh" class="ghost" title="Re-read the schema and redraw">Refresh</button>
     <button id="changeConnection" class="ghost" title="Forget this connection and connect elsewhere">Change Connection&hellip;</button>
   </div>
   <div id="banner" hidden></div>
-  <div id="loading">Connecting and sampling documents&hellip;</div>
+  <div id="loading">Connecting and reading the schema&hellip;</div>
   <div id="error" hidden></div>
   <div id="diagramWrap" hidden>
     <div id="diagram"></div>
   </div>
   <div id="relPanel" hidden>
-    <h3>Suggested relationships</h3>
-    <p class="hint">MongoDB has no enforced foreign keys. These are pattern-matched guesses over the sampled documents — verify before relying on them.</p>
+    <h3 id="relTitle">Relationships</h3>
+    <p class="hint" id="relHint"></p>
     <ul id="relList"></ul>
   </div>
 </div>
@@ -234,16 +173,39 @@ function panelHtml(context, webview) {
 </body></html>`;
 }
 
-function showPanel(context) {
-  if (!session) session = new DbSession(context);
+async function pickEngine() {
+  const picked = await vscode.window.showQuickPick(
+    listEngines().map((e) => ({ label: e.label, description: e.description, engineId: e.id })),
+    {
+      title: "LakshX Database: choose an engine",
+      placeHolder: "Which database do you want to visualize?",
+    },
+  );
+  return picked?.engineId;
+}
+
+async function showPanel(context) {
+  const engineId = await pickEngine();
+  if (!engineId) return;
+
+  const engineChanged = session?.engineId !== engineId;
+  if (engineChanged) {
+    // Switching engines tears down the old session's live connection but
+    // NOT its saved secret — each engine keeps its own SecretStorage key,
+    // so flipping back later reconnects without re-entering credentials.
+    await session?.dispose();
+    session = new DbSession(context, engineId);
+  }
 
   if (currentPanel) {
     // Reusing an already-loaded webview: it already ran its own initial
     // "refresh" postMessage on first load (see media/db.js), so nothing
-    // re-fires that here — just reveal it and let the user hit Refresh if
-    // they want a re-sample.
+    // re-fires that here for the same engine — just reveal it and let the
+    // user hit Refresh if they want a re-read. An engine SWITCH does
+    // re-introspect, since the old diagram is now the wrong engine's.
     currentPanel.reveal(vscode.ViewColumn.Beside, true);
     session.panel = currentPanel;
+    if (engineChanged) await session.refresh();
     return;
   }
 
@@ -267,20 +229,27 @@ function showPanel(context) {
     if (m.type === "refresh") {
       await session.refresh();
     } else if (m.type === "changeConnection") {
-      await forgetCredentials(context, { silent: true });
+      // Only the CURRENT engine's saved connection is forgotten here —
+      // "change connection" shouldn't nuke every other engine's secret.
+      await session.forgetOwnCredentials();
+      await session.dispose();
       await session.refresh();
     }
   });
 }
 
-async function forgetCredentials(context, { silent = false } = {}) {
-  await context.secrets.delete(SECRET_KEY);
+async function forgetCredentials(context) {
+  // The command forgets EVERY engine's saved connection — it's the
+  // "clean slate" escape hatch, as the confirmation copy says.
+  for (const engine of listEngines()) {
+    await context.secrets.delete(getDriver(engine.id).secretKey);
+  }
   if (session) {
     await session.dispose();
   }
-  if (!silent) {
-    vscode.window.showInformationMessage("LakshX Database: credentials forgotten. Run “LakshX: Show Database Panel” to connect again.");
-  }
+  vscode.window.showInformationMessage(
+    "LakshX Database: saved connections for all engines forgotten. Run “LakshX: Show Database Panel” to connect again.",
+  );
 }
 
 function activate(context) {
@@ -292,7 +261,7 @@ function activate(context) {
   // floating off on its own.
   const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 998);
   statusItem.text = "$(database) DB";
-  statusItem.tooltip = "Open LakshX Database Panel (MongoDB)";
+  statusItem.tooltip = "Open LakshX Database Panel (MongoDB, PostgreSQL, MySQL, SQLite)";
   statusItem.command = "lakshx.db.showPanel";
   statusItem.show();
 

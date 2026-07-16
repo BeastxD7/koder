@@ -99,4 +99,52 @@ function buildErDiagram(schemasByCollection, relationships) {
   return lines.join("\n");
 }
 
-module.exports = { buildErDiagram, sanitizeToken, sanitizeComment };
+/**
+ * SQL counterpart of buildErDiagram, for engines with a REAL schema
+ * (Postgres/MySQL/SQLite). This is the other half of the visual-confidence
+ * rule described in the file header: an information_schema / PRAGMA foreign
+ * key is an enforced constraint, so here — and only here — edges are SOLID
+ * (`||--o{`) and referencing columns carry the real `FK` attribute key that
+ * buildErDiagram deliberately never emits for Mongo's guesses.
+ *
+ * @param {Array<{name:string, fields:Array<{name:string, type:string, nullable?:boolean, pk?:boolean, fk?:boolean}>}>} tables
+ * @param {Array<{from:string, fromField:string, to:string, toField:string, kind:string}>} relationships
+ * @returns {string} a complete `erDiagram ...` Mermaid source
+ */
+function buildSqlErDiagram(tables, relationships) {
+  const lines = ["erDiagram"];
+  const entityIdOf = makeEntityIdFactory();
+  const idByTable = new Map();
+  for (const t of tables) idByTable.set(t.name, entityIdOf(t.name));
+
+  for (const table of tables) {
+    const entityId = idByTable.get(table.name);
+    lines.push(`  ${entityId} {`);
+    for (const field of table.fields) {
+      const type = sanitizeToken(field.type || "unknown");
+      const fieldName = sanitizeToken(field.name);
+      const keys = [];
+      if (field.pk) keys.push("PK");
+      if (field.fk) keys.push("FK");
+      const keyPart = keys.length > 0 ? ` ${keys.join(", ")}` : "";
+      const commentPart = field.nullable ? ' "nullable"' : "";
+      lines.push(`    ${type} ${fieldName}${keyPart}${commentPart}`);
+    }
+    lines.push("  }");
+  }
+
+  for (const rel of relationships) {
+    const fromId = idByTable.get(rel.from);
+    const toId = idByTable.get(rel.to);
+    if (!fromId || !toId) continue;
+    // SOLID identifying one-to-zero-or-more edge, referenced side first —
+    // the FK column is on `rel.from`, so many `from` rows point at one `to`
+    // row. This cardinality is EARNED here (the engine enforces it), unlike
+    // the deliberately loose dashed `}o..o{` used for Mongo suggestions.
+    lines.push(`  ${toId} ||--o{ ${fromId} : "${sanitizeComment(`${rel.fromField} → ${rel.toField}`)}"`);
+  }
+
+  return lines.join("\n");
+}
+
+module.exports = { buildErDiagram, buildSqlErDiagram, sanitizeToken, sanitizeComment };

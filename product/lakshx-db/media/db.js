@@ -1,10 +1,16 @@
 // Webview-side script for the LakshX Database panel. Receives already-built
 // Mermaid source + relationship metadata from extension.js via postMessage
-// (the mongodb driver and every credential stay in the extension host —
+// (the database drivers and every credential stay in the extension host —
 // this script never sees a connection string). Loaded as an external
 // <script src> file, not inline: this webview's CSP has no 'unsafe-inline'
 // for script-src, only for style-src (mermaid injects a <style> tag inside
 // its rendered SVG, which does need that) — see extension.js's panelHtml().
+//
+// The payload's `authoritative` flag is what separates the two visual
+// languages this panel speaks: SQL engines (Postgres/MySQL/SQLite) send
+// enforced foreign keys — solid edges, blue "FK" badges, matter-of-fact
+// copy — while MongoDB sends sampled-and-guessed suggestions — dashed
+// edges, amber badges, and copy that keeps saying "unverified".
 (function () {
   const vscodeApi = acquireVsCodeApi();
 
@@ -15,6 +21,8 @@
     diagramWrap: document.getElementById("diagramWrap"),
     diagram: document.getElementById("diagram"),
     relPanel: document.getElementById("relPanel"),
+    relTitle: document.getElementById("relTitle"),
+    relHint: document.getElementById("relHint"),
     relList: document.getElementById("relList"),
     title: document.getElementById("title"),
   };
@@ -30,10 +38,6 @@
     for (const key of ["loading", "error", "diagramWrap", "relPanel"]) {
       el[key].hidden = key !== name;
     }
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
   let mermaidReady = false;
@@ -52,19 +56,29 @@
 
   let renderSeq = 0;
 
-  async function renderSchema(payload) {
-    el.title.textContent = `MongoDB: ${payload.databaseName}`;
-    el.banner.hidden = false;
-    el.banner.textContent =
+  function bannerText(payload) {
+    const shown = payload.collections.length;
+    const total = shown + (payload.truncatedCollectionCount || 0);
+    const shownPart = payload.truncatedCollectionCount > 0 ? `Showing ${shown} of ${total}` : `${shown}`;
+    if (payload.authoritative) {
+      return `Schema and foreign keys read live from ${payload.engineLabel}'s catalog — nothing here is sampled or guessed. ${shownPart} table(s) shown.`;
+    }
+    return (
       `Inferred from up to ${payload.sampleSize} sampled documents per collection — MongoDB has no enforced schema. ` +
-      (payload.truncatedCollectionCount > 0
-        ? `Showing ${payload.collections.length} of ${payload.collections.length + payload.truncatedCollectionCount} collections.`
-        : `${payload.collections.length} collection(s) shown.`);
+      `${shownPart} collection(s) shown.`
+    );
+  }
+
+  async function renderSchema(payload) {
+    el.title.textContent = `${payload.engineLabel || "Database"}: ${payload.databaseName}`;
+    el.banner.hidden = false;
+    el.banner.classList.toggle("info", !!payload.authoritative); // neutral for facts, amber for inference
+    el.banner.textContent = bannerText(payload);
 
     if (!mermaidReady) return;
     const seq = ++renderSeq;
     try {
-      const { svg } = await window.mermaid.render("lakshxMongoErd", payload.mermaidSource || "erDiagram");
+      const { svg } = await window.mermaid.render("lakshxDbErd", payload.mermaidSource || "erDiagram");
       if (seq !== renderSeq) return; // a newer refresh landed while this one was rendering — drop the stale result
       el.diagram.innerHTML = svg;
       showOnly("diagramWrap");
@@ -74,19 +88,28 @@
       return;
     }
 
-    renderRelationships(payload.relationships || []);
+    renderRelationships(payload);
   }
 
-  function renderRelationships(relationships) {
+  function renderRelationships(payload) {
+    const relationships = payload.relationships || [];
+    const authoritative = !!payload.authoritative;
+    el.relTitle.textContent = authoritative ? "Foreign keys" : "Suggested relationships";
+    el.relHint.textContent = authoritative
+      ? "Read from the engine's constraint catalog — these are enforced foreign keys, not guesses."
+      : "MongoDB has no enforced foreign keys. These are pattern-matched guesses over the sampled documents — verify before relying on them.";
     el.relList.innerHTML = "";
     el.relPanel.hidden = relationships.length === 0;
     for (const rel of relationships) {
       const li = document.createElement("li");
+      li.className = authoritative ? "fk" : "suggested";
       const badge = document.createElement("span");
       badge.className = "badge";
-      badge.textContent = rel.kind === "manualRef" ? "$ref" : "naming guess";
+      badge.textContent = authoritative ? "FK" : rel.kind === "manualRef" ? "$ref" : "naming guess";
       const path = document.createElement("span");
-      path.textContent = `${rel.from}.${rel.fromField} → ${rel.to}`;
+      path.textContent = rel.toField
+        ? `${rel.from}.${rel.fromField} → ${rel.to}.${rel.toField}`
+        : `${rel.from}.${rel.fromField} → ${rel.to}`;
       const note = document.createElement("span");
       note.className = "note";
       note.textContent = rel.note;
