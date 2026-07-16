@@ -189,3 +189,128 @@ test("sqlite: LIVE PROOF that the read-only OPEN itself (Layer 1) rejects a writ
     db.close();
   }
 });
+
+// ---------- Mongo: command sequence + result shaping (fake client) ----------
+//
+// No live MongoDB was reachable during development (same situation as
+// Postgres/MySQL above), so this exercises `runReadOnlyWithClient` — the
+// pure function `runReadOnlyQuery` wraps around a real MongoClient — against
+// a FAKE client/db/collection/cursor that records the exact find() call.
+// What's proven: resolveDatabase's single-candidate fallback is used, find()
+// is called with the filter/projection/sort/limit/maxTimeMS derived from the
+// spec, results are shaped into {columns, rows} via top-level key union
+// (mirroring data-browse.js's shapeMongoPage discovery rule), and the
+// row-cap/truncation signal matches the SQL drivers'.
+
+const mongoDriver = require("../lib/drivers/mongo.js");
+const { parseMongoQuerySpec: parseSpec } = require("../lib/query-guard.js");
+
+/** A fake MongoClient whose `admin().listDatabases()` always throws (as it
+ * does for a least-privilege user without clusterMonitor) — this exercises
+ * resolveDatabase's "fall back to the connection string's default database"
+ * branch, the same one a single-database connection hits in practice, with
+ * no interactive picker involved (matching runReadOnlyWithClient's
+ * `pick: async () => null`, since there's no human in an AI tool call). */
+function fakeMongoClient({ docs = [], dbName = "shop" } = {}) {
+  const calls = { find: [], collectionName: null };
+  const dbHandle = {
+    databaseName: dbName,
+    admin: () => ({
+      listDatabases: async () => {
+        throw new Error("not authorized to list databases");
+      },
+    }),
+    collection(name) {
+      calls.collectionName = name;
+      return {
+        find(filter, opts) {
+          calls.find.push({ filter, opts });
+          return { toArray: async () => docs };
+        },
+      };
+    },
+  };
+  return {
+    calls,
+    db: () => dbHandle, // always the connection-string default — no multi-db picking in these tests
+    async close() {},
+  };
+}
+
+test("mongo runReadOnlyWithClient: single-database connection needs no picker; find() gets filter/projection/sort/limit+1/maxTimeMS", async () => {
+  const client = fakeMongoClient({
+    docs: [
+      { _id: "1", name: "widget", active: true },
+      { _id: "2", name: "gadget", active: true },
+    ],
+  });
+
+  const spec = parseSpec({ collection: "widgets", filter: { active: true }, projection: { name: 1 }, sort: { name: 1 }, limit: 10 });
+  const res = await mongoDriver.runReadOnlyWithClient(client, spec, { maxRows: 50, timeoutMs: 4000 });
+
+  assert.equal(client.calls.collectionName, "widgets");
+  assert.equal(client.calls.find.length, 1);
+  assert.deepEqual(client.calls.find[0].filter, { active: true });
+  assert.deepEqual(client.calls.find[0].opts.projection, { name: 1 });
+  assert.deepEqual(client.calls.find[0].opts.sort, { name: 1 });
+  assert.equal(client.calls.find[0].opts.limit, 11); // spec.limit(10), NOT maxRows(50), is the tighter cap: +1 probe
+  assert.equal(client.calls.find[0].opts.maxTimeMS, 4000);
+
+  assert.deepEqual(res.columns, ["_id", "name", "active"]); // _id pulled to front
+  assert.deepEqual(res.rows, [
+    ["1", "widget", true],
+    ["2", "gadget", true],
+  ]);
+  assert.equal(res.rowCount, 2);
+  assert.equal(res.truncated, false);
+  assert.equal(res.databaseName, "shop");
+});
+
+test("mongo runReadOnlyWithClient: maxRows is the hard ceiling even when the spec's own limit is larger", async () => {
+  const client = fakeMongoClient({ docs: [{ _id: "1" }] });
+  const spec = parseSpec({ collection: "widgets", limit: 5000 });
+  await mongoDriver.runReadOnlyWithClient(client, spec, { maxRows: 50 });
+  assert.equal(client.calls.find[0].opts.limit, 51, "capped at maxRows(50)+1, not spec.limit(5000)+1");
+});
+
+test("mongo runReadOnlyWithClient: truncates at the effective limit and flags truncated", async () => {
+  const docs = Array.from({ length: 4 }, (_, i) => ({ _id: String(i), n: i }));
+  const client = fakeMongoClient({ docs });
+  const spec = parseSpec({ collection: "widgets", limit: 3 });
+  const res = await mongoDriver.runReadOnlyWithClient(client, spec, { maxRows: 50 });
+  // fake cursor ignores `limit` and always returns all 4 docs — proves the
+  // driver-side slice (not the fake) performs the cap/truncation signal.
+  assert.equal(res.truncated, true);
+  assert.equal(res.rowCount, 3);
+  assert.deepEqual(res.rows.map((r) => r[0]), ["0", "1", "2"]);
+});
+
+test("mongo runReadOnlyWithClient: a document missing a column gets NULL, union of keys across the page", async () => {
+  const client = fakeMongoClient({
+    docs: [
+      { _id: "1", name: "a" },
+      { _id: "2", email: "b@x.com" },
+    ],
+  });
+  const spec = parseSpec({ collection: "widgets" });
+  const res = await mongoDriver.runReadOnlyWithClient(client, spec, { maxRows: 50 });
+  assert.deepEqual(res.columns, ["_id", "name", "email"]);
+  assert.deepEqual(res.rows, [
+    ["1", "a", null],
+    ["2", null, "b@x.com"],
+  ]);
+});
+
+test("mongo runReadOnlyQuery: rejects a spec with a mutating operator BEFORE opening a connection", async () => {
+  await assert.rejects(
+    () => mongoDriver.runReadOnlyQuery("mongodb://x/y", JSON.stringify({ collection: "users", filter: { $set: { admin: true } } })),
+    QueryRejectedError,
+  );
+});
+
+test("mongo shapeDocsForResult: flattens top-level fields only (nested objects stay as one cell)", () => {
+  const { columns, rows } = mongoDriver.shapeDocsForResult([{ _id: "1", address: { city: "NYC" }, tags: ["a", "b"] }]);
+  assert.deepEqual(columns, ["_id", "address", "tags"]);
+  assert.deepEqual(rows[0][1], { city: "NYC" }); // raw value — formatCell (query-guard.js) does the JSON.stringify for display
+  assert.deepEqual(rows[0][2], ["a", "b"]);
+});

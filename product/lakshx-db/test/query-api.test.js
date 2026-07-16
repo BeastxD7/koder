@@ -49,13 +49,58 @@ test("opt-in gate: when the flag is OFF it refuses BEFORE the secret is read", a
   assert.equal(calls.getSecret, 0, "the secret must NOT be read when not opted in");
 });
 
-test("unsupported engine mongo returns a clean 'not supported' error, never touches secrets", async () => {
-  const { run, calls } = harness();
-  const res = await run("mongo", "SELECT 1");
+test("mongo is a supported engine: opt-in gate and secret read behave exactly like the SQL engines", async () => {
+  const driver = makeDriver({
+    label: "MongoDB",
+    secretKey: "lakshx.db.mongo.connectionString",
+    async runReadOnlyQuery() {
+      return { columns: ["_id"], rows: [["1"]], rowCount: 1, truncated: false, databaseName: "shop" };
+    },
+  });
+  const { run, calls } = harness({ allowed: false, driver });
+  const res = await run("mongo", '{"collection":"users"}');
   assert.equal(res.isError, true);
-  assert.match(res.text, /MongoDB is not supported/);
-  assert.equal(calls.isAiQueriesAllowed, 0);
-  assert.equal(calls.getSecret, 0);
+  assert.match(res.text, /not allowed for AI queries/);
+  assert.equal(calls.getSecret, 0, "opt-in gate refuses mongo BEFORE the secret is read, same as SQL engines");
+});
+
+test("mongo happy path: uses the mongo-specific readOnlyNote (no 'transaction, rolled back' phrasing)", async () => {
+  let received;
+  const driver = makeDriver({
+    label: "MongoDB",
+    secretKey: "lakshx.db.mongo.connectionString",
+    async runReadOnlyQuery(conn, query, opts) {
+      received = { conn, query, opts };
+      return { columns: ["_id", "name"], rows: [["1", "widget"]], rowCount: 1, truncated: false, databaseName: "shop" };
+    },
+  });
+  const { run, calls } = harness({ driver, secret: "mongodb://localhost/shop" });
+  const q = '{"collection":"users","filter":{"active":true}}';
+  const res = await run("mongo", q, { maxRows: 20 });
+  assert.equal(res.isError, false);
+  assert.match(res.text, /Connection: MongoDB — shop  \(find-only query — no writes, no aggregation\)/);
+  assert.equal(res.text.includes("read-only transaction, rolled back"), false);
+  assert.match(res.text, /1 \| widget/);
+  assert.equal(received.conn, "mongodb://localhost/shop");
+  assert.equal(received.query, q, "the JSON query-spec string is passed through unmodified, like SQL text");
+  assert.equal(received.opts.maxRows, 20);
+  assert.equal(calls.getSecret, 1);
+  assert.equal(calls.lastSecretKey, "lakshx.db.mongo.connectionString");
+});
+
+test("mongo: a QueryRejectedError thrown by the driver (mutating-operator filter) comes back as a clean error", async () => {
+  const { parseMongoQuerySpec } = require("../lib/query-guard.js");
+  const driver = makeDriver({
+    label: "MongoDB",
+    async runReadOnlyQuery(conn, query) {
+      parseMongoQuerySpec(query); // real guard throws for a mutating operator
+      return { columns: [], rows: [], rowCount: 0, truncated: false, databaseName: "d" };
+    },
+  });
+  const { run } = harness({ driver });
+  const res = await run("mongo", '{"collection":"users","filter":{"$set":{"admin":true}}}');
+  assert.equal(res.isError, true);
+  assert.match(res.text, /write\/update operator/);
 });
 
 test("unknown engine id returns a clean error", async () => {

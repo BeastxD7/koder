@@ -15,6 +15,7 @@ const {
   QueryRejectedError,
   DEFAULT_MAX_ROWS,
   HARD_MAX_ROWS,
+  parseMongoQuerySpec,
 } = require("../lib/query-guard.js");
 
 // ---------- allowlist: accepts ----------
@@ -189,4 +190,113 @@ test("formatResultText handles the zero-row case", () => {
   });
   assert.match(text, /Rows \(0 rows\):/);
   assert.match(text, /\(no rows\)/);
+});
+
+// ---------- formatResultText: readOnlyNote override (Mongo) ----------
+
+test("formatResultText: readOnlyNote overrides the header's read-only phrase (Mongo)", () => {
+  const text = formatResultText({
+    engineLabel: "MongoDB",
+    databaseName: "shop",
+    columns: ["_id", "name"],
+    rows: [["507f1f77bcf86cd799439011", "widget"]],
+    rowCount: 1,
+    truncated: false,
+    maxRows: 50,
+    readOnlyNote: "(find-only query — no writes, no aggregation)",
+  });
+  assert.match(text, /Connection: MongoDB — shop  \(find-only query — no writes, no aggregation\)/);
+  assert.equal(text.includes("read-only transaction, rolled back"), false);
+});
+
+// ---------- Mongo query-spec guard (design §10) ----------
+
+test("parseMongoQuerySpec: accepts a JSON string with collection + filter + limit", () => {
+  const spec = parseMongoQuerySpec('{"collection":"users","filter":{"active":true},"limit":20}');
+  assert.equal(spec.collection, "users");
+  assert.deepEqual(spec.filter, { active: true });
+  assert.equal(spec.limit, 20);
+  assert.equal(spec.projection, undefined);
+  assert.equal(spec.sort, undefined);
+});
+
+test("parseMongoQuerySpec: accepts an already-parsed object (same-process callers)", () => {
+  const spec = parseMongoQuerySpec({ collection: "orders", sort: { createdAt: -1 } });
+  assert.equal(spec.collection, "orders");
+  assert.deepEqual(spec.filter, {}, "filter defaults to {} when absent");
+  assert.deepEqual(spec.sort, { createdAt: -1 });
+});
+
+test("parseMongoQuerySpec: accepts projection alongside filter", () => {
+  const spec = parseMongoQuerySpec({ collection: "users", filter: {}, projection: { name: 1, _id: 0 } });
+  assert.deepEqual(spec.projection, { name: 1, _id: 0 });
+});
+
+test("parseMongoQuerySpec: rejects a non-JSON string", () => {
+  assert.throws(() => parseMongoQuerySpec("db.users.find()"), QueryRejectedError);
+  assert.throws(() => parseMongoQuerySpec("db.users.find()"), /not valid JSON/);
+});
+
+test("parseMongoQuerySpec: rejects an empty string", () => {
+  assert.throws(() => parseMongoQuerySpec(""), /Empty Mongo query/);
+  assert.throws(() => parseMongoQuerySpec("   "), /Empty Mongo query/);
+});
+
+test("parseMongoQuerySpec: rejects JSON that isn't an object (array, string, number)", () => {
+  assert.throws(() => parseMongoQuerySpec("[1,2,3]"), QueryRejectedError);
+  assert.throws(() => parseMongoQuerySpec('"users"'), QueryRejectedError);
+  assert.throws(() => parseMongoQuerySpec("42"), QueryRejectedError);
+});
+
+test("parseMongoQuerySpec: rejects a missing or blank collection field", () => {
+  assert.throws(() => parseMongoQuerySpec({ filter: {} }), /collection/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "" }), /collection/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "   " }), /collection/);
+  assert.throws(() => parseMongoQuerySpec({ collection: 42 }), /collection/);
+});
+
+test("parseMongoQuerySpec: refuses a system.* collection", () => {
+  assert.throws(() => parseMongoQuerySpec({ collection: "system.users" }), /system collection/);
+});
+
+test("parseMongoQuerySpec: rejects a non-object filter/projection/sort", () => {
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", filter: "active" }), /"filter" must be a JSON object/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", projection: "name" }), /"projection" must be a JSON object/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", sort: "name" }), /"sort" must be a JSON object/);
+});
+
+test("parseMongoQuerySpec: rejects a non-positive limit", () => {
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", limit: 0 }), /"limit" must be a positive number/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", limit: -5 }), /"limit" must be a positive number/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", limit: "abc" }), /"limit" must be a positive number/);
+});
+
+test("parseMongoQuerySpec: rejects top-level update operators in the filter (defense in depth)", () => {
+  for (const op of ["$set", "$inc", "$unset", "$currentDate", "$rename", "$push", "$pull", "$addToSet", "$bit"]) {
+    assert.throws(
+      () => parseMongoQuerySpec({ collection: "users", filter: { [op]: { x: 1 } } }),
+      QueryRejectedError,
+      `expected ${op} to be rejected`,
+    );
+  }
+});
+
+test("parseMongoQuerySpec: rejects aggregation side-effect stage names and $where even though only find() ever runs", () => {
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", filter: { $out: "other" } }), /\$out/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", filter: { $merge: "other" } }), /\$merge/);
+  assert.throws(() => parseMongoQuerySpec({ collection: "users", filter: { $where: "1==1" } }), /\$where/);
+});
+
+test("parseMongoQuerySpec: rejects a mutating operator nested inside $and/$or", () => {
+  const nested = { collection: "users", filter: { $and: [{ active: true }, { $set: { admin: true } }] } };
+  assert.throws(() => parseMongoQuerySpec(nested), QueryRejectedError);
+  assert.throws(() => parseMongoQuerySpec(nested), /\$set/);
+});
+
+test("parseMongoQuerySpec: a legitimate nested filter (no mutating keys) is accepted", () => {
+  const spec = parseMongoQuerySpec({
+    collection: "users",
+    filter: { $and: [{ active: true }, { $or: [{ age: { $gt: 18 } }, { vip: true }] }] },
+  });
+  assert.equal(spec.collection, "users");
 });

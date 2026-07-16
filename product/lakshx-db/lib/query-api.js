@@ -14,9 +14,19 @@
 
 const { clampMaxRows, formatResultText } = require("./query-guard.js");
 
-// Only these engines have a trustworthy connection-level read-only story in
-// v1 (design §10 defers MongoDB — weaker read-only guarantees).
-const SUPPORTED_ENGINES = new Set(["postgres", "mysql", "sqlite"]);
+// Every engine whose driver implements `runReadOnlyQuery`. Mongo completes
+// what design §10 originally deferred ("weaker read-only story than SQL —
+// omit in v1"): its read-only guarantee is STRUCTURAL (find-only, no
+// aggregate/$out/$merge/updates — see lib/drivers/mongo.js) rather than
+// transactional, but it is enforced all the same, so it's dispatched
+// identically to the SQL engines below — same opt-in gate, same secret
+// read, same driver.runReadOnlyQuery(conn, query, opts) contract.
+const SUPPORTED_ENGINES = new Set(["postgres", "mysql", "sqlite", "mongo"]);
+
+// Mongo has no engine-level read-only transaction to point to, so the
+// header's parenthetical guarantee phrase is engine-specific (see
+// query-guard.js's formatResultText `readOnlyNote` param).
+const MONGO_READ_ONLY_NOTE = "(find-only query — no writes, no aggregation)";
 
 /**
  * @param {object} deps
@@ -33,9 +43,6 @@ function createRunReadOnlyQuery({ getDriver, getSecret, isAiQueriesAllowed, reda
   return async function runReadOnlyQuery(engineId, sql, opts = {}) {
     try {
       if (!SUPPORTED_ENGINES.has(engineId)) {
-        if (engineId === "mongo") {
-          return { text: "MongoDB is not supported for AI queries in this version.", isError: true };
-        }
         return { text: `Unknown or unsupported database engine "${String(engineId)}".`, isError: true };
       }
       if (typeof sql !== "string" || !sql.trim()) {
@@ -76,6 +83,7 @@ function createRunReadOnlyQuery({ getDriver, getSecret, isAiQueriesAllowed, reda
         rowCount: result.rowCount ?? (result.rows ? result.rows.length : 0),
         truncated: !!result.truncated,
         maxRows,
+        readOnlyNote: engineId === "mongo" ? MONGO_READ_ONLY_NOTE : undefined,
       });
       return { text, isError: false };
     } catch (err) {

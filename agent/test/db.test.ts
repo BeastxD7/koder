@@ -20,13 +20,69 @@ import {
   validateDbQueryInput,
 } from "../src/db.js";
 
-test("validateDbQueryInput: accepts each supported engine id", () => {
+test("validateDbQueryInput: accepts each supported SQL engine id", () => {
   for (const engine of ["postgres", "mysql", "sqlite"] as const) {
     const out = validateDbQueryInput({ connectionRef: engine, query: "SELECT 1" });
     assert.equal(out.connectionRef, engine);
     assert.equal(out.query, "SELECT 1");
     assert.equal(out.maxRows, DB_DEFAULT_MAX_ROWS);
   }
+});
+
+test("validateDbQueryInput: accepts mongo with a valid JSON query spec", () => {
+  const q = JSON.stringify({ collection: "users", filter: { active: true }, limit: 20 });
+  const out = validateDbQueryInput({ connectionRef: "mongo", query: q });
+  assert.equal(out.connectionRef, "mongo");
+  assert.equal(out.query, q, "the JSON string must pass through unmodified");
+  assert.equal(out.maxRows, DB_DEFAULT_MAX_ROWS);
+});
+
+test("validateDbQueryInput: accepts a minimal mongo spec (collection only, no filter/limit)", () => {
+  const out = validateDbQueryInput({ connectionRef: "mongo", query: '{"collection":"orders"}' });
+  assert.equal(out.connectionRef, "mongo");
+});
+
+test("validateDbQueryInput: rejects a non-JSON mongo query string with a clear error", () => {
+  assert.throws(
+    () => validateDbQueryInput({ connectionRef: "mongo", query: "db.users.find()" }),
+    /mongo.*JSON-stringified query spec.*not valid JSON/s,
+  );
+});
+
+test("validateDbQueryInput: rejects a mongo query that's valid JSON but not an object", () => {
+  assert.throws(
+    () => validateDbQueryInput({ connectionRef: "mongo", query: "[1,2,3]" }),
+    /mongo.*must be an object.*array/s,
+  );
+  assert.throws(
+    () => validateDbQueryInput({ connectionRef: "mongo", query: '"users"' }),
+    /mongo.*must be an object/s,
+  );
+});
+
+test("validateDbQueryInput: rejects a mongo query object missing a \"collection\" field", () => {
+  assert.throws(
+    () => validateDbQueryInput({ connectionRef: "mongo", query: '{"filter":{}}' }),
+    /mongo.*non-empty "collection" field/s,
+  );
+  assert.throws(
+    () => validateDbQueryInput({ connectionRef: "mongo", query: '{"collection":""}' }),
+    /mongo.*non-empty "collection" field/s,
+  );
+  assert.throws(
+    () => validateDbQueryInput({ connectionRef: "mongo", query: '{"collection":42}' }),
+    /mongo.*non-empty "collection" field/s,
+  );
+});
+
+test("validateDbQueryInput: mongo query-spec shape check does NOT itself enforce the filter allowlist", () => {
+  // The update-operator/filter guard lives in lakshx-db's query-guard.js
+  // (parseMongoQuerySpec), not here — this file only checks the shallow
+  // {collection, ...} shape. A spec with a mutating operator in its filter
+  // still passes THIS layer; it is rejected one layer deeper.
+  const q = JSON.stringify({ collection: "users", filter: { $set: { admin: true } } });
+  const out = validateDbQueryInput({ connectionRef: "mongo", query: q });
+  assert.equal(out.query, q);
 });
 
 test("validateDbQueryInput: preserves the exact query string (no LIMIT rewriting here)", () => {
@@ -36,10 +92,10 @@ test("validateDbQueryInput: preserves the exact query string (no LIMIT rewriting
   assert.equal(out.maxRows, 10);
 });
 
-test("validateDbQueryInput: rejects an unsupported engine (mongo) with an actionable message", () => {
+test("validateDbQueryInput: rejects an unsupported engine (e.g. oracle) with an actionable message", () => {
   assert.throws(
-    () => validateDbQueryInput({ connectionRef: "mongo", query: "SELECT 1" }),
-    /connectionRef .* not a supported database.*postgres, mysql, sqlite/s,
+    () => validateDbQueryInput({ connectionRef: "oracle" as any, query: "SELECT 1" }),
+    /connectionRef .* not a supported database.*postgres, mysql, sqlite, mongo/s,
   );
 });
 

@@ -139,6 +139,138 @@ function wrapWithRowLimit(sql, limit) {
   return `SELECT * FROM (\n${inner}\n) AS _q LIMIT ${n}`;
 }
 
+// ---- Mongo query-spec guard (design §10, SECONDARY control) ---------------
+//
+// Mongo's query isn't SQL text — it's a {collection, filter, projection?,
+// sort?, limit?} SPEC (see agent/src/tools.ts's db_query input_schema and
+// agent/src/db.ts's shallow shape check, which runs first, agent-side).
+// The PRIMARY read-only control for Mongo is STRUCTURAL, not transactional
+// (Mongo has no engine-enforced read-only transaction the way Postgres/MySQL
+// do — this is exactly the "weaker read-only story" design §10 originally
+// deferred on): lib/drivers/mongo.js's runReadOnlyQuery only ever calls
+// `.find()` — never `.aggregate()` (which could carry $out/$merge stages),
+// never updateOne/deleteOne/insertOne/bulkWrite/anything else. What THIS
+// guard adds is a SECONDARY, defense-in-depth check, exactly mirroring the
+// SQL allowlist's role above: reject a filter containing any update-operator
+// key ($set/$inc/$unset/…) or an aggregation side-effect stage name
+// ($out/$merge), plus $where (arbitrary server-side JS execution — not a
+// "write", but not a bounded read either). None of these keys do anything
+// meaningful inside a find() filter — Mongo would error on most of them
+// anyway — but rejecting them here with a friendly message, before a
+// connection is even opened, is strictly better than letting a
+// confused/malicious spec reach the server and surface a raw driver error.
+
+const MONGO_MUTATING_KEYS = new Set([
+  "$currentDate",
+  "$inc",
+  "$min",
+  "$max",
+  "$mul",
+  "$rename",
+  "$set",
+  "$setOnInsert",
+  "$unset",
+  "$addToSet",
+  "$pop",
+  "$pull",
+  "$pullAll",
+  "$push",
+  "$bit",
+  "$out",
+  "$merge",
+  "$where",
+]);
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Recursively scan a filter/sub-document (including inside $and/$or/$nor
+ * arrays) for forbidden operator keys. Throws QueryRejectedError on the
+ * first match found. */
+function assertNoMutatingMongoOperators(value) {
+  if (Array.isArray(value)) {
+    for (const v of value) assertNoMutatingMongoOperators(v);
+    return;
+  }
+  if (isPlainObject(value)) {
+    for (const key of Object.keys(value)) {
+      if (MONGO_MUTATING_KEYS.has(key)) {
+        throw new QueryRejectedError(
+          `Mongo query rejected: "${key}" is a write/update operator (or executes arbitrary code) and is not allowed in a read-only find filter.`,
+        );
+      }
+      assertNoMutatingMongoOperators(value[key]);
+    }
+  }
+}
+
+/**
+ * Parse + validate a Mongo query spec for db_query (design §10). Accepts
+ * either the JSON string as it travels across the tool-call/ACP boundary, or
+ * an already-parsed plain object (direct unit tests / same-process callers).
+ * Returns a normalized `{ collection, filter, projection, sort, limit }`
+ * (`filter` always an object; `projection`/`sort`/`limit` are `undefined`
+ * when absent from the input). Throws QueryRejectedError with a friendly,
+ * actionable message on anything invalid — never crashes on a malformed
+ * model-supplied spec.
+ */
+function parseMongoQuerySpec(raw) {
+  let spec = raw;
+  if (typeof raw === "string") {
+    if (!raw.trim()) throw new QueryRejectedError("Empty Mongo query.");
+    try {
+      spec = JSON.parse(raw);
+    } catch {
+      throw new QueryRejectedError(
+        'Mongo query must be JSON like {"collection":"users","filter":{"active":true},"limit":20} — the given string is not valid JSON.',
+      );
+    }
+  }
+  if (!isPlainObject(spec)) {
+    throw new QueryRejectedError('Mongo query must be a JSON object with at least a "collection" field.');
+  }
+  if (typeof spec.collection !== "string" || !spec.collection.trim()) {
+    throw new QueryRejectedError('Mongo query is missing a valid "collection" field (a non-empty string).');
+  }
+  if (spec.collection.startsWith("system.")) {
+    throw new QueryRejectedError(`Refusing to query system collection "${spec.collection}".`);
+  }
+
+  const filter = spec.filter === undefined ? {} : spec.filter;
+  if (!isPlainObject(filter)) {
+    throw new QueryRejectedError('Mongo query\'s "filter" must be a JSON object.');
+  }
+  assertNoMutatingMongoOperators(filter);
+
+  let projection;
+  if (spec.projection !== undefined) {
+    if (!isPlainObject(spec.projection)) {
+      throw new QueryRejectedError('Mongo query\'s "projection" must be a JSON object.');
+    }
+    projection = spec.projection;
+  }
+
+  let sort;
+  if (spec.sort !== undefined) {
+    if (!isPlainObject(spec.sort)) {
+      throw new QueryRejectedError('Mongo query\'s "sort" must be a JSON object, e.g. {"createdAt":-1}.');
+    }
+    sort = spec.sort;
+  }
+
+  let limit;
+  if (spec.limit !== undefined) {
+    const n = Number(spec.limit);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new QueryRejectedError('Mongo query\'s "limit" must be a positive number.');
+    }
+    limit = Math.floor(n);
+  }
+
+  return { collection: spec.collection.trim(), filter, projection, sort, limit };
+}
+
 // ---- result formatting (design §5) -----------------------------------------
 
 /** Stringify a single DB cell value with a length cap. Returns
@@ -175,6 +307,13 @@ function formatCell(value, maxLen = MAX_CELL_LEN) {
  * explicit truncation lines. Three truncation conditions are surfaced
  * separately (row cap, per-cell clip, total-size clip) so the model is never
  * told "N of N rows" while a value was silently chopped.
+ *
+ * `readOnlyNote` overrides the parenthetical read-only-guarantee phrase in
+ * the header — defaults to the SQL engines' phrasing ("read-only
+ * transaction, rolled back"), which is inaccurate for Mongo (no engine-level
+ * transaction backs its read-only guarantee); query-api.js passes a
+ * Mongo-specific note instead. Every existing caller that doesn't pass this
+ * gets byte-identical output to before.
  */
 function formatResultText({
   engineLabel,
@@ -186,12 +325,13 @@ function formatResultText({
   maxRows = DEFAULT_MAX_ROWS,
   maxCellLen = MAX_CELL_LEN,
   maxTextLen = MAX_TEXT_LEN,
+  readOnlyNote = "(read-only transaction, rolled back)",
 }) {
   const n = typeof rowCount === "number" ? rowCount : rows.length;
   const header =
     `Connection: ${engineLabel || "database"}` +
     (databaseName ? ` — ${databaseName}` : "") +
-    "  (read-only transaction, rolled back)";
+    `  ${readOnlyNote}`;
   const colLine = `Columns: ${columns.length ? columns.join(", ") : "(none)"}`;
   const rowsHeader = truncated
     ? `Rows (showing first ${n}; more rows exist and were not fetched — capped at ${maxRows}):`
@@ -232,4 +372,7 @@ module.exports = {
   formatCell,
   formatResultText,
   QueryRejectedError,
+  parseMongoQuerySpec,
+  assertNoMutatingMongoOperators,
+  MONGO_MUTATING_KEYS,
 };

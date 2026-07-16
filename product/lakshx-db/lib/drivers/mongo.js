@@ -21,6 +21,8 @@ const { inferCollectionSchema } = require("../schema.js");
 const { detectRelationships } = require("../relationships.js");
 const { buildErDiagram } = require("../mermaid.js");
 const { redactText } = require("../redact.js");
+const { flattenMongoDoc } = require("../data-browse.js");
+const { parseMongoQuerySpec, clampMaxRows, DEFAULT_TIMEOUT_MS } = require("../query-guard.js");
 
 const SAMPLE_SIZE = 100; // bounded sample per collection — see lib/schema.js header
 const COLLECTION_LIMIT = 40; // guardrail against a huge database fanning out into hundreds of $sample round-trips
@@ -146,6 +148,127 @@ async function fetchCollectionPage(client, dbName, collectionName, { pageSize, p
   return { docs };
 }
 
+// ---- read-only ad-hoc query (db_query feature; design §3/§4/§10) ----------
+//
+// Completing what design §10 deferred ("MongoDB — weaker read-only story
+// than SQL — omit in v1"). Mongo has no engine-enforced read-only
+// transaction the way Postgres (`BEGIN ... READ ONLY`) / MySQL (`START
+// TRANSACTION READ ONLY`) do, so the read-only guarantee here is STRUCTURAL
+// rather than transactional, built from four layers:
+//   Layer A (shape):     parseMongoQuerySpec (query-guard.js) requires the
+//                         query to be a {collection, filter, ...} SPEC, not
+//                         an arbitrary command — there is no way to smuggle
+//                         `db.collection.drop()` through this shape at all.
+//   Layer B (operators):  the filter is scanned (recursively, through
+//                         $and/$or/$nor) for update-operator keys ($set,
+//                         $inc, $unset, ...) and aggregation side-effect
+//                         stage names ($out/$merge), plus $where (arbitrary
+//                         JS execution) — rejected before a connection opens.
+//   Layer C (verb):       ONLY `.find()` is ever called below — never
+//                         `.aggregate()` (which could carry $out/$merge
+//                         stages), never updateOne/deleteOne/insertOne/
+//                         bulkWrite/anything else. No code path here can
+//                         reach a mutating driver method.
+//   Layer D (bounds):     row cap (maxRows, same [1,1000] band as SQL,
+//                         layered under any inner "limit" the query spec
+//                         itself requested) and a cursor-level maxTimeMS
+//                         timeout — mirroring the SQL drivers' row-cap/
+//                         timeout layers.
+// A FRESH client is opened per call and always closed in `finally`, same
+// discipline as the SQL drivers' runReadOnlyQuery. `runReadOnlyWithClient`
+// is split out (and exported) so it can be unit-tested with a fake client
+// that records the exact find() call, without a live MongoDB — same pattern
+// postgres.js/mysql.js use for their read-only paths.
+
+/** Flatten a page of documents into the {columns, rows} shape
+ * query-guard.js's formatResultText/formatCell expects: columns are the
+ * UNION of top-level keys across the page (in first-seen order, `_id`
+ * pulled to the front when present — same discovery rule as
+ * data-browse.js's shapeMongoPage), and rows are arrays of RAW values in
+ * that column order (a document missing a column gets `null`). Reuses
+ * data-browse.js's `flattenMongoDoc` for the per-document flattening rather
+ * than reinventing it; deliberately does NOT reuse `shapeMongoPage`'s
+ * webview cell-tagging ({kind,text} pairs) — formatResultText/formatCell
+ * already knows how to stringify Dates/Buffers/objects for the model. */
+function shapeDocsForResult(docs) {
+  const flat = docs.map((d) => flattenMongoDoc(d));
+  const columns = [];
+  const seen = new Set();
+  for (const m of flat) {
+    for (const k of m.keys()) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        columns.push(k);
+      }
+    }
+  }
+  if (seen.has("_id")) {
+    const rest = columns.filter((c) => c !== "_id");
+    columns.length = 0;
+    columns.push("_id", ...rest);
+  }
+  const rows = flat.map((m) => columns.map((col) => (m.has(col) ? m.get(col) : null)));
+  return { columns, rows };
+}
+
+/**
+ * Runs an already-validated Mongo query spec against a live, connected
+ * client. `spec` is the NORMALIZED object `parseMongoQuerySpec` returns
+ * (`{collection, filter, projection, sort, limit}`) — parsing/validation
+ * happens once, in `runReadOnlyQuery` below, before any connection is
+ * opened, exactly like postgres.js computing `kind` via `classifyStatement`
+ * before calling `runReadOnlyWithClient`.
+ *
+ * No interactive picker is available here (this is an AI tool call, not a
+ * human quick-pick session): if the connection is genuinely ambiguous
+ * (several databases visible, none named by the URI), `resolveDatabase`
+ * throws its own clean "No database selected." error rather than guessing.
+ */
+async function runReadOnlyWithClient(client, spec, { maxRows, timeoutMs } = {}) {
+  const cap = clampMaxRows(maxRows);
+  const effectiveLimit = spec.limit ? Math.min(spec.limit, cap) : cap;
+
+  const dbName = await resolveDatabase(client, { pick: async () => null, log: () => {} });
+  const db = client.db(dbName);
+
+  const findOpts = { limit: effectiveLimit + 1, maxTimeMS: timeoutMs ?? DEFAULT_TIMEOUT_MS };
+  if (spec.projection) findOpts.projection = spec.projection;
+  if (spec.sort) findOpts.sort = spec.sort;
+
+  const docs = await db.collection(spec.collection).find(spec.filter, findOpts).toArray();
+
+  let truncated = false;
+  let pageDocs = docs;
+  if (pageDocs.length > effectiveLimit) {
+    truncated = true;
+    pageDocs = pageDocs.slice(0, effectiveLimit);
+  }
+
+  const { columns, rows } = shapeDocsForResult(pageDocs);
+  return { columns, rows, rowCount: rows.length, truncated, databaseName: dbName };
+}
+
+/** Opens a fresh connection and runs a read-only Mongo query. `conn` is the
+ * connection URI (the stored secret), NOT a live handle. `querySpecRaw` is
+ * either the JSON-stringified spec (as it travels across the tool-call/ACP
+ * boundary) or an already-parsed object (direct unit-test / same-process
+ * callers). Throws QueryRejectedError (mapped to a clean tool error by
+ * query-api.js) before any connection is opened when the spec is malformed
+ * or contains a forbidden operator. */
+async function runReadOnlyQuery(conn, querySpecRaw, opts = {}) {
+  const spec = parseMongoQuerySpec(querySpecRaw); // throws QueryRejectedError before opening anything
+  const maxRows = clampMaxRows(opts.maxRows);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const client = new MongoClient(conn, { serverSelectionTimeoutMS: 8000 });
+  await client.connect();
+  try {
+    return await runReadOnlyWithClient(client, spec, { maxRows, timeoutMs });
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
 module.exports = {
   id: "mongo",
   label: "MongoDB",
@@ -164,4 +287,8 @@ module.exports = {
   resolveDatabase,
   introspect,
   fetchCollectionPage,
+  runReadOnlyQuery,
+  // exported for unit tests
+  runReadOnlyWithClient,
+  shapeDocsForResult,
 };

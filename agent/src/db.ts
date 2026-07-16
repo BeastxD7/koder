@@ -22,8 +22,16 @@
  * bypass them. See the design doc §"Consent gate" / §"Safety".
  */
 
-/** The engine ids `runReadOnlyQuery` accepts. connectionRef == engine id in v1. */
-export const DB_ENGINES = ["postgres", "mysql", "sqlite"] as const;
+/**
+ * The engine ids `runReadOnlyQuery` accepts. connectionRef == engine id in v1.
+ * "mongo" completes what design doc §10 originally deferred ("weaker
+ * read-only story than SQL — omit in v1"): Mongo has no engine-enforced
+ * read-only transaction, so its read-only guarantee is structural instead
+ * (find-only, no aggregate/$out/$merge, no update operators in the filter —
+ * enforced in lakshx-db's mongo driver + query-guard.js's Mongo guard, NOT
+ * here). This file only validates the INPUT SHAPE (see below).
+ */
+export const DB_ENGINES = ["postgres", "mysql", "sqlite", "mongo"] as const;
 export type DbEngine = (typeof DB_ENGINES)[number];
 
 /** Row-cap band mirrored from the design doc (default 50, hard max 1000). */
@@ -57,10 +65,15 @@ export interface ValidatedDbQuery {
  * clean tool-error (the loop's db_query branch catches it — see loop.ts).
  * Exported for direct unit testing without any ACP/extension round-trip.
  *
- *  - `connectionRef` must be one of DB_ENGINES (postgres/mysql/sqlite). Mongo
- *    and anything else are rejected here with an actionable message rather
- *    than deferred to lakshx-db (v1 omits Mongo — weaker read-only story).
- *  - `query` must be a non-empty (after trim) string.
+ *  - `connectionRef` must be one of DB_ENGINES (postgres/mysql/sqlite/mongo);
+ *    anything else is rejected here with an actionable message rather than
+ *    deferred to lakshx-db.
+ *  - `query` must be a non-empty (after trim) string. For the three SQL
+ *    engines this is free-form SQL text (unchanged from before). For
+ *    `"mongo"` it is instead a JSON-STRINGIFIED query spec —
+ *    `{"collection":"users","filter":{"active":true},"limit":20}` — because
+ *    Mongo has no SQL text to validate; see `validateMongoQuerySpecShape`
+ *    below for the (deliberately shallow) shape check this file performs.
  *  - `maxRows` is optional: absent/NaN → default 50; otherwise floored and
  *    clamped into [1, 1000]. Never throws on a bad maxRows — clamps instead,
  *    so a slightly-off number degrades gracefully rather than failing the call.
@@ -76,7 +89,15 @@ export function validateDbQueryInput(input: DbQueryInput): ValidatedDbQuery {
 
   const rawQuery = input?.query;
   if (typeof rawQuery !== "string" || rawQuery.trim() === "") {
-    throw new Error(`db_query: "query" must be a non-empty SQL string.`);
+    throw new Error(
+      ref === "mongo"
+        ? `db_query: "query" must be a non-empty JSON query spec string (e.g. {"collection":"users","filter":{}}).`
+        : `db_query: "query" must be a non-empty SQL string.`,
+    );
+  }
+
+  if (ref === "mongo") {
+    validateMongoQuerySpecShape(rawQuery);
   }
 
   return {
@@ -84,6 +105,47 @@ export function validateDbQueryInput(input: DbQueryInput): ValidatedDbQuery {
     query: rawQuery,
     maxRows: clampMaxRows(input?.maxRows),
   };
+}
+
+/**
+ * Mongo's `query` isn't SQL text — it's a JSON-stringified query spec
+ * `{collection, filter?, projection?, sort?, limit?}`. This is intentionally
+ * a SHALLOW shape check only: the string must `JSON.parse` into a plain
+ * object with a non-empty string `collection` field. That's it. The DEEP
+ * read-only enforcement — rejecting update-operator keys inside `filter`
+ * ($set/$inc/$unset/…), running find-only (never aggregate/$out/$merge),
+ * capping rows/time — lives in lakshx-db's mongo driver + query-guard.js
+ * (see product/lakshx-db/lib/query-guard.js's `parseMongoQuerySpec`), same
+ * layering as the SQL statement allowlist being a SECONDARY control there.
+ * This just turns the obviously-wrong shapes (not JSON, not an object,
+ * missing `collection`) into a fast, clean, pre-round-trip error — never a
+ * crash — exactly like this file's existing SQL/engine checks.
+ */
+function validateMongoQuerySpecShape(rawQuery: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawQuery);
+  } catch {
+    throw new Error(
+      `db_query: for connectionRef "mongo", "query" must be a JSON-stringified query spec like ` +
+        `{"collection":"users","filter":{"active":true},"limit":20} — the given string is not valid JSON.`,
+    );
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `db_query: for connectionRef "mongo", the JSON "query" must be an object (with a "collection" field), ` +
+        `not ${Array.isArray(parsed) ? "an array" : parsed === null ? "null" : typeof parsed}.`,
+    );
+  }
+
+  const collection = (parsed as Record<string, unknown>).collection;
+  if (typeof collection !== "string" || collection.trim() === "") {
+    throw new Error(
+      `db_query: for connectionRef "mongo", the JSON "query" must include a non-empty "collection" field, ` +
+        `e.g. {"collection":"users","filter":{}}.`,
+    );
+  }
 }
 
 /**

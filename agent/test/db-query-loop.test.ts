@@ -136,10 +136,12 @@ test("db_query: an invalid engine id is a clean tool-error, onDbQuery never call
       return { text: "should not get here", isError: false };
     };
 
-    fake.enqueue(toolTurn("call_db_bad", "db_query", { connectionRef: "mongo", query: "db.users.find()" }));
-    fake.enqueue(textTurn("Understood, mongo isn't supported."));
+    // "oracle" is a genuinely unsupported engine id (unlike "mongo", which
+    // is now valid — see the mongo-specific shape-rejection test below).
+    fake.enqueue(toolTurn("call_db_bad", "db_query", { connectionRef: "oracle", query: "SELECT 1" }));
+    fake.enqueue(textTurn("Understood, oracle isn't supported."));
 
-    const stop = await runPrompt(session, "query mongo", cb, "pr_db_bad");
+    const stop = await runPrompt(session, "query oracle", cb, "pr_db_bad");
     assert.equal(stop, "end_turn", "validation failure must not crash the loop");
     assert.equal(called, false, "onDbQuery must not be called for input that fails validation");
 
@@ -149,6 +151,48 @@ test("db_query: an invalid engine id is a clean tool-error, onDbQuery never call
     assert.ok(toolMsg);
     assert.match(toolMsg!.content as string, /not a supported database/);
     const end = cb.ends.find((e) => /not a supported database/.test(e.output ?? ""));
+    assert.ok(end, "onToolEnd must fire for a validation failure");
+    assert.equal(end.isError, true);
+  } finally {
+    process.env.HOME = realHome;
+    await fake.stop();
+    await rm(home, { recursive: true, force: true });
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("db_query: mongo with a non-JSON query is a clean tool-error, onDbQuery never called", { timeout: 30_000 }, async () => {
+  const fake = new FakeOpenAI();
+  await fake.start();
+  const home = await setupHome(fake);
+  const workspace = await mkdtemp(join(tmpdir(), "lakshx-dbq-mongobad-ws-"));
+  const realHome = process.env.HOME;
+  process.env.HOME = home;
+  _resetGuardCacheForTests();
+
+  try {
+    const session: AgentSession = { cwd: workspace, model: "fake/test-model", mode: "review", history: [] };
+    const cb = baseCallbacks();
+    let called = false;
+    cb.onDbQuery = async () => {
+      called = true;
+      return { text: "should not get here", isError: false };
+    };
+
+    // Mongo IS a supported engine now, but its query must be a JSON spec,
+    // not free-form text — this must fail agent-side validation and never
+    // reach onDbQuery, same as the invalid-engine case above.
+    fake.enqueue(toolTurn("call_db_mongobad", "db_query", { connectionRef: "mongo", query: "db.users.find()" }));
+    fake.enqueue(textTurn("That mongo query wasn't valid JSON."));
+
+    const stop = await runPrompt(session, "query mongo", cb, "pr_db_mongobad");
+    assert.equal(stop, "end_turn", "validation failure must not crash the loop");
+    assert.equal(called, false, "onDbQuery must not be called for input that fails validation");
+
+    const toolMsg = findToolMessage(fake, "call_db_mongobad");
+    assert.ok(toolMsg);
+    assert.match(toolMsg!.content as string, /not valid JSON/);
+    const end = cb.ends.find((e) => /not valid JSON/.test(e.output ?? ""));
     assert.ok(end, "onToolEnd must fire for a validation failure");
     assert.equal(end.isError, true);
   } finally {
