@@ -518,6 +518,58 @@ html, body {
 }
 .cpbar-undo-all:hover { background: rgba(255, 255, 255, 0.14); }
 
+/* ---------- conversation rewind (Accept / "Rewind to here" under user bubbles) ---------- */
+/* Right-aligned under the user bubble (which is align-self: flex-end), pulled
+   up against #messages' 12px flex gap the same way .feedback is. Hover-revealed:
+   invisible until the bubble or the row itself is hovered/focused, so the
+   transcript stays quiet — but an OPEN confirm box always keeps it visible. */
+.rewind {
+  align-self: flex-end;
+  max-width: 92%;
+  margin: -8px 2px 0;
+  opacity: 0;
+  transition: opacity 0.12s var(--ease);
+}
+.msg.user:hover + .rewind,
+.rewind:hover,
+.rewind:focus-within,
+.rewind:has(.rw-confirm:not([hidden])) { opacity: 1; }
+.rewind.accepted { display: none; }
+.rewind-actions { display: flex; justify-content: flex-end; gap: 2px; }
+.rewind .rw-btn {
+  font-size: 11px;
+  padding: 2px 7px;
+  color: var(--muted);
+  border-radius: 6px;
+}
+.rewind .rw-btn:hover { color: var(--fg); background: rgba(255, 255, 255, 0.08); }
+.rewind .rw-confirm {
+  margin-top: 6px;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  text-align: left;
+}
+.rewind .cp-confirm-msg { color: var(--fg); line-height: 1.5; margin-bottom: 8px; }
+.rewind .rw-files {
+  margin: 0 0 8px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.rewind .rw-file {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 1px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rewind .cp-confirm-actions { display: flex; gap: 6px; }
+.rewind .cp-confirm-actions button { flex: 1; }
+
 /* ---------- feedback (thumbs / retry / inline review form) ---------- */
 .feedback { margin: -6px 2px 0; animation: rise 0.15s var(--ease); }
 .feedback-actions { display: flex; align-items: center; gap: 2px; }

@@ -13,12 +13,14 @@ import { availableProviders, loadConfig } from "./config.js";
 import { runPrompt, toolTitle, type AgentMode, type AgentSession } from "./loop.js";
 import { toolResultText } from "./providers/types.js";
 import { probeProvider } from "./providers/validate.js";
-import { loadSessionFile, pruneSessions, saveSessionSoon, type PromptCheckpoint } from "./store.js";
+import { loadSessionFile, pruneSessions, saveSessionSoon, type PromptCheckpoint, type PromptMarker } from "./store.js";
 import { capToolImageBase64 } from "./tool-image-cap.js";
 
 interface Session extends AgentSession {
   pending?: AbortController;
   checkpoints: PromptCheckpoint[];
+  /** promptId → history-index markers for conversation rewind — see store.ts's PromptMarker. */
+  prompts: PromptMarker[];
 }
 
 /**
@@ -26,6 +28,14 @@ interface Session extends AgentSession {
  * `promptId` touched? Non-empty result = undoing `promptId` would silently
  * discard those later changes too — surfaced so the client can warn before
  * proceeding, same shape as the manual-edit conflict (§5).
+ *
+ * SINGLE-prompt undo only (`lakshx/undo_prompt`). The coordinated multi-prompt
+ * rewind (`lakshx/rewind_to_prompt` below) deliberately does NOT consult this:
+ * there, the later prompts' changes are being reverted together as part of the
+ * same operation — they are the point, not a conflict — and flagging them
+ * would misreport every multi-prompt rewind as conflicted. Genuinely external
+ * disk edits are still caught for rewind by `undoPaths`' per-path
+ * `hasConflict` check (disk matching neither the target sha nor shadow HEAD).
  */
 function laterOverlap(checkpoints: PromptCheckpoint[], promptId: string): Record<string, string[]> {
   const target = checkpoints.find((c) => c.promptId === promptId);
@@ -79,7 +89,7 @@ acp
   .onRequest("authenticate", async () => ({}))
   .onRequest("session/new", async (ctx) => {
     const sessionId = randomUUID();
-    sessions.set(sessionId, { cwd: ctx.params.cwd, history: [], mode: "review", checkpoints: [] });
+    sessions.set(sessionId, { cwd: ctx.params.cwd, history: [], mode: "review", checkpoints: [], prompts: [] });
     return {
       sessionId,
       modes: { currentModeId: "review", availableModes: MODES },
@@ -96,6 +106,7 @@ acp
       model: saved.model,
       history: saved.history,
       checkpoints: saved.checkpoints ?? [],
+      prompts: saved.prompts ?? [],
     });
 
     // ACP contract: replay the conversation via session/update before returning.
@@ -183,6 +194,15 @@ acp
     // client-correlatable for that turn.
     const promptId: string = (ctx.params as any)?._meta?.promptId ?? randomUUID();
 
+    // Rewind bookkeeping: record where THIS prompt's user message is about to
+    // land in history (runPrompt pushes it at the current end, so the index is
+    // exactly `history.length` right now). A marker at/past that index can
+    // only be stale — left behind by a prompt whose dangling user message
+    // loop.ts popped after a provider error — so it's superseded here rather
+    // than ever pointing two prompts at the same slot.
+    session.prompts = session.prompts.filter((p) => p.index < session.history.length);
+    session.prompts.push({ promptId, index: session.history.length, createdAt: Date.now() });
+
     const text = prompt
       .filter((b: any) => b.type === "text")
       .map((b: any) => b.text)
@@ -199,6 +219,7 @@ acp
         model: session.model,
         history: session.history,
         checkpoints: session.checkpoints,
+        prompts: session.prompts,
       });
 
     // The one PromptCheckpoint record this turn builds up — created lazily
@@ -424,6 +445,71 @@ acp
         if (Object.keys(overlap).length > 0) return { ok: false, overlap };
       }
       return undoPaths(session.cwd, files, target.baselineSha, force);
+    },
+  )
+  // Conversation rewind ("come back to this message"): revert EVERY file
+  // change made by the target prompt AND every later prompt, then truncate
+  // session.history to just BEFORE the target prompt's user message, so the
+  // next prompt genuinely continues from that earlier context. User-initiated
+  // only, never a tool the model can call. Unlike `lakshx/undo_prompt`, later
+  // prompts are being reverted together here, so `laterOverlap` is deliberately
+  // NOT consulted (see its doc comment) — only genuinely external disk edits
+  // (caught per-path by `undoPaths`' hasConflict) require `force`.
+  .onRequest(
+    "lakshx/rewind_to_prompt",
+    (v: unknown) => v as { sessionId: string; promptId: string; force?: boolean },
+    async (ctx) => {
+      const session = sessions.get(ctx.params.sessionId);
+      if (!session) throw new Error(`unknown session ${ctx.params.sessionId}`);
+      // A running turn is still mutating history/checkpoints/files — rewinding
+      // under it would race all three. The client disables the control during
+      // a turn too; this is the authoritative backstop.
+      if (session.pending) throw new Error("a turn is still running — stop it before rewinding");
+      const { promptId, force } = ctx.params;
+      const marker = session.prompts.find((p) => p.promptId === promptId);
+      if (!marker) throw new Error(`no rewind point recorded for prompt ${promptId}`);
+      if (session.history[marker.index]?.role !== "user") {
+        throw new Error(`rewind point for prompt ${promptId} is stale — cannot rewind`);
+      }
+
+      // The target prompt and every LATER one, by history position (markers),
+      // with a createdAt fallback for checkpoints whose promptId was never
+      // marker-tracked (e.g. written by an older runtime version).
+      const affectedIds = new Set(session.prompts.filter((p) => p.index >= marker.index).map((p) => p.promptId));
+      const tracked = new Set(session.prompts.map((p) => p.promptId));
+      const affected = session.checkpoints.filter(
+        (c) => affectedIds.has(c.promptId) || (!tracked.has(c.promptId) && c.createdAt >= marker.createdAt),
+      );
+      // Revert set: the union of every file those prompts touched; target sha:
+      // the EARLIEST affected checkpoint's baseline (checkpoints are appended
+      // chronologically), i.e. the workspace state captured just before the
+      // first mutation at/after the rewind point. A rewind across prompts that
+      // never mutated anything has nothing to revert and just truncates.
+      const files = [...new Set(affected.flatMap((c) => c.tools.flatMap((t) => t.files)))];
+      const baselineSha = affected.find((c) => c.baselineSha)?.baselineSha;
+      let revertedFiles: string[] = [];
+      if (files.length) {
+        if (!baselineSha) throw new Error("no baseline recorded for the rewind range — cannot revert files");
+        const res = await undoPaths(session.cwd, files, baselineSha, force);
+        if (!res.ok) return { ok: false, conflicts: res.conflict.paths };
+        revertedFiles = res.reverted;
+      }
+
+      const truncatedMessages = session.history.length - marker.index;
+      session.history.length = marker.index; // drops the user message itself + everything after
+      const affectedSet = new Set(affected);
+      session.checkpoints = session.checkpoints.filter((c) => !affectedSet.has(c));
+      session.prompts = session.prompts.filter((p) => p.index < marker.index);
+      saveSessionSoon({
+        id: ctx.params.sessionId,
+        cwd: session.cwd,
+        mode: session.mode,
+        model: session.model,
+        history: session.history,
+        checkpoints: session.checkpoints,
+        prompts: session.prompts,
+      });
+      return { ok: true, revertedFiles, truncatedMessages };
     },
   )
   // "Open diff" (client-driven, not a tool the model can call): the pre-turn

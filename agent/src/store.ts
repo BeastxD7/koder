@@ -25,6 +25,21 @@ export interface PromptCheckpoint {
   createdAt: number;
 }
 
+/**
+ * Where one prompt's user message landed in `history` — the correlation the
+ * conversation-rewind feature needs to truncate history "to just before this
+ * prompt". Recorded by server.ts at `session/prompt` time (BEFORE runPrompt
+ * pushes the user message, so `index === history.length` at that moment) and
+ * kept in sync with truncation on rewind. `createdAt` is the fallback used to
+ * classify checkpoints whose promptId predates marker tracking.
+ */
+export interface PromptMarker {
+  promptId: string;
+  /** Index in `history` of this prompt's user message. */
+  index: number;
+  createdAt: number;
+}
+
 export interface StoredSession {
   v: 1 | 2;
   id: string;
@@ -36,6 +51,14 @@ export interface StoredSession {
   history: ChatMessage[];
   /** Absent on v1 files — always treated as [] when reading. */
   checkpoints?: PromptCheckpoint[];
+  /**
+   * Absent on files written before the rewind feature — always treated as []
+   * when reading (rewind is then simply unavailable for those old prompts —
+   * graceful degradation, no schema bump needed: this is a purely additive
+   * optional field, so v2 stays v2 and files written by this code still load
+   * fine in older readers).
+   */
+  prompts?: PromptMarker[];
 }
 
 function sessionsDir(): string {
@@ -96,6 +119,7 @@ export function saveSessionSoon(session: {
   model?: string;
   history: ChatMessage[];
   checkpoints?: PromptCheckpoint[];
+  prompts?: PromptMarker[];
 }): void {
   const existing = pending.get(session.id);
   if (existing) clearTimeout(existing);
@@ -119,6 +143,7 @@ function writeSessionNow(session: {
   model?: string;
   history: ChatMessage[];
   checkpoints?: PromptCheckpoint[];
+  prompts?: PromptMarker[];
 }): void {
   const path = sessionPath(session.id);
   const createdAt = createdAtCache.get(session.id) ?? (existsSync(path) ? loadSessionFile(session.id)?.createdAt : undefined) ?? Date.now();
@@ -134,6 +159,7 @@ function writeSessionNow(session: {
     updatedAt: Date.now(),
     history: scrubHistory(session.history),
     checkpoints: session.checkpoints ?? [],
+    prompts: session.prompts ?? [],
   };
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(stored));
@@ -144,7 +170,11 @@ export function loadSessionFile(id: string): StoredSession | null {
   try {
     const raw = JSON.parse(readFileSync(sessionPath(id), "utf8"));
     if ((raw?.v !== 1 && raw?.v !== 2) || !Array.isArray(raw.history)) return null;
-    return { ...raw, checkpoints: Array.isArray(raw.checkpoints) ? raw.checkpoints : [] } as StoredSession;
+    return {
+      ...raw,
+      checkpoints: Array.isArray(raw.checkpoints) ? raw.checkpoints : [],
+      prompts: Array.isArray(raw.prompts) ? raw.prompts : [],
+    } as StoredSession;
   } catch {
     return null;
   }

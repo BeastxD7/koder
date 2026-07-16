@@ -273,7 +273,10 @@ async function searchWorkspaceFiles(q) {
 // data) — see onToolImage below for why the heavy base64 payload is
 // deliberately kept OUT of this set, same live-only treatment as
 // "toolInputDelta".
-const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
+// "rewindAccepted" persists the purely-visual Accept dismissal of a user
+// message's rewind row (conversation-rewind feature) so a reload keeps the
+// row dismissed — replayed the same event-sourced way "checkpointReverted" is.
+const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "rewindAccepted", "subagentsStart", "subagentActivity", "subagentsEnd"]);
 
 function chatsDir() {
   const dir = path.join(os.homedir(), ".lakshx", "chats");
@@ -751,6 +754,37 @@ class AgentViewProvider {
     this.refreshFileHasCheckpointContext();
     this.checkpointDecorationProvider?.refresh(paths.map(toAbsoluteUri));
     this.post({ type: "checkpointReverted", paths });
+  }
+
+  /**
+   * A `lakshx/rewind_to_prompt` request just succeeded server-side (files
+   * reverted + agent history truncated). Mirror it client-side: truncate the
+   * REPLAYABLE transcript at the matching user event (the user message itself
+   * is removed too, matching the server dropping it from history — the next
+   * prompt continues from just before it), rebuild the checkpoint-tracking
+   * state from what remains, append a system receipt, persist, and push a
+   * full replay to the webview — the simplest correct way to make every
+   * rendered surface (bubbles, tool cards, checkpoint cards, session bar)
+   * converge on the truncated state at once.
+   */
+  applyRewind(promptId, res) {
+    const idx = this.transcript.findIndex((e) => e.type === "user" && e.promptId === promptId);
+    const removedUser = idx >= 0 ? this.transcript[idx] : null;
+    if (idx >= 0) this.transcript = this.transcript.slice(0, idx);
+    // Every checkpoint event at/after the rewind point was just truncated
+    // away, so an in-order rebuild converges all three editor-side surfaces
+    // (title button, badge, context key) to exactly the surviving changes.
+    this.rebuildFileCheckpoints();
+    const label = String(removedUser?.text ?? "").slice(0, 60);
+    const n = res.truncatedMessages ?? 0;
+    const f = res.revertedFiles?.length ?? 0;
+    this.post({
+      type: "system",
+      text: `Rewound to: "${label}" — ${n} message${n === 1 ? "" : "s"} removed, ${f} file${f === 1 ? "" : "s"} reverted.`,
+    });
+    this.persistSoon();
+    this.view?.webview.postMessage({ type: "replay", events: this.transcript });
+    this.remote?.broadcast({ type: "replay", events: this.transcript }); // bypasses post() — mirror explicitly, see loadChat
   }
 
   /** Rebuild `fileCheckpoints` from a loaded/replayed transcript's "checkpoint"/"checkpointReverted" events, in order, latest-wins per path. */
@@ -1265,6 +1299,43 @@ class AgentViewProvider {
         }
         break;
       }
+      case "rewindToPrompt": {
+        // Conversation rewind (the control under each USER message bubble,
+        // plus the repointed /undo slash command): revert all file changes
+        // made since that message and truncate the conversation there. Never
+        // a tool the model can call — dispatched only from this
+        // user-initiated webview message, and refused outright while a turn
+        // is running (the server refuses too; this is the client-side half).
+        if (!this.acp || !this.sessionId) break;
+        if (this.turnInProgress) {
+          this.post({ type: "system", text: "Can't rewind while a turn is running — stop it first." });
+          break;
+        }
+        try {
+          const res = await this.acp.request("lakshx/rewind_to_prompt", {
+            sessionId: this.sessionId,
+            promptId: m.promptId,
+            force: Boolean(m.force),
+          });
+          if (!res.ok && res.conflicts) {
+            // panel.js shows the confirm dialog and re-sends this same
+            // message with force: true — same flow undoPrompt uses.
+            this.view?.webview.postMessage({ type: "rewindConflict", promptId: m.promptId, conflicts: res.conflicts });
+            break;
+          }
+          this.applyRewind(m.promptId, res);
+        } catch (err) {
+          this.post({ type: "system", text: `rewind failed: ${err.message}` });
+        }
+        break;
+      }
+      case "acceptTurn":
+        // Accept is a purely visual, NON-BLOCKING acknowledgment — it never
+        // pauses or gates a turn; it only dismisses that user message's
+        // rewind row, persisted as a REPLAYABLE event so a reload keeps it
+        // dismissed.
+        if (m.promptId) this.post({ type: "rewindAccepted", promptId: m.promptId });
+        break;
       case "openCheckpointFile":
         this.openCheckpointDiff(m.promptId, m.path);
         break;

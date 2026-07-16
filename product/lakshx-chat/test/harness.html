@@ -79,6 +79,16 @@
     ? body.split("$ARGUMENTS").join(args).trim()
     : (args ? body + "\n" + args : body);
 
+  // Mini event-sourced transcript, mirroring extension.js's REPLAYABLE
+  // handling just enough to exercise the conversation-rewind flow: user/
+  // chunk/checkpoint/system/turnEnd/rewindAccepted events are recorded so
+  // "rewindToPrompt" can truncate at the matching user event and push a full
+  // replay — exactly what extension.js's applyRewind does.
+  const REPLAYABLE = new Set(["user", "chunk", "system", "turnEnd", "checkpoint", "rewindAccepted", "modeChanged"]);
+  const transcript = [];
+  const post = (msg) => { if (REPLAYABLE.has(msg.type)) transcript.push(msg); reply(msg); };
+  let promptSeq = 0;
+
   window.acquireVsCodeApi = () => ({
     getState() {}, setState() {},
     postMessage(m) {
@@ -92,33 +102,55 @@
           reply({ type: "commands", commands: CUSTOM_COMMANDS.map(({ name, description, source }) => ({ name, description, source })) });
           break;
         case "setMode":
-          reply({ type: "modeChanged", mode: m.mode, auto: false });
+          post({ type: "modeChanged", mode: m.mode, auto: false });
           break;
         case "send": {
-          reply({ type: "user", text: m.text, promptId: "pr_harness" });
+          const promptId = "pr_harness_" + (++promptSeq);
+          post({ type: "user", text: m.text, promptId });
           reply({ type: "turnStart" });
-          setTimeout(() => { reply({ type: "chunk", text: "(harness) echo: " + m.text }); reply({ type: "turnEnd" }); }, 400);
+          setTimeout(() => {
+            post({ type: "chunk", text: "(harness) echo: " + m.text });
+            // one fake file change per turn so the rewind confirm has files to list
+            post({ type: "checkpoint", promptId, toolCallId: "tc_" + promptSeq, toolName: "write_file", sha: "cafe" + promptSeq, files: ["src/change-" + promptSeq + ".js"] });
+            post({ type: "turnEnd" });
+          }, 400);
           break;
         }
         case "runCommand": {
           const cmd = CUSTOM_COMMANDS.find((c) => c.name === m.name);
           const text = cmd ? expand(cmd.body, m.args) : "(unknown command)";
-          reply({ type: "user", text, promptId: "pr_harness_cmd" });
+          post({ type: "user", text, promptId: "pr_harness_cmd_" + (++promptSeq) });
           reply({ type: "turnStart" });
-          setTimeout(() => { reply({ type: "chunk", text: "(harness) agent turn started from /" + m.name }); reply({ type: "turnEnd" }); }, 400);
+          setTimeout(() => { post({ type: "chunk", text: "(harness) agent turn started from /" + m.name }); post({ type: "turnEnd" }); }, 400);
           break;
         }
+        case "rewindToPrompt": {
+          // Mirrors extension.js applyRewind: truncate at the matching user
+          // event (inclusive), system receipt, full replay.
+          const idx = transcript.findIndex((e) => e.type === "user" && e.promptId === m.promptId);
+          if (idx === -1) break;
+          const label = String(transcript[idx].text ?? "").slice(0, 60);
+          const removed = transcript.length - idx;
+          transcript.length = idx;
+          post({ type: "system", text: `Rewound to: "${label}" — ${removed} messages removed, 1 file reverted.` });
+          reply({ type: "replay", events: transcript.slice() });
+          break;
+        }
+        case "acceptTurn":
+          post({ type: "rewindAccepted", promptId: m.promptId });
+          break;
         case "copyDiagnostics":
           reply({ type: "diagnosticsCopied", ok: true, chars: 12345 });
           break;
         case "newChat":
+          transcript.length = 0;
           reply({ type: "clear" });
           break;
         case "searchFiles":
           reply({ type: "fileResults", seq: m.seq, files: ["media/panel.js", "extension.js", "commands.js"].filter((f) => f.includes(m.q ?? "")) });
           break;
         case "undoPrompt":
-          reply({ type: "system", text: "Reverted 1 file(s) from that turn." });
+          post({ type: "system", text: "Reverted 1 file(s) from that turn." });
           break;
       }
     },

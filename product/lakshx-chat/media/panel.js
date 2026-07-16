@@ -38,10 +38,9 @@ let currentPermissionId = null;
 // response to react to (never for pure tool-only turns).
 let lastAgentEl = null;
 let turnHasText = false;
-// The promptId of the turn currently streaming in, so attachFeedback() can
-// wire up a per-turn undo icon alongside thumbs-up/down/retry. Set from both
-// "user" event sites (replay and live) since a user message always opens the
-// turn whose promptId every subsequent checkpoint/assistant event shares.
+// The promptId of the turn currently streaming in. Set from both "user"
+// event sites (replay and live) since a user message always opens the turn
+// whose promptId every subsequent checkpoint/assistant event shares.
 let currentPromptId = null;
 
 // ---------- rendering ----------
@@ -324,11 +323,6 @@ function applyRevert(paths) {
     if (card.files.size === 0) {
       card.el.remove();
       checkpointCards.delete(promptId);
-      // This turn's files are all reverted — the feedback-row undo icon (if
-      // one was rendered for this promptId) no longer has anything to do;
-      // disable it rather than leaving a dead action live in the transcript.
-      const undoBtn = document.querySelector(`.fb-btn[data-act="undo"][data-prompt-id="${promptId}"]`);
-      if (undoBtn) undoBtn.disabled = true;
     } else {
       renderCheckpointCard(promptId, card);
     }
@@ -689,6 +683,136 @@ cpbarHead.addEventListener("click", () => {
   renderCheckpointBar();
 });
 
+// ---------- conversation rewind (Accept / "Rewind to here" under USER bubbles) ----------
+// Replaces the old per-agent-response undo icon: the control now lives under
+// each user message and means "come back to this message" — rewinding reverts
+// EVERY file change made since that message (this prompt and every later one)
+// AND truncates the conversation there, both in the visible chat and in the
+// agent's real history (extension.js "rewindToPrompt" → lakshx/rewind_to_prompt).
+// Accept is the opposite, deliberately weightless affordance: a purely visual,
+// NON-BLOCKING "keep this" that just dismisses the row for that message — it
+// never pauses or gates a turn (persisted as a "rewindAccepted" transcript
+// event so replay respects the dismissal).
+const rewindRows = new Map(); // promptId -> { wrap, msgEl }
+const userPromptOrder = []; // promptIds in arrival order — index order = conversation order
+
+/** Render a user bubble; wire the rewind row when the event carries a promptId (older persisted chats without one simply get no row — graceful degradation). */
+function addUserMsg(m) {
+  const msgEl = addMsg("user", m.text);
+  if (m.promptId) attachRewindRow(msgEl, m.promptId);
+  return msgEl;
+}
+
+function attachRewindRow(msgEl, promptId) {
+  const wrap = document.createElement("div");
+  wrap.className = "rewind";
+  wrap.innerHTML = `<div class="rewind-actions">
+    <button class="ghost rw-btn rw-rewind" title="Revert all file changes made since this message and remove it and everything after from the conversation">&#8617; Rewind to here</button>
+    <button class="ghost rw-btn rw-accept" title="Keep everything — just dismiss this row">&#10003; Accept</button>
+  </div>
+  <div class="rw-confirm cp-confirm" hidden></div>`;
+  msgEl.insertAdjacentElement("afterend", wrap);
+  rewindRows.set(promptId, { wrap, msgEl });
+  userPromptOrder.push(promptId);
+  wrap.querySelector(".rw-accept").addEventListener("click", () => {
+    dismissRewindRow(promptId); // optimistic — the extension echoes a "rewindAccepted" event for persistence/replay
+    vscode.postMessage({ type: "acceptTurn", promptId });
+  });
+  wrap.querySelector(".rw-rewind").addEventListener("click", () => startRewindConfirm(promptId));
+}
+
+function dismissRewindRow(promptId) {
+  rewindRows.get(promptId)?.wrap.classList.add("accepted");
+}
+
+/** Union of files touched by this prompt AND every later one — the rewind's real revert set, mirroring the server's own union. */
+function rewindFilesFor(promptId) {
+  const start = userPromptOrder.indexOf(promptId);
+  if (start === -1) return [];
+  const ids = new Set(userPromptOrder.slice(start));
+  const files = new Set();
+  for (const [pid, card] of checkpointCards) {
+    if (ids.has(pid)) for (const f of card.files) files.add(f);
+  }
+  return [...files];
+}
+
+/** The user message itself + every rendered chat message after it (tool/checkpoint cards not counted as "messages"). */
+function rewindMessageCount(promptId) {
+  const row = rewindRows.get(promptId);
+  if (!row) return 0;
+  let n = 0;
+  for (let el = row.msgEl; el; el = el.nextElementSibling) {
+    if (el.classList.contains("msg")) n++;
+  }
+  return n;
+}
+
+function startRewindConfirm(promptId) {
+  if (busy) {
+    toast("Agent is busy — wait for the turn to finish");
+    return;
+  }
+  const row = rewindRows.get(promptId);
+  if (!row) return;
+  row.wrap.classList.remove("accepted"); // /undo can target an already-accepted message — surface the row for its confirm
+  const files = rewindFilesFor(promptId);
+  const n = rewindMessageCount(promptId);
+  showRewindConfirm(
+    promptId,
+    `Rewind to this message? ${n} message${n === 1 ? "" : "s"} will be removed from the conversation${files.length ? ` and ${files.length} file${files.length === 1 ? "" : "s"} reverted` : ""}.`,
+    files,
+    () => requestRewind(promptId),
+  );
+}
+
+/** Same inline confirm shape showUndoConfirm uses, anchored to the message's own rewind row, with the file list rendered like the checkpoint card's. */
+function showRewindConfirm(promptId, message, files, onConfirm) {
+  const row = rewindRows.get(promptId);
+  if (!row) return;
+  const box = row.wrap.querySelector(".rw-confirm");
+  box.hidden = false;
+  box.innerHTML = `<div class="cp-confirm-msg"></div>${files.length ? `<div class="rw-files"></div>` : ""}<div class="cp-confirm-actions">
+    <button class="deny rw-cancel">Cancel</button><button class="allow rw-go">Rewind</button></div>`;
+  box.querySelector(".cp-confirm-msg").textContent = message;
+  const list = box.querySelector(".rw-files");
+  if (list) {
+    for (const f of files) {
+      const d = document.createElement("div");
+      d.className = "rw-file";
+      d.textContent = f;
+      list.appendChild(d);
+    }
+  }
+  box.querySelector(".rw-cancel").addEventListener("click", () => { box.hidden = true; box.innerHTML = ""; });
+  box.querySelector(".rw-go").addEventListener("click", () => {
+    box.hidden = true;
+    box.innerHTML = "";
+    onConfirm();
+  });
+  row.wrap.scrollIntoView({ block: "nearest" }); // /undo triggers this from the composer, potentially far from the row
+}
+
+function requestRewind(promptId, force) {
+  vscode.postMessage({ type: "rewindToPrompt", promptId, force: force === true });
+}
+
+/** Server refused the rewind because files were edited OUTSIDE the agent since — confirm-then-force, same flow handleUndoConflict uses. */
+function handleRewindConflict(m) {
+  const files = m.conflicts ?? [];
+  showRewindConfirm(
+    m.promptId,
+    `${files.join(", ") || "One or more files"} ${files.length === 1 ? "has" : "have"} been edited outside the agent since. Rewinding will overwrite ${files.length === 1 ? "that edit" : "those edits"}. Continue?`,
+    [],
+    () => requestRewind(m.promptId, true),
+  );
+}
+
+function resetRewindRows() {
+  rewindRows.clear();
+  userPromptOrder.length = 0;
+}
+
 function setBusy(b) {
   busy = b;
   sendBtn.disabled = b;
@@ -925,7 +1049,7 @@ const BUILTIN_COMMANDS = [
   { name: "royal", description: "Switch to Royal mode — full autonomy (consent gate applies)", takesArgs: false, run: () => switchMode("royal") },
   { name: "model", description: "/model <name> — switch model; bare /model focuses the picker", takesArgs: true, run: (args) => slashModel(args) },
   { name: "new", description: "Start a new chat", takesArgs: false, run: () => vscode.postMessage({ type: "newChat" }) },
-  { name: "undo", description: "Undo the last turn's file changes", takesArgs: false, run: () => slashUndo() },
+  { name: "undo", description: "Rewind to the last message — revert its file changes and remove it from the conversation", takesArgs: false, run: () => slashUndo() },
   { name: "report", description: "Copy the full diagnostic session report to the clipboard", takesArgs: false, run: () => slashReport() },
   { name: "help", description: "List all slash commands", takesArgs: false, run: () => renderSlashHelp() },
 ];
@@ -987,16 +1111,18 @@ function slashModel(args) {
 }
 
 function slashUndo() {
-  // checkpointCards is insertion-ordered and fully-reverted turns are
-  // deleted from it, so its last key is the most recent turn that still has
-  // undoable file changes. Same "never offer a zero-file undo" rule the
-  // cards/bar follow.
-  const ids = [...checkpointCards.keys()];
-  if (!ids.length) {
-    toast("No file changes to undo");
+  // /undo = rewind to the LAST user message: revert every file change made
+  // since it and remove it (and everything after) from the conversation —
+  // the exact confirm-first flow of that message's own "Rewind to here"
+  // control, just reachable from the composer. userPromptOrder only holds
+  // prompts that carried a promptId, so old replayed chats degrade to a
+  // toast instead of a broken rewind.
+  const last = userPromptOrder[userPromptOrder.length - 1];
+  if (!last) {
+    toast("Nothing to rewind yet");
     return;
   }
-  requestUndoPrompt(ids[ids.length - 1]);
+  startRewindConfirm(last);
 }
 
 function slashReport() {
@@ -1269,13 +1395,11 @@ function showPlanBar(relPath) {
 function attachFeedback(msgEl, promptId) {
   const wrap = document.createElement("div");
   wrap.className = "feedback";
-  // The undo icon only renders when this turn actually has a checkpoint card
-  // (mirrors the "never show a zero-file affordance" rule the card/session
-  // bar already follow) — a turn with no mutating tool calls has nothing to
-  // undo. Chats from before this feature, or replayed from a non-LakshX ACP
-  // client that never sent promptId, simply never match here — no crash,
-  // the icon just doesn't render.
-  const canUndo = promptId != null && checkpointCards.has(promptId);
+  // No undo icon here anymore: per-response undo was replaced by the
+  // conversation-rewind control under each USER message bubble (the
+  // "Rewind to here" / "Accept" row — see attachRewindRow above), which
+  // reverts files AND truncates the conversation. Thumbs + retry stay.
+  void promptId; // still passed by maybeAttachFeedback — kept for future per-turn feedback correlation
   wrap.innerHTML = `<div class="feedback-actions">
     <button class="ghost fb-btn" data-act="up" title="Good response" aria-label="Good response">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 22V11M2 13v7a2 2 0 0 0 2 2h14.3a2 2 0 0 0 2-1.7l1.4-9A2 2 0 0 0 19.7 9H14l1-5.5a2 2 0 0 0-3.7-1.3L7 9"/></svg>
@@ -1285,10 +1409,7 @@ function attachFeedback(msgEl, promptId) {
     </button>
     <button class="ghost fb-btn" data-act="retry" title="Retry with the same prompt" aria-label="Retry">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3M21 3v6h-6"/></svg>
-    </button>${canUndo ? `
-    <button class="ghost fb-btn" data-act="undo" data-prompt-id="${promptId}" title="Undo this turn's file changes" aria-label="Undo this turn's file changes">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h10a5 5 0 0 1 5 5v6M3 10l6-6M3 10l6 6"/></svg>
-    </button>` : ""}
+    </button>
   </div>`;
   msgEl.insertAdjacentElement("afterend", wrap);
   wrap.addEventListener("click", (e) => {
@@ -1302,14 +1423,6 @@ function attachFeedback(msgEl, promptId) {
       note.textContent = "Retrying…";
       btn.insertAdjacentElement("afterend", note);
       setTimeout(() => note.remove(), 2500);
-      return;
-    }
-    if (btn.dataset.act === "undo") {
-      // Same message + same extension.js handler ("undoPrompt") the
-      // checkpoint card's own "Undo all" button already sends — conflict/
-      // overlap handling (showUndoConfirm) is unchanged and still routes
-      // through the matching checkpoint card, not this button.
-      requestUndoPrompt(btn.dataset.promptId);
       return;
     }
     for (const b of wrap.querySelectorAll('.fb-btn[data-act="up"], .fb-btn[data-act="down"]')) {
@@ -1446,7 +1559,7 @@ function showWhatsNew(entries) {
 // ---------- replay (webview rebuilds when hidden) ----------
 function applyEvent(m, replaying) {
   switch (m.type) {
-    case "user": currentPromptId = m.promptId ?? currentPromptId; addMsg("user", m.text); break;
+    case "user": currentPromptId = m.promptId ?? currentPromptId; addUserMsg(m); break;
     case "chunk": replaying ? bulkChunk(m.text) : streamText(m.text); break;
     case "thought": if (!replaying) streamThought(m.text); break;
     case "tool": addTool(m); break;
@@ -1463,6 +1576,7 @@ function applyEvent(m, replaying) {
       break;
     case "checkpoint": applyCheckpoint(m); break;
     case "checkpointReverted": applyRevert(m.paths); break;
+    case "rewindAccepted": dismissRewindRow(m.promptId); break;
     case "subagentsStart": applySubagentsStart(m); break;
     case "subagentActivity": applySubagentActivity(m); break;
     case "subagentsEnd": applySubagentsEnd(m); break;
@@ -1602,6 +1716,7 @@ window.addEventListener("message", (e) => {
       checkpointCards.clear();
       subagentCards.clear();
       sessionFiles.clear();
+      resetRewindRows();
       cpbarExpanded = false;
       renderCheckpointBar(); // hides the bar before replay repopulates it
       bulkRaw = null;
@@ -1623,7 +1738,7 @@ window.addEventListener("message", (e) => {
       document.getElementById("thinking")?.remove();
       streamThought(m.text);
       break;
-    case "user": currentPromptId = m.promptId ?? currentPromptId; addMsg("user", m.text); break;
+    case "user": currentPromptId = m.promptId ?? currentPromptId; addUserMsg(m); break;
     case "tool":
       document.getElementById("thinking")?.remove();
       addTool(m);
@@ -1641,6 +1756,8 @@ window.addEventListener("message", (e) => {
     case "modeChanged": applyEvent(m, false); break;
     case "checkpoint": applyEvent(m, false); break;
     case "checkpointReverted": applyEvent(m, false); break;
+    case "rewindAccepted": applyEvent(m, false); break;
+    case "rewindConflict": handleRewindConflict(m); break;
     case "subagentsStart": applyEvent(m, false); break;
     case "subagentActivity": applyEvent(m, false); break;
     case "subagentsEnd": applyEvent(m, false); break;
@@ -1731,6 +1848,7 @@ window.addEventListener("message", (e) => {
       checkpointCards.clear();
       subagentCards.clear();
       sessionFiles.clear();
+      resetRewindRows();
       cpbarExpanded = false;
       renderCheckpointBar();
       endStream();
