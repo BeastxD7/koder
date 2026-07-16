@@ -1,0 +1,57 @@
+{
+  "name": "lakshx-tab",
+  "displayName": "LakshX Tab",
+  "description": "Cursor/Zed-style next-edit prediction: after an edit, predicts and ghost-texts the developer's next likely edit, accepted with Tab via VS Code's built-in inline-completion UI.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.tab.toggle",
+        "title": "LakshX Tab: Toggle Next-Edit Prediction"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "lakshx.tab.toggle"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "LakshX Tab",
+      "properties": {
+        "lakshxTab.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Predict and ghost-text the next likely edit as you type. Uses the same provider configured in ~/.lakshx/providers.json as the main LakshX agent."
+        },
+        "lakshxTab.debounceMs": {
+          "type": "number",
+          "default": 350,
+          "minimum": 100,
+          "maximum": 2000,
+          "description": "Idle time (ms) after the last keystroke/cursor move before a prediction request is made. Higher = fewer model calls, more perceived lag."
+        },
+        "lakshxTab.requestTimeoutMs": {
+          "type": "number",
+          "default": 2500,
+          "minimum": 500,
+          "maximum": 10000,
+          "description": "Max time (ms) to wait for a prediction before giving up silently (no ghost text shown, no error)."
+        }
+      }
+    }
+  }
+}
