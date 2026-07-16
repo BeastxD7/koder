@@ -8,8 +8,9 @@
 # Azure pipeline + this session's tested manual run).
 #
 # Usage:
-#   OS-Build/build-macos.sh            # full build -> single .dmg
-#   OS-Build/build-macos.sh --check    # preflight + print command sequence only
+#   OS-Build/build-macos.sh                     # full build -> single .dmg
+#   OS-Build/build-macos.sh --check             # requirements gate only, no build
+#   OS-Build/build-macos.sh --non-interactive   # never prompt for auto-fixes
 #
 # Env overrides (sane defaults):
 #   VSCODE_ARCH=arm64      target arch
@@ -22,14 +23,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Shared requirements gate (collect-all model + exact preinstall.ts Node check +
+# opt-in interactive auto-fix). Lives alongside this script in OS-Build/.
+# shellcheck source=OS-Build/lib-preflight.sh
+. "${SCRIPT_DIR}/lib-preflight.sh"
+
 VSCODE_ARCH="${VSCODE_ARCH:-arm64}"
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 export VSCODE_ARCH VSCODE_QUALITY
 
 CHECK_ONLY=0
+NONINTERACTIVE=0
 for arg in "$@"; do
 	case "$arg" in
 		--check|--dry-run) CHECK_ONLY=1 ;;
+		--non-interactive|--yes-to-nothing) NONINTERACTIVE=1 ;;
 		-h|--help)
 			grep '^#' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; 1d'
 			exit 0 ;;
@@ -48,32 +56,51 @@ DMG_RAW="${REPO_ROOT}/VSCode-${TARGET}.dmg"      # create-dmg names it VSCode-da
 DMG_OUT="${REPO_ROOT}/${ARTIFACT}.dmg"           # final, human-named artifact
 
 # ----------------------------------------------------------------------------
-# Preflight
+# Preflight — comprehensive requirements gate (see OS-Build/lib-preflight.sh).
+# Runs the FULL gate first, collects ALL results, and only then decides. On any
+# hard FAIL the build never starts (no wasted fetch/bundle/npm-ci time).
 # ----------------------------------------------------------------------------
 phase "Preflight checks"
 
+# Wrong-OS is a hard prerequisite, not a gate row — bail immediately.
 [ "$(uname -s)" = "Darwin" ] || die "This script only runs on macOS (uname=$(uname -s)). Use OS-Build/build-linux.sh or build-windows.ps1."
 
-command -v node >/dev/null 2>&1 || die "node not found. Install Node 24 (see upstream/.nvmrc)."
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-WANT_MAJOR="24"
-[ -f "${REPO_ROOT}/upstream/.nvmrc" ] && WANT_MAJOR="$(sed 's/^v//' "${REPO_ROOT}/upstream/.nvmrc" | cut -d. -f1)"
-[ "$NODE_MAJOR" = "$WANT_MAJOR" ] || die "Node major ${WANT_MAJOR} required (found $(node --version)). create-dmg.ts needs Node >= 24.2."
-info "node $(node --version) (major ${NODE_MAJOR}) OK"
+# The macOS build's requirement set.
+macos_gate() {
+	pf_check_node "$REPO_ROOT"
+	pf_check_npm
+	pf_check_git
+	# create-dmg builds a dmgbuild venv -> python3 >= 3.10 is a HARD requirement.
+	pf_check_python hard "brew install python@3.12"
+	pf_check_toolchain_macos
+	pf_check_disk "$REPO_ROOT"
+	pf_check_repo "$REPO_ROOT"
+}
 
-command -v git >/dev/null 2>&1 || die "git not found."
+# Interactive auto-fix only when it makes sense: not --check, not --non-interactive,
+# a real TTY, and not CI. Otherwise report-only (never hang on a prompt).
+INTERACTIVE=1
+[ "$CHECK_ONLY" -eq 1 ] && INTERACTIVE=0
+[ "$NONINTERACTIVE" -eq 1 ] && INTERACTIVE=0
+[ -t 0 ] || INTERACTIVE=0
+[ -n "${CI:-}" ] && INTERACTIVE=0
 
-xcode-select -p >/dev/null 2>&1 || die "Xcode Command Line Tools missing. Run: xcode-select --install"
-info "Xcode CLT: $(xcode-select -p)"
-
-# create-dmg clones dmgbuild into a Python venv; needs python3 >= 3.10.
-command -v python3 >/dev/null 2>&1 || die "python3 not found (needed by create-dmg.ts / dmgbuild)."
-PYV="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-PYMAJ="${PYV%%.*}"; PYMIN="${PYV##*.}"
-if [ "$PYMAJ" -lt 3 ] || { [ "$PYMAJ" -eq 3 ] && [ "$PYMIN" -lt 10 ]; }; then
-	die "python3 >= 3.10 required (found ${PYV}). dmgbuild will otherwise try to brew install python@3.12."
+GATE_OK=1
+if ! pf_preflight_main macos_gate "$INTERACTIVE"; then
+	GATE_OK=0
+	if [ "${PF_RERUN_SHELL:-0}" = "1" ]; then
+		printf '\n\033[1;33mA fix was installed that needs a fresh shell (nvm changes do not apply to this one).\033[0m\n'
+		printf 'Open a new terminal and re-run:  ./build.sh %s\n' "$([ "$CHECK_ONLY" -eq 1 ] && echo '--check')"
+		exit 1
+	fi
 fi
-info "python3 ${PYV} OK"
+
+# Real build: fail fast BEFORE printing the sequence or doing any heavy work.
+# --check still prints the full command sequence below (report-everything mode).
+if [ "$CHECK_ONLY" -ne 1 ] && [ "$GATE_OK" -ne 1 ]; then
+	printf '\n\033[1;31mBuild cannot proceed. Fix the items marked FAIL above.\033[0m\n'
+	exit 1
+fi
 
 info "Target:  ${TARGET}"
 info "Quality: ${VSCODE_QUALITY}"
@@ -100,6 +127,10 @@ Command sequence (mirrors .github/workflows/build.yml darwin-arm64):
 EOF
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
+	if [ "$GATE_OK" -ne 1 ]; then
+		printf '\n\033[1;31mBuild cannot proceed. Fix the items marked FAIL above.\033[0m\n'
+		exit 1
+	fi
 	phase "--check: preflight passed, skipping the heavy build"
 	echo "OK: would build ${DMG_OUT}"
 	exit 0

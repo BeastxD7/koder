@@ -8,8 +8,9 @@
 # task names are passed on one command line — build.yml:184-190).
 #
 # Usage:
-#   OS-Build/build-linux.sh            # full build -> single .deb
-#   OS-Build/build-linux.sh --check    # preflight + print command sequence only
+#   OS-Build/build-linux.sh                     # full build -> single .deb
+#   OS-Build/build-linux.sh --check             # requirements gate only, no build
+#   OS-Build/build-linux.sh --non-interactive   # never prompt for auto-fixes
 #
 # Env overrides (sane defaults):
 #   VSCODE_ARCH=x64        target arch
@@ -21,14 +22,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Shared requirements gate (collect-all model + exact preinstall.ts Node check +
+# opt-in interactive auto-fix). Lives alongside this script in OS-Build/.
+# shellcheck source=OS-Build/lib-preflight.sh
+. "${SCRIPT_DIR}/lib-preflight.sh"
+
 VSCODE_ARCH="${VSCODE_ARCH:-x64}"
 VSCODE_QUALITY="${VSCODE_QUALITY:-stable}"
 export VSCODE_ARCH VSCODE_QUALITY
 
 CHECK_ONLY=0
+NONINTERACTIVE=0
 for arg in "$@"; do
 	case "$arg" in
 		--check|--dry-run) CHECK_ONLY=1 ;;
+		--non-interactive|--yes-to-nothing) NONINTERACTIVE=1 ;;
 		-h|--help)
 			grep '^#' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; 1d'
 			exit 0 ;;
@@ -53,38 +61,51 @@ DEB_DIR="${REPO_ROOT}/upstream/.build/linux/deb/${DEB_ARCH}/deb"
 DEB_OUT="${REPO_ROOT}/${ARTIFACT}.deb"
 
 # ----------------------------------------------------------------------------
-# Preflight
+# Preflight — comprehensive requirements gate (see OS-Build/lib-preflight.sh).
+# Runs the FULL gate first, collects ALL results, and only then decides. On any
+# hard FAIL the build never starts (no wasted fetch/bundle/npm-ci time).
 # ----------------------------------------------------------------------------
 phase "Preflight checks"
 
+# Wrong-OS is a hard prerequisite, not a gate row — bail immediately.
 [ "$(uname -s)" = "Linux" ] || die "This script only runs on Linux (uname=$(uname -s)). Use build-macos.sh or build-windows.ps1."
 
-command -v node >/dev/null 2>&1 || die "node not found. Install Node 24 (see upstream/.nvmrc)."
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-WANT_MAJOR="24"
-[ -f "${REPO_ROOT}/upstream/.nvmrc" ] && WANT_MAJOR="$(sed 's/^v//' "${REPO_ROOT}/upstream/.nvmrc" | cut -d. -f1)"
-[ "$NODE_MAJOR" = "$WANT_MAJOR" ] || die "Node major ${WANT_MAJOR} required (found $(node --version))."
-info "node $(node --version) (major ${NODE_MAJOR}) OK"
+# The Linux build's requirement set.
+linux_gate() {
+	pf_check_node "$REPO_ROOT"
+	pf_check_npm
+	pf_check_git
+	# node-gyp uses python3 for native modules; not on the .deb path itself -> WARN.
+	pf_check_python warn "sudo apt-get install -y python3"
+	pf_check_toolchain_linux         # dpkg-deb + fakeroot (hard) + build deps (warn)
+	pf_check_disk "$REPO_ROOT"
+	pf_check_repo "$REPO_ROOT"
+}
 
-command -v git >/dev/null 2>&1 || die "git not found."
+# Interactive auto-fix only when it makes sense: not --check, not --non-interactive,
+# a real TTY, and not CI. Otherwise report-only (never hang on a prompt).
+INTERACTIVE=1
+[ "$CHECK_ONLY" -eq 1 ] && INTERACTIVE=0
+[ "$NONINTERACTIVE" -eq 1 ] && INTERACTIVE=0
+[ -t 0 ] || INTERACTIVE=0
+[ -n "${CI:-}" ] && INTERACTIVE=0
 
-# The gulp build-deb task uses dpkg-deb + fakeroot (build.yml:69,160-162).
-command -v dpkg-deb >/dev/null 2>&1 || die "dpkg-deb not found. Install with: sudo apt-get install -y dpkg-dev"
-command -v fakeroot >/dev/null 2>&1 || die "fakeroot not found. Install with: sudo apt-get install -y fakeroot"
-info "dpkg-deb: $(command -v dpkg-deb)"
-info "fakeroot: $(command -v fakeroot)"
-
-# Native module compilation deps (build.yml:65-69). Warn (don't hard-fail) so a
-# preflight can run on a box without them, but the build itself needs them.
-MISSING=""
-for pc in libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev; do
-	if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists "${pc%-dev}" 2>/dev/null; then
-		MISSING="${MISSING} ${pc}"
+GATE_OK=1
+if ! pf_preflight_main linux_gate "$INTERACTIVE"; then
+	GATE_OK=0
+	if [ "${PF_RERUN_SHELL:-0}" = "1" ]; then
+		printf '\n\033[1;33mA fix was installed that needs a fresh shell (nvm changes do not apply to this one).\033[0m\n'
+		printf 'Open a new terminal and re-run:  ./build.sh %s\n' "$([ "$CHECK_ONLY" -eq 1 ] && echo '--check')"
+		exit 1
 	fi
-done
-command -v g++ >/dev/null 2>&1 || MISSING="${MISSING} build-essential/g++"
-[ -n "$MISSING" ] && info "WARNING: possibly missing build deps:${MISSING}"
-info "  (CI installs: build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev fakeroot rpm)"
+fi
+
+# Real build: fail fast BEFORE printing the sequence or doing any heavy work.
+# --check still prints the full command sequence below (report-everything mode).
+if [ "$CHECK_ONLY" -ne 1 ] && [ "$GATE_OK" -ne 1 ]; then
+	printf '\n\033[1;31mBuild cannot proceed. Fix the items marked FAIL above.\033[0m\n'
+	exit 1
+fi
 
 info "Target:  ${TARGET} (deb arch: ${DEB_ARCH})"
 info "Quality: ${VSCODE_QUALITY}"
@@ -111,6 +132,10 @@ Command sequence (mirrors .github/workflows/build.yml linux-x64):
 EOF
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
+	if [ "$GATE_OK" -ne 1 ]; then
+		printf '\n\033[1;31mBuild cannot proceed. Fix the items marked FAIL above.\033[0m\n'
+		exit 1
+	fi
 	phase "--check: preflight passed, skipping the heavy build"
 	echo "OK: would build ${DEB_OUT}"
 	exit 0
