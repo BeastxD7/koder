@@ -1,0 +1,182 @@
+:root {
+  color-scheme: dark;
+  --bg: var(--vscode-sideBar-background, #0e1116);
+  --fg: #c8cede;
+  --muted: #8a93a8;
+  --faint: #5c6577;
+  --accent: #7c5cff;
+  --card: rgba(255, 255, 255, 0.035);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --radius: 10px;
+  --pass: #3ecf8e;
+  --fail: #ff5c7a;
+  --unknown: #d9a441;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: 13px;
+}
+
+#app {
+  padding: 14px 18px 24px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+#title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+button.ghost:hover {
+  background: var(--card);
+}
+
+#blurb {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 4px 0 18px;
+}
+
+#blurb a {
+  color: var(--accent);
+}
+
+.category {
+  margin-bottom: 20px;
+}
+
+.category h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  margin: 0 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.entry:last-child {
+  border-bottom: none;
+}
+
+.entry-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.entry-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.entry-name {
+  font-weight: 600;
+}
+
+.entry-id {
+  color: var(--faint);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+}
+
+.entry-desc {
+  color: var(--muted);
+  margin: 4px 0 2px;
+}
+
+.entry-reason {
+  color: var(--faint);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge.pass {
+  background: rgba(62, 207, 142, 0.15);
+  color: var(--pass);
+}
+
+.badge.fail {
+  background: rgba(255, 92, 122, 0.15);
+  color: var(--fail);
+}
+
+.badge.unknown,
+.badge.unchecked {
+  background: rgba(217, 164, 65, 0.15);
+  color: var(--unknown);
+}
+
+.entry-actions {
+  flex-shrink: 0;
+}
+
+button.install {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+button.install:hover {
+  opacity: 0.9;
+}
+
+button.install:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

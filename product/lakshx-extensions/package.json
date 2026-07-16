@@ -1,0 +1,34 @@
+{
+  "name": "lakshx-extensions",
+  "displayName": "LakshX Recommended & Verified Extensions",
+  "description": "A curated 'Recommended & Verified' extensions panel that checks every recommendation against the Open VSX registry (open-vsx.org) — the registry LakshX's own Extensions view actually installs from — closing the namespace-squatting gap where a fork recommends a Marketplace-only extension id that doesn't exist on Open VSX.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.extensions.showCurated",
+        "title": "LakshX: Show Recommended & Verified Extensions",
+        "icon": "$(shield)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "lakshx.extensions.showCurated"
+        }
+      ]
+    }
+  }
+}
