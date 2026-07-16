@@ -24,7 +24,10 @@
   },
   "darwinBundleIdentifier": "com.lakshx.ide",
   "linuxIconName": "lakshx",
+  "sharedDataFolderName": ".lakshx-shared",
   "licenseName": "MIT",
+  "licenseUrl": null,
+  "serverLicenseUrl": null,
   "reportIssueUrl": "https://github.com/lakshx-ide/lakshx/issues/new",
   "extensionsGallery": {
     "serviceUrl": "https://open-vsx.org/vscode/gallery",
@@ -55,6 +58,9 @@
   "appCenter": null,
   "enableTelemetry": false,
   "aiConfig": null,
+  "trustedExtensionAuthAccess": null,
+  "builtInExtensionsEnabledWithAutoUpdates": [],
+  "voiceWsUrl": null,
   "defaultChatAgent": {
     "name": "LakshX",
     "providerName": "LakshX",

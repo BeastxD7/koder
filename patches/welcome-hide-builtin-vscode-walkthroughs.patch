@@ -1,0 +1,23 @@
+diff --git a/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedService.ts b/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedService.ts
+index ac89ae8e..f36c9d24 100644
+--- a/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedService.ts
++++ b/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStartedService.ts
+@@ -188,7 +188,17 @@ export class WalkthroughsService extends Disposable implements IWalkthroughsServ
+ 				icon: { type: 'icon', icon: category.icon },
+ 				order: walkthroughs.length - index,
+ 				source: BUILT_IN_SOURCE,
+-				when: ContextKeyExpr.deserialize(category.when) ?? ContextKeyExpr.true(),
++				// LakshX: never surface the built-in VS Code walkthroughs. Their
++				// content (common/gettingStartedContent.ts) is VS-Code-branded
++				// through and through — "Get started with VS Code", Copilot setup
++				// steps, aka.ms video tutorials, code.visualstudio.com doc links,
++				// Settings Sync promos — none of which apply to LakshX. Keep them
++				// REGISTERED (id lookups like openWalkthrough('...') and the
++				// NewWelcomeExperience filter below stay valid) but gate every
++				// built-in category behind a constant-false when-clause so no
++				// list/UI ever renders them. Extension-contributed walkthroughs
++				// (registered via the extension point further down) are untouched.
++				when: ContextKeyExpr.false(),
+ 				steps:
+ 					category.content.steps.map((step, index) => {
+ 						return ({
