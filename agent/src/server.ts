@@ -358,6 +358,23 @@ acp
             });
             return res.outcome.outcome === "selected" && res.outcome.optionId === "allow";
           },
+          // db_query relay (docs/research/13 §8). Forwards the already-
+          // validated {connectionRef, query, maxRows} to the host client,
+          // which reaches the lakshx-db extension's runReadOnlyQuery. Wrapped
+          // so a client that doesn't implement `lakshx/db_query` (Zed/JetBrains
+          // or a test client) degrades to a clean tool-error the model can act
+          // on, never a thrown rejection crossing back into the loop.
+          onDbQuery: async (input) => {
+            try {
+              const res: any = await ctx.client.request("lakshx/db_query", { sessionId, ...input });
+              return { text: String(res?.text ?? ""), isError: !!res?.isError };
+            } catch (e: any) {
+              return {
+                text: `db_query: capability unavailable in this client (${String(e?.message ?? e)})`,
+                isError: true,
+              };
+            }
+          },
           onBaseline: (sha) => {
             ensureEntry(sha);
             persist();

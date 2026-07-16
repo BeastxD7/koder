@@ -579,6 +579,7 @@ class AgentViewProvider {
       },
       onRequest: async (method, params) => {
         if (method === "session/request_permission") return this.onPermissionRequest(params);
+        if (method === "lakshx/db_query") return this.onDbQuery(params);
         throw new Error(`unhandled ${method}`);
       },
     });
@@ -894,6 +895,41 @@ class AgentViewProvider {
       await this.onWebviewMessage({ type: "send", text: "I am rejecting this plan. Ask me what direction you should take instead — do not start over on your own." });
     }
     // "enhance" is handled entirely in the webview (prefills the input)
+  }
+
+  /**
+   * Handle a `lakshx/db_query` ACP request from the agent runtime (the
+   * db_query tool's relay — docs/research/13 §8). This is the ONLY hop that
+   * knows how to reach the lakshx-db extension, which owns both the DB drivers
+   * and the per-extension credentials. lakshx-chat itself has neither, so it
+   * just forwards to lakshx-db's exported `runReadOnlyQuery`.
+   *
+   * Graceful degradation is REQUIRED: if lakshx-db isn't installed, is an
+   * older version without the AI-query export, or throws for any reason, this
+   * returns a clean `{text, isError}` the model can act on — it must NEVER let
+   * an exception cross back over the ACP boundary.
+   *
+   * `maxRows` is marshalled as an OBJECT PROPERTY of the third argument
+   * (`{ maxRows }`), not positionally — passing it positionally would silently
+   * default it to 50 inside runReadOnlyQuery.
+   */
+  async onDbQuery(params) {
+    try {
+      const ext = vscode.extensions.getExtension("lakshx.lakshx-db");
+      if (!ext) return { text: "db_query: the LakshX Database extension isn't installed.", isError: true };
+      const api = ext.isActive ? ext.exports : await ext.activate();
+      if (!api || typeof api.runReadOnlyQuery !== "function") {
+        return { text: "db_query: this LakshX Database version doesn't support AI queries.", isError: true };
+      }
+      const res = await api.runReadOnlyQuery(
+        params.connectionRef ?? params.engineId,
+        params.query,
+        { maxRows: params.maxRows },
+      );
+      return { text: String(res?.text ?? ""), isError: !!res?.isError };
+    } catch (e) {
+      return { text: `db_query failed: ${e && e.message ? e.message : String(e)}`, isError: true };
+    }
   }
 
   onPermissionRequest(params) {

@@ -9,6 +9,7 @@ import { logRoyalAudit, summarizeInput, summarizeText } from "./audit.js";
 import { checkpointBaseline, checkpointBeforeMutation, commitAfterTool, filesChangedSinceCommit } from "./checkpoint.js";
 import { envBlock, loadRules, scrubSecrets } from "./context.js";
 import { loadConfig, resolveModel } from "./config.js";
+import { validateDbQueryInput } from "./db.js";
 import { floorCheck, royalTamperCheck } from "./floor.js";
 import { AnthropicAdapter } from "./providers/anthropic.js";
 import { OpenAICompatAdapter } from "./providers/openai-compat.js";
@@ -60,6 +61,24 @@ export interface LoopCallbacks {
   onToolInputDelta?(info: { id: string; name: string; field: string; value: string; path?: string }): void;
   /** Ask the client whether a dangerous tool may run. */
   onPermission(call: { id: string; name: string; input: any; title: string; kind: ToolSpec["kind"] }): Promise<boolean>;
+  /**
+   * Relay a `db_query` tool call out to the host client, which forwards it to
+   * the lakshx-db extension's `runReadOnlyQuery` (docs/research/13 §8 wire
+   * path). The agent runtime never opens a DB connection or sees credentials —
+   * it hands the already-validated `{connectionRef, query, maxRows}` across the
+   * ACP boundary and gets back a model-facing `{text, isError}` that is already
+   * formatted and redacted by lakshx-db.
+   *
+   * OPTIONAL by design: under a non-LakshX ACP client (Zed/JetBrains, test
+   * clients) there is no db_query capability at all — the loop's db_query
+   * branch falls back to a clean "capability unavailable" tool-error rather
+   * than requiring every embedder/test to wire this. Implementations MUST
+   * resolve `{text, isError}` and never reject across the boundary (server.ts's
+   * wiring wraps its request in try/catch to guarantee this); the loop
+   * additionally catches a rejection defensively so a throwing handler still
+   * yields a clean tool-error instead of crashing the turn.
+   */
+  onDbQuery?(input: { connectionRef: string; query: string; maxRows: number }): Promise<{ text: string; isError: boolean }>;
   /** Fired after each model call with the provider's reported (or estimated) token usage. */
   onUsage?(usage: { inputTokens: number; outputTokens: number; estimated: boolean }): void;
   /** Fired after every history mutation — the hook point for crash-resilient persistence. */
@@ -271,6 +290,11 @@ export function toolTitle(name: string, input: any): string {
     case "browser_act": {
       const detail = input.url ?? input.ref ?? input.selector ?? input.key ?? "";
       return `Browser ${input.action ?? "?"}${detail ? ` ${String(detail).slice(0, 60)}` : ""}`;
+    }
+    case "db_query": {
+      const engine = String(input.connectionRef ?? "db");
+      const sql = String(input.query ?? "").replace(/\s+/g, " ").trim();
+      return `Query ${engine}${sql ? `: ${sql.slice(0, 40)}` : ""}`;
     }
     default: return name;
   }
@@ -863,6 +887,33 @@ async function runPromptLoop(
       if (tc.name === "dispatch_subtasks") {
         const outcome = await dispatchSubtasks(session, tc, cb, promptId, signal, depth);
         results.push({ type: "tool_result", tool_use_id: tc.id, content: outcome.content, is_error: outcome.isError });
+        continue;
+      }
+
+      // `db_query` is special-cased here too — BEFORE the floor/permission/
+      // checkpoint machinery below — for the same structural reason as
+      // dispatch_subtasks: it does no work in-process. It relays across the
+      // ACP boundary (cb.onDbQuery → lakshx-db's runReadOnlyQuery), which owns
+      // the read-only enforcement AND the opt-in consent gate. Placing it here
+      // means it runs identically in ALL modes including royal — it's
+      // `dangerous: false`, so even the generic path wouldn't prompt, but
+      // handling it here keeps it entirely out of the mutation/checkpoint
+      // machinery that has nothing to do with a read-only relay. Validation,
+      // the relay call, AND a throwing/absent handler all degrade to a clean
+      // tool-error (isError:true) — never a crash. See docs/research/13 §8.
+      if (tc.name === "db_query") {
+        cb.onToolStart({ id: tc.id, name: tc.name, input: tc.input, kind: spec.kind, title });
+        let out: { text: string; isError: boolean };
+        try {
+          const validated = validateDbQueryInput(tc.input ?? {});
+          out = cb.onDbQuery
+            ? await cb.onDbQuery(validated)
+            : { text: "db_query: capability unavailable in this client.", isError: true };
+        } catch (err: any) {
+          out = { text: `${err?.message ?? err}`, isError: true };
+        }
+        cb.onToolEnd({ id: tc.id, output: out.text, isError: out.isError });
+        results.push({ type: "tool_result", tool_use_id: tc.id, content: out.text, is_error: out.isError });
         continue;
       }
 

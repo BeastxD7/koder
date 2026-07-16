@@ -292,9 +292,10 @@ test(
       const stop = await runPrompt(session, "try to sneak a write past review mode", cb, "pr_review_containment");
       assert.equal(stop, "end_turn");
 
-      // The tool offered to the PARENT for its own turn is still read-only + dispatch_subtasks.
+      // The tool offered to the PARENT for its own turn is still read-only +
+      // dispatch_subtasks + db_query (a read-kind tool usable in review mode).
       const offeredToParent = fake.requests[0]!.tools.map((tl: any) => tl.function.name).sort();
-      assert.deepEqual(offeredToParent, ["dispatch_subtasks", "grep", "list_dir", "read_file"]);
+      assert.deepEqual(offeredToParent, ["db_query", "dispatch_subtasks", "grep", "list_dir", "read_file"]);
 
       // The child's announced mode is "review", NOT the "auto" the task asked for.
       assert.equal(cb.subagentsStart[0].tasks[0].mode, "review");
