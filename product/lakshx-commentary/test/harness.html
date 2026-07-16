@@ -13,7 +13,7 @@
 <html><head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src https://stream.radioparadise.com; img-src 'self';">
-<title>LakshX FM player harness</title>
+<title>LakshX Music player harness</title>
 <link rel="stylesheet" href="../media/player.css">
 <style>
   body { background: #0e1116; }
@@ -25,7 +25,7 @@
 <div id="app">
   <div id="nowplaying">
     <div id="stationRow">
-      <span id="stationName">LakshX FM</span>
+      <span id="stationName">LakshX Music</span>
       <a id="stationLink" href="#" target="_blank" rel="noreferrer noopener" hidden>site</a>
     </div>
     <div id="status" class="status paused">Stopped</div>
@@ -39,7 +39,7 @@
       <input id="volume" type="range" min="0" max="100" value="60" aria-label="Volume">
     </div>
   </div>
-  <p id="hint">First play must be a click here — browser autoplay rules. After that, the LakshX FM status-bar button controls it.</p>
+  <p id="hint">First play must be a click here — browser autoplay rules. After that, the LakshX Music status-bar button controls it.</p>
   <audio id="audio" preload="none"></audio>
 </div>
 
@@ -48,8 +48,6 @@
   <button id="btnStationMellow">→ setStation Mellow</button>
   <button id="btnPlay">→ play</button>
   <button id="btnPause">→ pause</button>
-  <button id="btnDuck">→ duck</button>
-  <button id="btnUnduck">→ unduck</button>
   <button id="btnVol30">→ volume 30</button>
 </div>
 <div id="devlog"></div>
@@ -84,11 +82,9 @@
   function send(msg) { window.postMessage(msg, "*"); }
 
   document.getElementById("btnStationMain").onclick = () => send({ type: "setStation", url: "https://stream.radioparadise.com/aac-128", name: "Radio Paradise — Main Mix", homepage: "https://radioparadise.com" });
-  document.getElementById("btnStationMellow").onclick = () => send({ type: "setStation", url: "https://stream.radioparadise.com/mellow-aac-128", name: "Radio Paradise — Mellow Mix", homepage: "https://radioparadise.com" });
+  document.getElementById("btnStationMellow").onclick = () => send({ type: "setStation", url: "https://stream.radioparadise.com/mellow-128", name: "Radio Paradise — Mellow Mix", homepage: "https://radioparadise.com" });
   document.getElementById("btnPlay").onclick = () => send({ type: "play" });
   document.getElementById("btnPause").onclick = () => send({ type: "pause" });
-  document.getElementById("btnDuck").onclick = () => send({ type: "duck" });
-  document.getElementById("btnUnduck").onclick = () => send({ type: "unduck" });
   document.getElementById("btnVol30").onclick = () => send({ type: "volume", value: 30 });
 
   // expose for automated inspection

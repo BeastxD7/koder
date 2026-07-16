@@ -20,11 +20,36 @@ test("Radio Paradise stations ship live over HTTPS with the verified URLs", () =
   const main = STATIONS.find((s) => s.id === "rp-main");
   const mellow = STATIONS.find((s) => s.id === "rp-mellow");
   assert.equal(main.url, "https://stream.radioparadise.com/aac-128");
-  assert.equal(mellow.url, "https://stream.radioparadise.com/mellow-aac-128");
+  assert.equal(mellow.url, "https://stream.radioparadise.com/mellow-128");
   for (const s of [main, mellow]) {
     assert.equal(s.kind, "stream");
     assert.ok(s.url.startsWith("https://"), "must be https (http is mixed-content-blocked in the webview)");
   }
+});
+
+test("all shipped stream stations are HTTPS Radio Paradise channels (verified embed-OK) and unique", () => {
+  const streams = STATIONS.filter((s) => s.kind === "stream");
+  assert.ok(streams.length >= 4, "at least the four Radio Paradise channels ship");
+  const seen = new Set();
+  for (const s of streams) {
+    assert.ok(s.url.startsWith("https://stream.radioparadise.com/"), `${s.id} must be a Radio Paradise HTTPS stream`);
+    assert.ok(typeof s.name === "string" && s.name.length > 0, `${s.id} needs a display name`);
+    assert.equal(s.homepage, "https://radioparadise.com", `${s.id} must credit Radio Paradise`);
+    assert.ok(!seen.has(s.url), `duplicate stream URL: ${s.url}`);
+    seen.add(s.url);
+  }
+});
+
+test("the added Radio Paradise Rock, Global and Beyond channels are present with their exact verified URLs", () => {
+  const rock = STATIONS.find((s) => s.id === "rp-rock");
+  const global = STATIONS.find((s) => s.id === "rp-global");
+  const beyond = STATIONS.find((s) => s.id === "rp-beyond");
+  assert.ok(rock, "rp-rock station should exist");
+  assert.ok(global, "rp-global station should exist");
+  assert.ok(beyond, "rp-beyond station should exist");
+  assert.equal(rock.url, "https://stream.radioparadise.com/rock-128");
+  assert.equal(global.url, "https://stream.radioparadise.com/global-128");
+  assert.equal(beyond.url, "https://stream.radioparadise.com/beyond-128");
 });
 
 test("SomaFM is NOT shipped as a built-in station (ToS: no embedding without written permission)", () => {
@@ -114,21 +139,23 @@ test("listPickableStations appends valid custom streams and drops invalid ones",
   assert.equal(customs[0].url, "https://good.example/s");
 });
 
-test("config/globalState key shapes are stable and correctly namespaced", () => {
-  assert.equal(CONFIG_SECTION, "lakshx.commentary");
-  assert.equal(CONFIG_KEYS.enabled, "music.enabled");
-  assert.equal(CONFIG_KEYS.station, "music.station");
-  assert.equal(CONFIG_KEYS.volume, "music.volume");
-  assert.equal(CONFIG_KEYS.duckDuringCommentary, "music.duckDuringCommentary");
-  assert.equal(GLOBALSTATE_KEYS.customStreams, "lakshx.commentary.music.customStreams");
+test("config/globalState key shapes are stable and correctly namespaced under the standalone lakshx.music id", () => {
+  assert.equal(CONFIG_SECTION, "lakshx.music");
+  assert.equal(CONFIG_KEYS.enabled, "enabled");
+  assert.equal(CONFIG_KEYS.station, "station");
+  assert.equal(CONFIG_KEYS.volume, "volume");
+  assert.equal(CONFIG_KEYS.duckDuringCommentary, undefined, "ducking is removed with commentary");
+  assert.equal(GLOBALSTATE_KEYS.customStreams, "lakshx.music.customStreams");
   // full setting paths (SECTION + key) are what package.json contributes
-  assert.equal(`${CONFIG_SECTION}.${CONFIG_KEYS.enabled}`, "lakshx.commentary.music.enabled");
+  assert.equal(`${CONFIG_SECTION}.${CONFIG_KEYS.enabled}`, "lakshx.music.enabled");
+  assert.equal(`${CONFIG_SECTION}.${CONFIG_KEYS.station}`, "lakshx.music.station");
+  assert.equal(`${CONFIG_SECTION}.${CONFIG_KEYS.volume}`, "lakshx.music.volume");
 });
 
 test("defaults enforce the opt-in / OFF-by-default contract", () => {
   assert.equal(DEFAULTS.enabled, false, "music must be OFF by default");
   assert.equal(DEFAULTS.station, "rp-main");
   assert.equal(DEFAULTS.volume, 60);
-  assert.equal(DEFAULTS.duckDuringCommentary, true);
-  assert.ok(DEFAULTS.duckVolumeFactor > 0 && DEFAULTS.duckVolumeFactor < 1);
+  assert.equal(DEFAULTS.duckDuringCommentary, undefined, "no ducking config remains");
+  assert.equal(DEFAULTS.duckVolumeFactor, undefined, "no ducking config remains");
 });

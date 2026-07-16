@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  LakshX FM player — the webview shell hosted by extension.js.
+  LakshX Music player — the webview shell hosted by extension.js.
 
   This file is a TEMPLATE, not loaded directly: extension.js reads it and
   string-substitutes the __CSP__, __CSS_URI__, __JS_URI__ and __NONCE__ tokens
@@ -20,7 +20,7 @@
 <div id="app">
   <div id="nowplaying">
     <div id="stationRow">
-      <span id="stationName">LakshX FM</span>
+      <span id="stationName">LakshX Music</span>
       <a id="stationLink" href="#" target="_blank" rel="noreferrer noopener" hidden>site</a>
     </div>
     <div id="status" class="status paused">Stopped</div>
@@ -34,7 +34,7 @@
       <input id="volume" type="range" min="0" max="100" value="60" aria-label="Volume">
     </div>
   </div>
-  <p id="hint">First play must be a click here — browser autoplay rules. After that, the LakshX FM status-bar button controls it.</p>
+  <p id="hint">First play must be a click here — browser autoplay rules. After that, the LakshX Music status-bar button controls it.</p>
   <!-- Single HTML5 audio element. No `autoplay` attribute: the first play is a real user click (Chromium autoplay-gesture policy). -->
   <audio id="audio" preload="none"></audio>
 </div>

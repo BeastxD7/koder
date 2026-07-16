@@ -1,8 +1,8 @@
 {
   "name": "lakshx-commentary",
-  "displayName": "LakshX Commentary",
-  "description": "A cheeky cricket-commentary-style companion that reacts to what you (and the agent) do in the IDE — spoken aloud via free OS-native text-to-speech. No LLM calls by default.",
-  "version": "0.0.1",
+  "displayName": "LakshX Music",
+  "description": "A standalone in-IDE music player for vibe coders — stream free, embed-permitted internet radio (Radio Paradise) or your own local CC0/CC-BY tracks in a small webview panel. No LLM calls, no telemetry.",
+  "version": "0.1.0",
   "publisher": "lakshx",
   "license": "MIT",
   "engines": {
@@ -18,87 +18,39 @@
   "contributes": {
     "commands": [
       {
-        "command": "lakshx.commentary.toggleMute",
-        "title": "LakshX Commentary: Toggle Mute"
+        "command": "lakshx.music.toggle",
+        "title": "LakshX Music: Toggle Playback (Play/Pause)"
       },
       {
-        "command": "lakshx.commentary.toggleVoice",
-        "title": "LakshX Commentary: Toggle Voice (Text Only Mode)"
-      },
-      {
-        "command": "lakshx.commentary.testLine",
-        "title": "LakshX Commentary: Show a Test Line"
-      },
-      {
-        "command": "lakshx.commentary.music.toggle",
-        "title": "LakshX FM: Toggle Background Music (Play/Pause)"
-      },
-      {
-        "command": "lakshx.commentary.music.pickStation",
-        "title": "LakshX FM: Pick Station / Add Custom Stream"
+        "command": "lakshx.music.pickStation",
+        "title": "LakshX Music: Pick Station / Add Custom Stream"
       }
     ],
     "menus": {
       "commandPalette": [
-        { "command": "lakshx.commentary.toggleMute" },
-        { "command": "lakshx.commentary.toggleVoice" },
-        { "command": "lakshx.commentary.testLine" },
-        { "command": "lakshx.commentary.music.toggle" },
-        { "command": "lakshx.commentary.music.pickStation" }
+        { "command": "lakshx.music.toggle" },
+        { "command": "lakshx.music.pickStation" }
       ]
     },
     "configuration": {
-      "title": "LakshX Commentary",
+      "title": "LakshX Music",
       "properties": {
-        "lakshx.commentary.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable LakshX Commentary — cheeky, cricket-commentary-style one-liners reacting to what you and the agent do in the IDE. Master mute switch: turn off to fully disable."
-        },
-        "lakshx.commentary.voice": {
-          "type": "boolean",
-          "default": true,
-          "description": "Speak commentary aloud via free OS-native text-to-speech (macOS 'say', Windows Speech Synthesizer, Linux espeak/spd-say). Turn off for text-only notifications with no audio."
-        },
-        "lakshx.commentary.minIntervalMinutes": {
-          "type": "number",
-          "default": 4,
-          "minimum": 0,
-          "description": "Minimum minutes between two commentary lines, even if several triggers fire in a burst. Extra triggers in that window are dropped, not queued."
-        },
-        "lakshx.commentary.tier2.enabled": {
+        "lakshx.music.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Optional and OFF by default. For rare, special moments only, ask your already-configured AI provider (~/.lakshx/providers.json, same one the agent uses) for a one-off custom quip referencing what actually happened, instead of a canned line. Hard-capped by tier2.dailyLimit so cost stays bounded. Turning this on can incur a small number of API calls per day — leave off if you want zero API calls, ever."
+          "description": "LakshX Music player. OFF by default (opt-in). When on, a player panel is available and the '$(play) LakshX Music' status-bar item lets you start/pause it. The first play must be a click inside the player panel (browser autoplay rules)."
         },
-        "lakshx.commentary.tier2.dailyLimit": {
-          "type": "number",
-          "default": 1,
-          "minimum": 0,
-          "maximum": 20,
-          "description": "Maximum number of Tier-2 AI-generated quips per day (resets at local midnight). Only used when tier2.enabled is on."
-        },
-        "lakshx.commentary.music.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "LakshX FM background music. OFF by default and fully independent of commentary mute — this only controls the music player. When on, a player panel is available and the '$(play) LakshX FM' status-bar item lets you start/pause it. The first play must be a click inside the player panel (browser autoplay rules)."
-        },
-        "lakshx.commentary.music.station": {
+        "lakshx.music.station": {
           "type": "string",
           "default": "rp-main",
-          "description": "The current LakshX FM station: a built-in id ('rp-main' = Radio Paradise Main Mix, 'rp-mellow' = Radio Paradise Mellow Mix), or a custom https:// stream URL you added via 'LakshX FM: Pick Station / Add Custom Stream'."
+          "description": "The current LakshX Music station: a built-in id ('rp-main' = Radio Paradise Main Mix, 'rp-mellow' = Mellow Mix, 'rp-rock' = Rock Mix, 'rp-global' = Global/World Mix), or a custom https:// stream URL you added via 'LakshX Music: Pick Station / Add Custom Stream'."
         },
-        "lakshx.commentary.music.volume": {
+        "lakshx.music.volume": {
           "type": "number",
           "default": 60,
           "minimum": 0,
           "maximum": 100,
-          "description": "LakshX FM playback volume (0–100). Also settable live from the volume slider in the player panel."
-        },
-        "lakshx.commentary.music.duckDuringCommentary": {
-          "type": "boolean",
-          "default": true,
-          "description": "While a spoken commentary line plays, briefly lower LakshX FM's volume (to ~15%) so the line is audible, then restore it. Turn off to keep the music at full volume during commentary."
+          "description": "LakshX Music playback volume (0–100). Also settable live from the volume slider in the player panel."
         }
       }
     }

@@ -1,6 +1,6 @@
 "use strict";
 /**
- * LakshX FM — background-music station catalogue and pure helpers.
+ * LakshX Music — background-music station catalogue and pure helpers.
  *
  * This module is deliberately side-effect-free (no vscode, no fs, no
  * network) so it can be unit-tested with `node --test`. The extension host
@@ -14,8 +14,11 @@
  *
  * LICENSING — READ BEFORE ADDING STATIONS:
  *  - Radio Paradise (below) is shipped live: its public AAC streams are
- *    reachable over HTTPS and it is a listener-supported station. Attribution
- *    (station name + link) is shown in the player UI.
+ *    reachable over HTTPS and it explicitly invites third-party players to use
+ *    them. Attribution (station name + link) is shown in the player UI.
+ *  - Every shipped stream must clear TWO tests: (1) the exact URL resolves as
+ *    HTTPS audio, and (2) the station's ToS permits third-party embedding in a
+ *    product. Free is NOT the same as embeddable.
  *  - SomaFM is intentionally NOT shipped as a built-in station. SomaFM's
  *    Terms of Service prohibit embedding its streams in a commercial product
  *    without written permission. The commented block below documents the
@@ -44,9 +47,33 @@ const STATIONS = [
     id: "rp-mellow",
     name: "Radio Paradise — Mellow Mix",
     kind: "stream",
-    url: "https://stream.radioparadise.com/mellow-aac-128",
+    url: "https://stream.radioparadise.com/mellow-128",
     homepage: "https://radioparadise.com",
     note: "Quieter, low-key selections from Radio Paradise — good for focus.",
+  },
+  {
+    id: "rp-rock",
+    name: "Radio Paradise — Rock Mix",
+    kind: "stream",
+    url: "https://stream.radioparadise.com/rock-128",
+    homepage: "https://radioparadise.com",
+    note: "Guitar-forward Radio Paradise channel — energy for heads-down building.",
+  },
+  {
+    id: "rp-global",
+    name: "Radio Paradise — Global Mix",
+    kind: "stream",
+    url: "https://stream.radioparadise.com/global-128",
+    homepage: "https://radioparadise.com",
+    note: "World/downtempo Radio Paradise channel — warm, atmospheric focus.",
+  },
+  {
+    id: "rp-beyond",
+    name: "Radio Paradise — Beyond (ambient)",
+    kind: "stream",
+    url: "https://stream.radioparadise.com/beyond-128",
+    homepage: "https://radioparadise.com",
+    note: "Ambient/instrumental Radio Paradise channel — deep, distraction-free focus.",
   },
   {
     id: "lakshx-focus",
@@ -75,25 +102,22 @@ const STATIONS = [
 ];
 
 /** Config keys (single source of truth for the enabled/station/volume trio). */
-const CONFIG_SECTION = "lakshx.commentary";
+const CONFIG_SECTION = "lakshx.music";
 const CONFIG_KEYS = Object.freeze({
-  enabled: "music.enabled", // boolean, default false — OFF/opt-in, separate axis from commentary mute
-  station: "music.station", // string — a built-in station id OR a custom https:// URL
-  volume: "music.volume", // number 0..100, default 60
-  duckDuringCommentary: "music.duckDuringCommentary", // boolean, default true
+  enabled: "enabled", // boolean, default false — OFF/opt-in
+  station: "station", // string — a built-in station id OR a custom https:// URL
+  volume: "volume", // number 0..100, default 60
 });
 
 /** globalState key for the user's remembered custom stream URLs (list data — not a config scalar). */
 const GLOBALSTATE_KEYS = Object.freeze({
-  customStreams: "lakshx.commentary.music.customStreams", // string[] of https URLs the user added
+  customStreams: "lakshx.music.customStreams", // string[] of https URLs the user added
 });
 
 const DEFAULTS = Object.freeze({
   enabled: false,
   station: "rp-main",
   volume: 60,
-  duckDuringCommentary: true,
-  duckVolumeFactor: 0.15, // drop to ~15% of target while commentary speaks
 });
 
 /** True only for a syntactically valid https:// URL — http:// (mixed content in the webview) and everything else is rejected. */

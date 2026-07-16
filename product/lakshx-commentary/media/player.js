@@ -1,6 +1,6 @@
 "use strict";
 /*
- * LakshX FM webview player. Owns the single <audio> element and talks to
+ * LakshX Music webview player. Owns the single <audio> element and talks to
  * extension.js over postMessage.
  *
  * extension → webview:
@@ -8,8 +8,6 @@
  *   { type:"play" }                             play (only valid after the user's first click gesture)
  *   { type:"pause" }                            pause
  *   { type:"volume", value }                    set target volume 0..100
- *   { type:"duck" }                             drop to ~15% (commentary is speaking)
- *   { type:"unduck" }                           restore target volume
  * webview → extension:
  *   { type:"ready" }                            listener is live — safe to send setStation/play now (handshake)
  *   { type:"state", value:"playing"|"paused"|"error" }
@@ -26,13 +24,11 @@
   const stationLink = document.getElementById("stationLink");
   const statusEl = document.getElementById("status");
 
-  const DUCK_FACTOR = 0.15; // mirrors lib/music.js DEFAULTS.duckVolumeFactor
-  let targetVolume = 0.6; // 0..1, the user's chosen level (before ducking)
-  let ducked = false;
+  let targetVolume = 0.6; // 0..1, the user's chosen level
   let hasSource = false;
 
   function applyVolume() {
-    audio.volume = Math.max(0, Math.min(1, targetVolume * (ducked ? DUCK_FACTOR : 1)));
+    audio.volume = Math.max(0, Math.min(1, targetVolume));
   }
 
   function setStatus(text, cls) {
@@ -93,7 +89,7 @@
     switch (m.type) {
       case "setStation": {
         const wasPlaying = !audio.paused;
-        stationName.textContent = m.name || "LakshX FM";
+        stationName.textContent = m.name || "LakshX Music";
         if (m.homepage) {
           stationLink.href = m.homepage;
           stationLink.hidden = false;
@@ -126,14 +122,6 @@
           volume.value = String(Math.round(targetVolume * 100));
           applyVolume();
         }
-        break;
-      case "duck":
-        ducked = true;
-        applyVolume();
-        break;
-      case "unduck":
-        ducked = false;
-        applyVolume();
         break;
       default:
         break;
