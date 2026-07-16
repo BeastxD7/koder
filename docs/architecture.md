@@ -556,13 +556,16 @@ Key properties, precisely:
 - **It blocks.** The parent's turn does not continue until every dispatched task settles
   (`Promise.all`). This is the one property Phase 5's background-task work (below) changes.
 
-### 12.2 In progress, not yet merged: background (non-blocking) subagents
+### 12.2 Shipped: background (non-blocking) subagents
 
 This is the direct answer to "the main agent should be able to keep working while subagents
-run in the background" — designed in `docs/research/12`, and under active implementation as
-of this writing. **Treat this subsection as a description of the target design, not a
-confirmed-shipped feature** — check `agent/src/tasks.ts` and `git log` for whether it has
-landed by the time you're reading this.
+run in the background" — designed in `docs/research/12`, and merged (`agent/src/tasks.ts`,
+plus the `dispatch_subtasks` extension in `loop.ts`/`server.ts`/`tools.ts` and the tray UI in
+`product/lakshx-chat`). Verified end-to-end: 8 dedicated tests in
+`agent/test/background-tasks.test.ts` (immediate-return dispatch, `check_tasks`/`send_to_task`/
+`wait_for_tasks` semantics, cancel-isolation from the main turn, approve-mode rejection, the
+NOT-USER notification framing) plus 2 real e2e tests in `server-e2e.test.ts` proving the wake
+guarantee below against a genuine in-flight turn, not just a unit mock.
 
 The core change from §12.1: `dispatch_subtasks` gains a `background: true` flag. When set,
 the tool returns **immediately** with task IDs instead of waiting for `Promise.all` — the
