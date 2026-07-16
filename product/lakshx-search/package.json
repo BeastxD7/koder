@@ -1,0 +1,82 @@
+{
+  "name": "lakshx-search",
+  "displayName": "LakshX Search",
+  "description": "Semantic/embedding-based codebase search — ask the codebase conceptual questions via a local vector index. Complements grep/literal search, doesn't replace it.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.search.query",
+        "title": "LakshX Search: Ask the Codebase",
+        "icon": "$(search-fuzzy)"
+      },
+      {
+        "command": "lakshx.search.rebuildIndex",
+        "title": "LakshX Search: Rebuild Index"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "lakshx.search.query" },
+        { "command": "lakshx.search.rebuildIndex" }
+      ]
+    },
+    "configuration": {
+      "title": "LakshX Search",
+      "properties": {
+        "lakshx.search.provider": {
+          "type": "string",
+          "default": "",
+          "description": "Provider id from ~/.lakshx/providers.json to use for embeddings (e.g. \"openai\", \"mistral\", \"gemini\", \"openrouter\", \"ollama\"). Empty = auto-select the first confirmed embeddings-capable provider that's configured."
+        },
+        "lakshx.search.model": {
+          "type": "string",
+          "default": "",
+          "description": "Embedding model id to request from the chosen provider. Empty = that provider's default (e.g. text-embedding-3-small for openai)."
+        },
+        "lakshx.search.chunkLines": {
+          "type": "number",
+          "default": 60,
+          "description": "Lines per chunk when splitting a file for embedding."
+        },
+        "lakshx.search.chunkOverlapLines": {
+          "type": "number",
+          "default": 10,
+          "description": "Lines of overlap between consecutive chunks, so a function/class straddling a chunk boundary still appears whole in a neighboring chunk."
+        },
+        "lakshx.search.batchSize": {
+          "type": "number",
+          "default": 32,
+          "description": "Chunks sent per embeddings API request during indexing."
+        },
+        "lakshx.search.topN": {
+          "type": "number",
+          "default": 15,
+          "description": "Number of ranked results shown for a query."
+        },
+        "lakshx.search.maxFiles": {
+          "type": "number",
+          "default": 2000,
+          "description": "Hard cap on files walked during a full index/rebuild."
+        },
+        "lakshx.search.maxFileBytes": {
+          "type": "number",
+          "default": 524288,
+          "description": "Files larger than this are skipped during indexing (likely binary/minified/generated)."
+        }
+      }
+    }
+  }
+}
