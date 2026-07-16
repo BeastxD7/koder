@@ -15,6 +15,7 @@ const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
 const pattern = require("./lib/pattern.js");
+const rules = require("./lib/rules.js");
 
 // ---- workspace-scan bounds (a bounded STATIC scan; no code is ever executed,
 // same caps/rationale as lakshx-graph's dependency scan) -------------------
@@ -39,8 +40,15 @@ function relPathOf(uri) {
   return vscode.workspace.asRelativePath(uri, false).split(path.sep).join("/");
 }
 
-/** Scan the workspace and run the compiled pattern against every JS/TS file. */
-async function scanWorkspace(compiledPattern, progress) {
+/**
+ * Bounded static file collection shared by every scan surface in this
+ * extension (structural search/replace AND the SAST-lite rule scan below) —
+ * the same caps/rationale/exclude-glob as lakshx-graph's dependency scan.
+ * Returns both the {path,text} list (for pattern.js / rules.js, which are
+ * vscode-free and take that shape) and a path->Uri map so callers can turn a
+ * match's `path` back into a real vscode.Uri for diagnostics/edits.
+ */
+async function collectWorkspaceFiles(progress) {
   const uris = await vscode.workspace.findFiles(SCAN_INCLUDE, SCAN_EXCLUDE, SCAN_MAX_FILES);
   const files = [];
   const uriByPath = new Map();
@@ -58,7 +66,12 @@ async function scanWorkspace(compiledPattern, progress) {
     files.push({ path: rel, text: Buffer.from(bytes).toString("utf8") });
     if (progress && files.length % 200 === 0) progress.report({ message: `scanned ${files.length} files…` });
   }
+  return { files, uriByPath };
+}
 
+/** Scan the workspace and run the compiled pattern against every JS/TS file. */
+async function scanWorkspace(compiledPattern, progress) {
+  const { files, uriByPath } = await collectWorkspaceFiles(progress);
   const { matches, truncated } = pattern.searchFiles(files, compiledPattern, { maxMatches: MAX_MATCHES });
   matchIndex = new Map();
   const payload = [];
@@ -300,6 +313,81 @@ function showPanel(context) {
   ensurePanel(context);
 }
 
+// ---------------------------------------------------------------------------
+// SAST-lite rule scan (roadmap doc 16 "Security angle") — same bounded
+// workspace file collection as the search/replace panel above
+// (collectWorkspaceFiles), fed into the curated shape-matching rules in
+// lib/rules.js, surfaced through the standard Problems panel via a
+// vscode.languages.createDiagnosticCollection — the exact wiring style
+// product/lakshx-graph/extension.js already uses for its OSV vulnerability
+// diagnostics (new vscode.Diagnostic(range, message, severity),
+// diag.source = "LakshX", diag.code = <rule id>, collection.set(uri, diags)),
+// not a new diagnostics style invented for this extension.
+//
+// HONESTY (same framing as lib/rules.js and README.md): this is shape-
+// matching over a static snapshot of the workspace, not taint/dataflow
+// analysis, and every rule documents its own "what this WON'T catch" —
+// see lib/rules.js. No code is ever executed by this scan.
+// ---------------------------------------------------------------------------
+
+let sastDiagnostics = null;
+let sastOutputChannel = null;
+
+function sastSeverityToDiagnosticSeverity(sev) {
+  return sev === "error" ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
+}
+
+/** Run every curated SAST-lite rule across the bounded workspace scan and
+ * populate the Problems panel. Returns the total hit count. */
+async function scanWorkspaceForVulnerabilities(progress) {
+  const { files, uriByPath } = await collectWorkspaceFiles(progress);
+  const hits = rules.scanFiles(files);
+
+  // Group by file so each file gets exactly one diagnostics.set() call.
+  const byPath = new Map();
+  for (const hit of hits) {
+    if (!byPath.has(hit.path)) byPath.set(hit.path, []);
+    byPath.get(hit.path).push(hit);
+  }
+
+  sastDiagnostics.clear();
+  for (const [relPath, fileHits] of byPath) {
+    const uri = uriByPath.get(relPath);
+    if (!uri) continue; // shouldn't happen — every hit came from a file we just read
+    const diags = fileHits.map((hit) => {
+      const range = new vscode.Range(hit.startLine, hit.startChar, hit.endLine, hit.endChar);
+      const diag = new vscode.Diagnostic(range, `LakshX SAST-lite: ${hit.title}`, sastSeverityToDiagnosticSeverity(hit.severity));
+      diag.source = "LakshX";
+      diag.code = hit.ruleId;
+      return diag;
+    });
+    sastDiagnostics.set(uri, diags);
+  }
+  return hits.length;
+}
+
+async function runSastScanCommand() {
+  if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+    vscode.window.showWarningMessage("LakshX: open a folder/workspace to run the SAST-lite scan.");
+    return;
+  }
+  try {
+    const total = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "LakshX SAST-lite: scanning workspace", cancellable: false },
+      (progress) => scanWorkspaceForVulnerabilities(progress),
+    );
+    vscode.window.showInformationMessage(
+      total === 0
+        ? "LakshX SAST-lite: no hits from the curated rule pack — see Problems panel is unchanged. Shape-matching only, not proof of safety (see README)."
+        : `LakshX SAST-lite: ${total} hit${total === 1 ? "" : "s"} across the curated rule pack — see Problems panel. Shape-matching, not taint analysis — review each hit; see README/rules.js for what each rule won't catch.`,
+    );
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    sastOutputChannel.appendLine(`SAST-lite scan failed: ${msg}`);
+    vscode.window.showErrorMessage(`LakshX SAST-lite scan failed: ${msg}`);
+  }
+}
+
 function activate(context) {
   // Status bar entry point, same right-aligned cluster/numbering convention
   // as the other native LakshX panels (see lakshx-graph/extension.js's
@@ -311,9 +399,15 @@ function activate(context) {
   statusItem.command = "lakshx.structuralSearch.show";
   statusItem.show();
 
+  sastOutputChannel = vscode.window.createOutputChannel("LakshX SAST-lite");
+  sastDiagnostics = vscode.languages.createDiagnosticCollection("lakshxSast");
+
   context.subscriptions.push(
     vscode.commands.registerCommand("lakshx.structuralSearch.show", () => showPanel(context)),
+    vscode.commands.registerCommand("lakshx.structuralSearch.scanWorkspace", () => runSastScanCommand()),
     statusItem,
+    sastDiagnostics,
+    sastOutputChannel,
   );
 }
 

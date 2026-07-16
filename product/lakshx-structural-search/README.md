@@ -54,6 +54,7 @@ refactors.
 | `$NAME` | matches exactly **one** expression / argument slot (a run of tokens, balanced across nested brackets, up to the next top-level comma or the next literal pattern token) |
 | `$$NAME` | matches **zero or more** comma-separated expressions as a single capture — "the rest of the argument list", any count including empty |
 | repeated `$NAME` | every occurrence of the **same** placeholder name in one pattern must capture the **same** text (a back-reference), e.g. `$X === $X` matches `a === a` but not `a === b` |
+| `$NAME!lit` / `$$NAME!lit` | matches exactly like `$NAME`/`$$NAME`, but the whole pattern only fires if that capture is **NOT** a plain string/template literal token — see "SAST-lite security scan" below |
 
 ### Examples
 
@@ -162,6 +163,97 @@ assert.equal(got, want);   ->   assert.strictEqual(got, want);
   Undo), multi-file transaction. There is no code path that writes a file
   without that confirmation.
 
+## SAST-lite security scan (`lib/rules.js`)
+
+A small, curated pack of built-in rules for common JS/TS vulnerability
+*shapes* — SQLi and XSS-class — built entirely on the same token-level
+matcher above, reusing the same bounded workspace scan as search/replace
+(`extension.js`'s `collectWorkspaceFiles`). Run it via the command palette:
+**"LakshX: SAST-lite Security Scan (workspace)"** (`lakshx.structuralSearch.scanWorkspace`).
+Hits show up in the standard **Problems panel** (`vscode.languages.
+createDiagnosticCollection`), the same diagnostics style `lakshx-graph`
+already uses for its OSV dependency-vulnerability checks — not a new wiring
+style invented for this feature.
+
+**Say this plainly, the same way the section above does: this is
+shape-matching, not taint/dataflow analysis.** It looks at one call or
+assignment site in isolation and asks "is the risky argument a fixed
+literal, or something else?" — it never traces where a value actually came
+from, never crosses a function boundary, and never confirms that a flagged
+non-literal argument is actually attacker-controlled. Given this codebase
+just finished a security audit, overselling this as more than it is would be
+actively misleading — so every rule below documents its own **"what this
+WON'T catch"**, not just this general framing.
+
+### The `!lit` modifier (matcher extension)
+
+To express "flag only if this captured slot is NOT a plain string/template
+literal" — the actual injection signal — patterns can suffix a placeholder
+name with `!lit`: `$SQL!lit` (or `$$SQL!lit` for a trailing/variadic slot).
+During MATCHING it behaves exactly like `$SQL`/`$$SQL` (captures one
+expression slot, or the rest of a statement for a trailing variadic one).
+The extra behavior: once a candidate match is otherwise complete, any
+`!lit`-tagged capture that turns out to be **exactly one plain string or
+template token** causes the WHOLE match to be rejected (not just that
+capture) — so the rule only actually fires when the slot is something other
+than a fixed literal (a variable, a concatenation, a call, ...).
+
+```
+Pattern:   $OBJ.query($SQL!lit)
+db.query("SELECT * FROM users")     NOT flagged  — SQL is one string token, a plain literal
+db.query(sql)                       flagged      — SQL is an identifier, not a literal
+db.query("SELECT * FROM " + userInput)   flagged — SQL is 3 tokens (string, +, ident), not ONE literal token
+```
+
+This is additive: a placeholder with no `!lit` suffix behaves exactly as it
+did before this feature — no existing pattern's behavior changes.
+
+One sharp edge worth knowing (and pinned as a test in `test/rules.test.js`):
+a **template literal** is tokenized as one opaque token no matter what it
+interpolates (see "Known limitations" below), so
+`` db.query(`SELECT * FROM x WHERE id=${userInput}`) `` is treated as "one
+plain literal token" and is **NOT flagged** — a real, acknowledged gap, not
+an oversight.
+
+### The 4 curated rules
+
+| id | fires on | severity |
+|---|---|---|
+| `sast-sql-injection` | `$OBJ.query($SQL!lit)` / `$OBJ.execute($SQL!lit)` — string-built SQL | error |
+| `sast-xss-innerhtml` | `$EL.innerHTML = $$X!lit` — dynamic innerHTML assignment | warning |
+| `sast-eval` | `eval($X)` — any argument, eval itself is the risk | warning |
+| `sast-shell-exec` | `child_process.exec($CMD!lit)` / `require("child_process").exec($CMD!lit)` — dynamic shell exec | error |
+
+Each rule in `lib/rules.js` carries its own `why` ("why this matters") and
+`wontCatch` ("what this WON'T catch") fields, surfaced in the source so the
+honesty framing travels with the rule, not just this doc. Concrete
+**what-this-WON'T-catch** examples, each proven by a real (not just
+asserted) test in `test/rules.test.js`:
+
+- **Template literal with interpolation** (see above) —
+  `` db.query(`SELECT ... ${userInput}`) `` is missed; the tokenizer's
+  opaque-template-token limitation defeats the literal check.
+- **Extra call arguments** — `db.query(sql, callback)` doesn't match the
+  1-argument pattern shape at all (the placeholder stops at the first
+  top-level comma), so it's silently never scanned.
+- **A common destructured import** — `const { exec } = require("child_process");
+  exec(cmd);` is missed: at the call site it's just a bare `exec(cmd)`,
+  structurally indistinguishable from any other 1-argument function call.
+- **A compound assignment operator** — `el.innerHTML += userInput` uses a
+  different operator token (`+=` vs `=`) than the rule's exact pattern and
+  is not matched.
+- **Aliased/indirect `eval`** — `const run = eval; run(userInput);` doesn't
+  match the literal identifier `eval` the rule looks for.
+
+One important **non-gap**, worth stating precisely because the naive
+intuition is wrong: taint flowing through an *intermediate variable within
+the same expression* is generally still caught, because a variable
+reference is not a literal token — `const q = userInput; db.query(q +
+rest);` **does** fire (`q + rest` is 3 tokens, not one literal). The real
+gap is taint that flows through a call the rule's shape doesn't cover at
+all, an intermediate template literal, or extra call arguments — the
+concrete cases enumerated above, not "any variable at all."
+
 ## Known limitations (concrete examples — pinned as tests in `test/pattern.test.js`)
 
 1. **Argument order is positional, not commutative.** `foo($A, $B)` matches
@@ -197,11 +289,15 @@ literal token between them are unsupported/ambiguous.
 
 ## Files
 
-- `lib/pattern.js` — pure, vscode-free tokenizer + matcher + substitution.
-  Fully unit-tested, no `vscode` import, importable straight into
-  `node --test`.
+- `lib/pattern.js` — pure, vscode-free tokenizer + matcher + substitution
+  (including the `!lit` modifier). Fully unit-tested, no `vscode` import,
+  importable straight into `node --test`.
+- `lib/rules.js` — pure, vscode-free curated SAST-lite rule pack (4 rules)
+  built on `lib/pattern.js`. Fully unit-tested, no `vscode` import.
 - `extension.js` — the only file that touches `vscode`: bounded workspace
-  scan, the webview panel, and the `WorkspaceEdit` apply path.
+  scan (`collectWorkspaceFiles`, shared by both the search/replace panel and
+  the SAST-lite scan), the webview panel, the `WorkspaceEdit` apply path, and
+  the `lakshxSast` `DiagnosticCollection` for the SAST-lite scan.
 - `media/search.{js,css}` — the search/replace panel UI (vanilla DOM, no
   framework/CDN, consistent with `lakshx-graph`'s canvas webview).
 - `test/pattern.test.js` — `node --test` suite: simple call-shape matches,
@@ -210,6 +306,10 @@ literal token between them are unsupported/ambiguous.
   placeholder "tricky" cases, and the three known-limitation examples above
   pinned as tests (so a "fix" can't silently overclaim capability without a
   test update flagging it).
+- `test/rules.test.js` — `node --test` suite for the SAST-lite rule pack:
+  positive and negative (safe) cases for each of the 4 rules, plus the
+  "what this WON'T catch" gaps above, each pinned as a test that proves the
+  miss rather than just asserting it in prose.
 
 ## Usage
 
@@ -218,15 +318,19 @@ Command palette: **"LakshX: Structural Search & Replace"**, or the
 replacement template, hit Search, review the before/after preview per match,
 check/uncheck individual matches, then "Apply selected".
 
+For the SAST-lite scan: command palette **"LakshX: SAST-lite Security Scan
+(workspace)"**. Hits appear in the Problems panel, tagged `source: "LakshX"`
+with the rule id as `code` (e.g. `sast-sql-injection`).
+
 ## Verification
 
 ```
-$ node --check lib/pattern.js extension.js media/search.js test/pattern.test.js
+$ node --check lib/pattern.js lib/rules.js extension.js media/search.js test/pattern.test.js test/rules.test.js
 (all pass, no output)
 
 $ node --test test/*.test.js
-ℹ tests 27
-ℹ pass 27
+ℹ tests 43
+ℹ pass 43
 ℹ fail 0
 ```
 

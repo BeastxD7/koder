@@ -1,7 +1,7 @@
 {
   "name": "lakshx-structural-search",
   "displayName": "LakshX Structural Search",
-  "description": "Find & replace by code SHAPE, not literal text — JetBrains-SSR-style structural search for JS/TS using placeholders ($FN, $$ARGS), with a mandatory preview-before-apply diff. Token-level structural match, not full AST — see README for scope.",
+  "description": "Find & replace by code SHAPE, not literal text — JetBrains-SSR-style structural search for JS/TS using placeholders ($FN, $$ARGS), with a mandatory preview-before-apply diff. Also includes a curated SAST-lite security scan (SQLi/XSS-class shapes) via the same matcher. Token-level structural match, not full AST or taint analysis — see README for scope.",
   "version": "0.0.1",
   "publisher": "lakshx",
   "license": "MIT",
@@ -21,12 +21,20 @@
         "command": "lakshx.structuralSearch.show",
         "title": "LakshX: Structural Search & Replace",
         "icon": "$(regex)"
+      },
+      {
+        "command": "lakshx.structuralSearch.scanWorkspace",
+        "title": "LakshX: SAST-lite Security Scan (workspace)",
+        "icon": "$(shield)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "lakshx.structuralSearch.show"
+        },
+        {
+          "command": "lakshx.structuralSearch.scanWorkspace"
         }
       ]
     }

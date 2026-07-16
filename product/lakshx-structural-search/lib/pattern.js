@@ -89,6 +89,9 @@ const REGEX_PRECEDING_KEYWORDS = new Set([
  *   value: normalized comparison value (decoded string contents for "string";
  *          same as text otherwise)
  *   start/end: character offsets into `source` (end exclusive)
+ *   notLiteral (placeholder/placeholder-variadic only): true when the
+ *     pattern wrote `$Name!lit` — see the "!lit modifier" comment at its
+ *     parse site below and the constraint check at the end of tryMatch().
  */
 function tokenize(source, opts = {}) {
   const allowPlaceholders = !!opts.allowPlaceholders;
@@ -121,7 +124,13 @@ function tokenize(source, opts = {}) {
       continue;
     }
 
-    // placeholders (pattern-only): $$Name then $Name
+    // placeholders (pattern-only): $$Name then $Name, optionally suffixed
+    // with the `!lit` modifier (see SAST-lite rules.js / README "Modifiers"):
+    // `$NAME!lit` matches exactly like `$NAME` during matching, but flags the
+    // compiled pattern's capture as "must NOT be a plain string/template
+    // literal token for the overall match to count" — checked once at the
+    // end of tryMatch(), below. Purely additive: a placeholder with no `!lit`
+    // suffix behaves exactly as before.
     if (allowPlaceholders && c === "$") {
       const double = source[i + 1] === "$";
       const start = i + (double ? 2 : 1);
@@ -130,11 +139,25 @@ function tokenize(source, opts = {}) {
         j++;
         while (j < n && IDENT_PART.test(source[j])) j++;
         const name = source.slice(start, j);
+        let notLiteral = false;
+        // Require the exact literal "!lit" not followed by another ident
+        // char, so a placeholder legitimately named e.g. `$X!literalValue`
+        // (unusual, but not our business to break) isn't misparsed — the
+        // `!` and following chars just fall through to normal punct/ident
+        // tokenizing in that case.
+        if (source.startsWith("!lit", j)) {
+          const after = j + 4;
+          if (!(after < n && IDENT_PART.test(source[after]))) {
+            notLiteral = true;
+            j = after;
+          }
+        }
         tokens.push({
           type: double ? "placeholder-variadic" : "placeholder",
           text: source.slice(i, j),
           value: name,
           name,
+          notLiteral,
           start: i,
           end: j,
         });
@@ -431,13 +454,33 @@ function tryMatch(patternTokens, sourceTokens, sStart) {
       const endIdx = extentOf(sourceTokens, sIdx, { variadic, stopTok });
       if (!variadic && endIdx === sIdx) return null; // single placeholder needs >=1 token
       const capturedToks = sourceTokens.slice(sIdx, endIdx);
-      captures.set(ptok.name, { tokens: capturedToks, variadic });
+      captures.set(ptok.name, { tokens: capturedToks, variadic, notLiteral: !!ptok.notLiteral });
       sIdx = endIdx;
       continue;
     }
     if (sIdx >= sourceTokens.length) return null;
     if (!literalTokenEquals(ptok, sourceTokens[sIdx])) return null;
     sIdx++;
+  }
+  // `!lit` constraint check (see tokenizer comment above): a capture tagged
+  // notLiteral fails the WHOLE match if it turns out to be exactly one plain
+  // string/template token — this is what lets a rule like
+  // `$OBJ.query($SQL!lit)` match anything as a slot but only actually FIRE
+  // when that slot isn't a fixed literal. A capture is only "a plain literal"
+  // when it collapses to a single string/template token; multiple tokens
+  // (e.g. a concatenation `"a" + b`) are, correctly, NOT a plain literal and
+  // DO count as the risk signal. Template literals are tokenized as one
+  // opaque token regardless of any `${...}` interpolation inside them (see
+  // README "Known limitations") — so a template literal is always treated as
+  // "literal" here even if it interpolates a variable. That is a real,
+  // acknowledged gap (see rules.js "what this WON'T catch" + README), not an
+  // oversight: fixing it would require decomposing template literals, which
+  // this tokenizer deliberately doesn't do.
+  for (const cap of captures.values()) {
+    if (!cap.notLiteral) continue;
+    const toks = cap.tokens;
+    const isPlainLiteral = toks.length === 1 && (toks[0].type === "string" || toks[0].type === "template");
+    if (isPlainLiteral) return null;
   }
   return { endIdx: sIdx, captures };
 }
