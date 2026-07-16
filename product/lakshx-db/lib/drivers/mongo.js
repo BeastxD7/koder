@@ -125,6 +125,27 @@ async function introspect(client, dbName) {
   };
 }
 
+// ---- data browsing (user reading their own rows; NOT the AI db_query tool) --
+//
+// A FIND-ONLY bounded page: `db.collection(name).find({}).skip(n).limit(k)`.
+// No aggregation stages that could write, no $out/$merge — just a plain cursor.
+// The collection name comes from introspection (listCollections), and Mongo's
+// collection() takes a namespace string, not a query, so there's no injection
+// surface here. Reuses the session's already-connected client + resolved
+// dbName (passed in by extension.js), same as introspect().
+async function fetchCollectionPage(client, dbName, collectionName, { pageSize, page } = {}) {
+  const size = Math.min(Math.max(1, Math.floor(Number(pageSize)) || 50), 500);
+  const skip = Math.max(0, Math.floor(Number(page)) || 0) * size;
+  const db = client.db(dbName);
+  // Request size+1 (the probe row) so the caller can tell there's a next page
+  // without a separate countDocuments.
+  const docs = await db
+    .collection(collectionName)
+    .find({}, { limit: size + 1, skip })
+    .toArray();
+  return { docs };
+}
+
 module.exports = {
   id: "mongo",
   label: "MongoDB",
@@ -142,4 +163,5 @@ module.exports = {
   close,
   resolveDatabase,
   introspect,
+  fetchCollectionPage,
 };

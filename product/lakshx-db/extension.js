@@ -21,6 +21,13 @@ const { listEngines, getDriver } = require("./lib/engines.js");
 const { redactText } = require("./lib/redact.js");
 const { createRunReadOnlyQuery } = require("./lib/query-api.js");
 const { DEFAULT_TIMEOUT_MS } = require("./lib/query-guard.js");
+const { buildBoundedSelect, shapeSqlPage, shapeMongoPage, DEFAULT_PAGE_SIZE } = require("./lib/data-browse.js");
+
+// Data-browsing page size (rows/documents per page). The bounded SELECT asks
+// for PAGE_SIZE + 1 (a probe row) to detect "has more" without a COUNT; we
+// pass maxRows = PAGE_SIZE + 1 into the read-only path so its own outer LIMIT
+// (maxRows + 1) never clips below the page. See lib/data-browse.js.
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 
 // Per-connection "Allow AI queries" opt-in (design §6), default OFF. Stored in
 // globalState (it's a boolean policy flag, not a secret), keyed per engine so
@@ -88,6 +95,8 @@ class DbSession {
     this.panel = null;
     this.handle = null;
     this.dbName = null;
+    this.conn = null; // stored secret (URI / file path), stashed for the SQL data-browse read-only path
+    this.loadSeq = 0; // stale-response guard for rapid Next/Prev / table switches
   }
 
   async ensureHandle() {
@@ -103,11 +112,64 @@ class DbSession {
     }
     try {
       this.handle = await this.driver.connect(conn);
+      // Stash the secret so the SQL data-browse path can hand it to
+      // driver.runReadOnlyQuery (which opens its OWN fresh read-only handle per
+      // call — the reused introspection handle is never used to run browse SQL).
+      this.conn = conn;
     } catch (err) {
       this.handle = null;
       throw new Error(`Couldn't connect: ${redactText(String(err?.message ?? err))}`);
     }
     return this.handle;
+  }
+
+  /** Load one bounded page of rows/documents for a browsed table/collection and
+   * post it to the webview. Reuses the EXISTING read-only machinery: SQL goes
+   * through driver.runReadOnlyQuery (fresh read-only transaction, row cap,
+   * timeout); Mongo through a find-only cursor. This is direct user browsing —
+   * NOT gated by the "Allow AI queries" opt-in. */
+  async loadTable(tableName, page) {
+    const seq = ++this.loadSeq;
+    const pageIdx = Math.max(0, Math.floor(Number(page)) || 0);
+    this.panel?.webview.postMessage({ type: "rowsLoading", table: tableName, page: pageIdx });
+    try {
+      const handle = await this.ensureHandle();
+      if (!this.dbName) {
+        this.dbName = await this.driver.resolveDatabase(handle, { pick: quickPickDatabase, log: logLine });
+      }
+
+      let payload;
+      if (typeof this.driver.runReadOnlyQuery === "function") {
+        // SQL engines: bounded SELECT with a safely-quoted catalog table name,
+        // run through the read-only path. maxRows = PAGE_SIZE + 1 so the path's
+        // own outer LIMIT never clips the probe row (see lib/data-browse.js).
+        const sql = buildBoundedSelect(this.engineId, tableName, { pageSize: PAGE_SIZE, page: pageIdx });
+        const result = await this.driver.runReadOnlyQuery(this.conn, sql, { maxRows: PAGE_SIZE + 1 });
+        payload = shapeSqlPage({
+          columns: result.columns || [],
+          rows: result.rows || [],
+          pageSize: PAGE_SIZE,
+          page: pageIdx,
+        });
+      } else if (typeof this.driver.fetchCollectionPage === "function") {
+        // Mongo: find-only bounded page over the live client + resolved dbName.
+        const { docs } = await this.driver.fetchCollectionPage(handle, this.dbName, tableName, {
+          pageSize: PAGE_SIZE,
+          page: pageIdx,
+        });
+        payload = shapeMongoPage({ docs: docs || [], pageSize: PAGE_SIZE, page: pageIdx });
+      } else {
+        throw new Error("This engine does not support data browsing.");
+      }
+
+      if (seq !== this.loadSeq) return; // a newer load landed — drop this stale page
+      this.panel?.webview.postMessage({ type: "rows", table: tableName, ...payload });
+    } catch (err) {
+      const message = redactText(String(err?.message ?? err));
+      logLine(`[${this.driver.label}] Data load failed for "${tableName}": ${message}`);
+      if (seq !== this.loadSeq) return;
+      this.panel?.webview.postMessage({ type: "rowsError", table: tableName, page: pageIdx, message });
+    }
   }
 
   async refresh() {
@@ -138,6 +200,7 @@ class DbSession {
     await this.driver.close(this.handle);
     this.handle = null;
     this.dbName = null;
+    this.conn = null;
   }
 }
 
@@ -165,21 +228,48 @@ function panelHtml(context, webview) {
 <div id="app">
   <div id="toolbar">
     <span id="title">Database Schema</span>
+    <div class="tabs" role="tablist">
+      <button id="tabSchema" class="tab active" role="tab" aria-selected="true" title="Entity-relationship diagram">Schema</button>
+      <button id="tabData" class="tab" role="tab" aria-selected="false" title="Browse actual rows / documents">Data</button>
+    </div>
     <div class="spacer"></div>
     <button id="aiQueries" class="ghost" title="Let the AI assistant run read-only queries against this connection">Allow AI queries</button>
     <button id="refresh" class="ghost" title="Re-read the schema and redraw">Refresh</button>
     <button id="changeConnection" class="ghost" title="Forget this connection and connect elsewhere">Change Connection&hellip;</button>
   </div>
-  <div id="banner" hidden></div>
-  <div id="loading">Connecting and reading the schema&hellip;</div>
-  <div id="error" hidden></div>
-  <div id="diagramWrap" hidden>
-    <div id="diagram"></div>
+
+  <!-- SCHEMA view (existing Mermaid ER diagram + relationships) -->
+  <div id="schemaView">
+    <div id="banner" hidden></div>
+    <div id="loading">Connecting and reading the schema&hellip;</div>
+    <div id="error" hidden></div>
+    <div id="diagramWrap" hidden>
+      <div id="diagram"></div>
+    </div>
+    <div id="relPanel" hidden>
+      <h3 id="relTitle">Relationships</h3>
+      <p class="hint" id="relHint"></p>
+      <ul id="relList"></ul>
+    </div>
   </div>
-  <div id="relPanel" hidden>
-    <h3 id="relTitle">Relationships</h3>
-    <p class="hint" id="relHint"></p>
-    <ul id="relList"></ul>
+
+  <!-- DATA view (bounded row/document browsing) -->
+  <div id="dataView" hidden>
+    <div id="dataControls">
+      <label for="tableSelect" class="ctlLabel">Table</label>
+      <select id="tableSelect" title="Pick a table or collection to browse"></select>
+      <div class="spacer"></div>
+      <button id="pagePrev" class="ghost" disabled title="Previous page">&larr; Prev</button>
+      <span id="pageInfo" class="pageInfo"></span>
+      <button id="pageNext" class="ghost" disabled title="Next page">Next &rarr;</button>
+    </div>
+    <div id="dataBanner" hidden></div>
+    <div id="dataEmpty" class="dataMsg">Pick a table above to browse its rows.</div>
+    <div id="dataLoading" class="dataMsg" hidden>Loading rows&hellip;</div>
+    <div id="dataError" class="dataMsg" hidden></div>
+    <div id="tableWrap" hidden>
+      <table id="dataTable"><thead></thead><tbody></tbody></table>
+    </div>
   </div>
 </div>
 <script src="${mermaidJs}"></script>
@@ -253,6 +343,13 @@ async function showPanel(context) {
       postAiState(context);
     } else if (m.type === "toggleAiQueries") {
       await handleToggleAiQueries(context);
+    } else if (m.type === "loadTable") {
+      // Direct user browsing of their own connected DB — deliberately NOT
+      // gated by the "Allow AI queries" opt-in (that flag is only for the AI
+      // db_query tool).
+      if (typeof m.table === "string" && m.table) {
+        await session.loadTable(m.table, m.page);
+      }
     }
   });
 }
