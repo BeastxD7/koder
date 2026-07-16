@@ -15,6 +15,19 @@
 const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
+const depgraph = require("./lib/depgraph.js");
+
+// ---- dependency-scan bounds (a bounded STATIC scan; no code is executed) ----
+const SCAN_MAX_FILES = 2000; // hard cap on files opened
+const SCAN_MAX_BYTES = 512 * 1024; // per-file size cap; larger files are skipped
+const SCAN_INCLUDE = "**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts,py,pyi}";
+// findFiles honors files.exclude/search.exclude (which respect .gitignore-ish
+// defaults); we add the usual build/vendor dirs explicitly so a repo without
+// those settings still gets a clean graph.
+const SCAN_EXCLUDE = "**/{node_modules,.git,dist,build,out,.next,.venv,venv,__pycache__,coverage,vendor}/**";
+// Cap how many nodes we ship to the webview so a huge monorepo doesn't render
+// as an unreadable hairball. We keep all cyclic + highest-degree internal nodes.
+const RENDER_NODE_CAP = 600;
 
 // A node's "identity" is derived from its declaration site, since
 // CallHierarchyItem objects don't carry a stable id of their own. Same
@@ -143,6 +156,148 @@ function dedupeNodes(nodes) {
 
 let currentPanel = null;
 let currentSession = null;
+// Maps a workspace-relative POSIX path (a dep-graph node id) back to its Uri so
+// the webview's "open this file" click can resolve it. Rebuilt on every scan.
+let depPathToUri = new Map();
+
+// ---------------------------------------------------------------------------
+// Dependency graph: workspace scan
+// ---------------------------------------------------------------------------
+
+/** POSIX-normalized workspace-relative path for a Uri (forward slashes). */
+function relPathOf(uri) {
+  return vscode.workspace.asRelativePath(uri, false).split(path.sep).join("/");
+}
+
+/**
+ * Scan the workspace and build a dependency graph. This is the ONE place that
+ * touches the filesystem; all parsing/model logic lives in lib/depgraph.js.
+ * Returns the webview payload ({nodes, edges, cycles, stats}) already capped to
+ * RENDER_NODE_CAP. Best-effort: unreadable files are skipped, not fatal.
+ */
+async function scanDependencyGraph(progress) {
+  const uris = await vscode.workspace.findFiles(SCAN_INCLUDE, SCAN_EXCLUDE, SCAN_MAX_FILES);
+  const files = [];
+  depPathToUri = new Map();
+  for (const uri of uris) {
+    let bytes;
+    try {
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.size > SCAN_MAX_BYTES) continue;
+      bytes = await vscode.workspace.fs.readFile(uri);
+    } catch {
+      continue; // unreadable / vanished — skip
+    }
+    const rel = relPathOf(uri);
+    depPathToUri.set(rel, uri);
+    files.push({ path: rel, text: Buffer.from(bytes).toString("utf8") });
+    if (progress && files.length % 200 === 0) progress.report({ message: `scanned ${files.length} files…` });
+  }
+
+  const graph = depgraph.buildGraph(files);
+  return capGraphForRender(graph);
+}
+
+/**
+ * Keep the render payload bounded: retain every cyclic node, then fill up to
+ * RENDER_NODE_CAP with the highest-degree internal nodes, then any externals
+ * they connect to. Edges are filtered to the kept node set. `stats` always
+ * reflects the FULL graph so the numbers stay honest even when the view is
+ * truncated.
+ */
+function capGraphForRender(graph) {
+  const { nodes, edges, cycles, stats } = graph;
+  if (nodes.length <= RENDER_NODE_CAP) {
+    return { nodes, edges, cycles, stats, truncatedNodes: 0 };
+  }
+  const degree = new Map();
+  for (const n of nodes) degree.set(n.id, n.fanIn + n.fanOut);
+  const keep = new Set();
+  for (const n of nodes) if (n.inCycle) keep.add(n.id);
+  const internals = nodes
+    .filter((n) => n.type === "internal" && !keep.has(n.id))
+    .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0));
+  for (const n of internals) {
+    if (keep.size >= RENDER_NODE_CAP) break;
+    keep.add(n.id);
+  }
+  // include externals directly attached to kept internals (up to a little slack)
+  for (const e of edges) {
+    if (keep.size >= RENDER_NODE_CAP + 120) break;
+    const from = nodes.find((n) => n.id === e.from);
+    const to = nodes.find((n) => n.id === e.to);
+    if (keep.has(e.from) && to && to.type === "external") keep.add(e.to);
+    if (keep.has(e.to) && from && from.type === "external") keep.add(e.from);
+  }
+  const keptNodes = nodes.filter((n) => keep.has(n.id));
+  const keptEdges = edges.filter((e) => keep.has(e.from) && keep.has(e.to));
+  const keptCycles = cycles.filter((c) => c.every((id) => keep.has(id)));
+  return {
+    nodes: keptNodes,
+    edges: keptEdges,
+    cycles: keptCycles,
+    stats,
+    truncatedNodes: nodes.length - keptNodes.length,
+  };
+}
+
+async function runDependencyScan() {
+  if (!currentPanel) return;
+  if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+    currentPanel.webview.postMessage({ type: "error", message: "Open a folder/workspace to scan its dependency graph." });
+    return;
+  }
+  try {
+    const payload = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: "LakshX: scanning dependencies" },
+      (progress) => scanDependencyGraph(progress),
+    );
+    currentPanel.webview.postMessage({ type: "depInit", ...payload });
+  } catch (err) {
+    currentPanel.webview.postMessage({ type: "error", message: String(err && err.message ? err.message : err) });
+  }
+}
+
+/** Open a workspace file by its dep-graph relative-path id. */
+async function openDepPath(relPath) {
+  const uri = depPathToUri.get(relPath);
+  if (!uri) return;
+  const doc = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.One });
+}
+
+/** Ensure the shared graph panel exists; create it (with handlers) if not. */
+function ensurePanel(context) {
+  if (currentPanel) {
+    currentPanel.reveal(vscode.ViewColumn.Beside, true);
+    return currentPanel;
+  }
+  currentPanel = vscode.window.createWebviewPanel(
+    "lakshxCallGraph",
+    "LakshX Graph",
+    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+    },
+  );
+  currentPanel.onDidDispose(() => {
+    currentPanel = null;
+    currentSession = null;
+  });
+  currentPanel.webview.html = panelHtml(context, currentPanel.webview);
+  currentPanel.webview.onDidReceiveMessage((m) => onWebviewMessage(context, m));
+  return currentPanel;
+}
+
+async function showDependencyGraph(context) {
+  ensurePanel(context);
+  currentPanel.title = "LakshX Dependency Graph";
+  // ask the webview to switch to dep mode; it will request a scan if it has no
+  // data yet (keeps the scan lazy and driven from one place).
+  currentPanel.webview.postMessage({ type: "switchToDep" });
+}
 
 async function showCallGraph(context) {
   const editor = vscode.window.activeTextEditor;
@@ -164,27 +319,7 @@ async function showCallGraph(context) {
   }
   const rootItem = items[0];
 
-  if (currentPanel) {
-    currentPanel.reveal(vscode.ViewColumn.Beside, true);
-  } else {
-    currentPanel = vscode.window.createWebviewPanel(
-      "lakshxCallGraph",
-      "LakshX Call Graph",
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
-      },
-    );
-    currentPanel.onDidDispose(() => {
-      currentPanel = null;
-      currentSession = null;
-    });
-    currentPanel.webview.html = panelHtml(context, currentPanel.webview);
-    currentPanel.webview.onDidReceiveMessage((m) => onWebviewMessage(context, m));
-  }
-
+  ensurePanel(context);
   currentSession = new CallGraphSession(currentPanel);
   currentPanel.title = `Call Graph: ${rootItem.name}`;
 
@@ -203,7 +338,24 @@ async function showCallGraph(context) {
 }
 
 async function onWebviewMessage(context, m) {
-  if (!currentSession || !currentPanel) return;
+  if (!currentPanel) return;
+  // Dependency-graph messages don't need a call-hierarchy session — handle them
+  // first so the dep view works even if Call Graph was never opened.
+  try {
+    if (m.type === "scanDependencies") {
+      await runDependencyScan();
+      return;
+    }
+    if (m.type === "openPath") {
+      await openDepPath(m.path);
+      return;
+    }
+  } catch (err) {
+    currentPanel.webview.postMessage({ type: "error", message: String(err && err.message ? err.message : err) });
+    return;
+  }
+
+  if (!currentSession) return;
   try {
     switch (m.type) {
       case "expand": {
@@ -257,6 +409,10 @@ function panelHtml(context, webview) {
 </head><body>
 <div id="app">
   <div id="toolbar">
+    <div id="modeToggle" role="tablist">
+      <button id="modeDep" role="tab">Dependencies</button>
+      <button id="modeCall" role="tab" class="active">Call graph</button>
+    </div>
     <span id="title">Call Graph</span>
     <div class="spacer"></div>
     <button id="zoomOut" class="ghost" title="Zoom out">&#8722;</button>
@@ -267,8 +423,25 @@ function panelHtml(context, webview) {
     <span class="chip incoming"><span class="dot"></span>Incoming (callers)</span>
     <span class="chip outgoing"><span class="dot"></span>Outgoing (callees)</span>
   </div>
+  <div id="depLegend" hidden>
+    <span class="chip internal"><span class="dot"></span>File</span>
+    <span class="chip external"><span class="dot"></span>External package</span>
+    <span class="chip cycle"><span class="dot"></span>Circular dependency</span>
+  </div>
+  <div id="depControls" hidden>
+    <input id="depSearch" type="text" placeholder="Search files / packages…" spellcheck="false" />
+    <label class="check"><input id="depHideExt" type="checkbox" />Hide externals</label>
+    <label class="check"><input id="depCollapseExt" type="checkbox" />Collapse externals</label>
+    <button id="depRescan" class="ghost" title="Re-scan the workspace">Re-scan</button>
+  </div>
+  <div id="stats" hidden></div>
   <canvas id="canvas"></canvas>
   <div id="empty" hidden>No call hierarchy available at the cursor. Place it on a function or method name and try again.</div>
+  <div id="depHint" hidden>
+    Build an interactive map of your workspace's file &amp; package dependencies — imports, fan-in/out, and circular dependencies.
+    <br><button id="depScanBtn">Scan workspace</button>
+  </div>
+  <div id="tooltip" hidden></div>
 </div>
 <script src="${js}"></script>
 </body></html>`;
@@ -288,9 +461,21 @@ function activate(context) {
   statusItem.command = "lakshx.showCallGraph";
   statusItem.show();
 
+  // Dependency-graph entry point — a second always-visible affordance right
+  // beside the Call Graph one, priority 996 (same right-aligned cluster; see
+  // the numbering note above). Unlike Call Graph this needs no cursor, so it's
+  // always actionable.
+  const depStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 996);
+  depStatusItem.text = "$(type-hierarchy) Dep Graph";
+  depStatusItem.tooltip = "LakshX: Show Dependency Graph (file & package import map of the workspace)";
+  depStatusItem.command = "lakshx.showDependencyGraph";
+  depStatusItem.show();
+
   context.subscriptions.push(
     vscode.commands.registerCommand("lakshx.showCallGraph", () => showCallGraph(context)),
+    vscode.commands.registerCommand("lakshx.showDependencyGraph", () => showDependencyGraph(context)),
     statusItem,
+    depStatusItem,
   );
 }
 

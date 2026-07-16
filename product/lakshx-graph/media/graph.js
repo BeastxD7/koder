@@ -49,7 +49,23 @@ function createGraphApp(canvas, opts) {
   let rootId = null;
   let boxes = []; // laid-out render boxes (nodes + "more" markers), world coords
 
-  let transport = { expand() {}, loadMore() {}, openFile() {} };
+  let transport = { expand() {}, loadMore() {}, openFile() {}, openPath() {}, requestScan() {} };
+
+  // ---- dependency-graph mode (parallel to the call-graph state above) ----
+  // Kept in its own maps so call-mode's nodesById/edges/parentOf semantics are
+  // never touched. `mode` gates which layout/render/hit-test path runs.
+  let mode = "call"; // "call" | "dep"
+  let depRaw = null; // { nodes, edges, cycles, stats } straight from the host
+  let depNodes = new Map(); // id -> { ...node, x, y, vx, vy, r } (view set, post-filter)
+  let depEdges = []; // { from, to, kind } (view set)
+  let depFocus = null; // focused node id (highlight neighborhood)
+  let depFilter = ""; // search text (lowercased)
+  let depHideExternal = false;
+  let depCollapseExternal = false;
+  let depHover = null; // hovered box (for tooltip)
+  const tooltipEl = opts.tooltipEl || null;
+  const statsEl = opts.statsEl || null;
+  const hintEl = opts.hintEl || null;
 
   let scale = 1;
   let panX = 0;
@@ -64,10 +80,21 @@ function createGraphApp(canvas, opts) {
     const rect = canvas.getBoundingClientRect();
     canvas.width = Math.max(1, Math.round(rect.width * dpr));
     canvas.height = Math.max(1, Math.round(rect.height * dpr));
-    render();
+    draw();
+  }
+
+  // Single dispatch point for the interaction handlers so call-mode and
+  // dep-mode never cross wires.
+  function draw() {
+    if (mode === "dep") renderDep();
+    else render();
   }
 
   function resetView() {
+    if (mode === "dep") {
+      fitDep();
+      return;
+    }
     scale = 1;
     const rect = canvas.getBoundingClientRect();
     panX = rect.width / 2;
@@ -354,7 +381,7 @@ function createGraphApp(canvas, opts) {
     panX = mx - (mx - panX) * ratio;
     panY = my - (my - panY) * ratio;
     scale = newScale;
-    render();
+    draw();
   }, { passive: false });
 
   canvas.addEventListener("mousedown", (ev) => {
@@ -370,7 +397,7 @@ function createGraphApp(canvas, opts) {
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
     panX = dragStart.panX + dx;
     panY = dragStart.panY + dy;
-    render();
+    draw();
   });
   window.addEventListener("mouseup", (ev) => {
     if (!dragging) return;
@@ -382,6 +409,10 @@ function createGraphApp(canvas, opts) {
   function handleClick(ev) {
     const rect = canvas.getBoundingClientRect();
     const world = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    if (mode === "dep") {
+      handleDepClick(world);
+      return;
+    }
     const hit = hitTest(world.x, world.y);
     if (!hit) return;
     if (hit.kind === "more") {
@@ -397,7 +428,376 @@ function createGraphApp(canvas, opts) {
     }
   }
 
+  // hover → tooltip (dep-mode only; call-mode has no tooltip element)
+  canvas.addEventListener("mousemove", (ev) => {
+    if (mode !== "dep" || dragging || !tooltipEl) return;
+    const rect = canvas.getBoundingClientRect();
+    const world = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    const hit = hitTestDep(world.x, world.y);
+    if (hit) {
+      depHover = hit.id;
+      showTooltip(hit, ev.clientX - rect.left, ev.clientY - rect.top);
+    } else {
+      depHover = null;
+      hideTooltip();
+    }
+  });
+  canvas.addEventListener("mouseleave", () => {
+    depHover = null;
+    hideTooltip();
+  });
+
+  function showTooltip(node, sx, sy) {
+    const kind = node.type === "external" ? "external package" : "file";
+    const cyc = node.inCycle ? '<span class="tt-cycle">● in circular dependency</span>' : "";
+    tooltipEl.innerHTML =
+      `<div class="tt-title">${escapeHtml(node.label)}</div>` +
+      `<div class="tt-path">${escapeHtml(node.path)}</div>` +
+      `<div class="tt-meta">${kind} · in ${node.fanIn} · out ${node.fanOut}</div>` +
+      cyc;
+    tooltipEl.style.left = sx + 14 + "px";
+    tooltipEl.style.top = sy + 14 + "px";
+    tooltipEl.hidden = false;
+  }
+  function hideTooltip() {
+    if (tooltipEl) tooltipEl.hidden = true;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
   new ResizeObserver(resize).observe(canvas);
+
+  // =========================================================================
+  // DEPENDENCY-GRAPH MODE (force-directed) — fully parallel to call-mode above.
+  // =========================================================================
+  const DEP = {
+    MAX_SIM_NODES: 400, // beyond this we skip the O(n^2) sim, use circular layout
+    ITER: 320, // fixed pre-settle iterations (deterministic → stable screenshots)
+    C: 0.9, // ideal-distance scale for Fruchterman-Reingold
+    NODE_MIN_R: 7,
+    NODE_MAX_R: 22,
+  };
+
+  // Build the *view* set from the raw host payload + current toggles/filter.
+  // Filtering, hide-external and collapse-external are pure view concerns, so
+  // they live here and never mutate depRaw.
+  function buildDepView() {
+    depNodes = new Map();
+    depEdges = [];
+    if (!depRaw) return;
+
+    const cyclic = new Set();
+    for (const c of depRaw.cycles || []) for (const id of c) cyclic.add(id);
+
+    // decide which raw nodes are visible
+    const visible = new Set();
+    for (const n of depRaw.nodes) {
+      if (depHideExternal && n.type === "external") continue;
+      visible.add(n.id);
+    }
+
+    // collapse-external: fold every external node into one aggregate sink
+    const AGG = "ext:__aggregate__";
+    const useAgg = depCollapseExternal && !depHideExternal;
+    const remap = (id) => {
+      if (!useAgg) return id;
+      const n = rawNodeById.get(id);
+      return n && n.type === "external" ? AGG : id;
+    };
+
+    for (const n of depRaw.nodes) {
+      if (!visible.has(n.id)) continue;
+      if (useAgg && n.type === "external") continue; // replaced by aggregate
+      depNodes.set(n.id, mkDepNode(n, cyclic.has(n.id)));
+    }
+    if (useAgg) {
+      const extCount = depRaw.nodes.filter((n) => n.type === "external").length;
+      if (extCount > 0) {
+        depNodes.set(AGG, mkDepNode({ id: AGG, label: `${extCount} packages`, path: `${extCount} external packages`, type: "external", fanIn: 0, fanOut: 0 }, false));
+      }
+    }
+
+    const seen = new Set();
+    for (const e of depRaw.edges) {
+      const from = remap(e.from);
+      const to = remap(e.to);
+      if (from === to) continue;
+      if (!depNodes.has(from) || !depNodes.has(to)) continue;
+      const key = from + " " + to;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      depEdges.push({ from, to, kind: e.kind });
+    }
+
+    // recompute degree-derived radius on the *view* (aggregate needs its own)
+    const deg = new Map();
+    for (const id of depNodes.keys()) deg.set(id, 0);
+    for (const e of depEdges) {
+      deg.set(e.from, (deg.get(e.from) || 0) + 1);
+      deg.set(e.to, (deg.get(e.to) || 0) + 1);
+    }
+    let maxDeg = 1;
+    for (const d of deg.values()) maxDeg = Math.max(maxDeg, d);
+    for (const [id, node] of depNodes) {
+      const d = deg.get(id) || 0;
+      node.r = DEP.NODE_MIN_R + (DEP.NODE_MAX_R - DEP.NODE_MIN_R) * Math.sqrt(d / maxDeg);
+      node.degree = d;
+    }
+  }
+
+  let rawNodeById = new Map();
+  function mkDepNode(n, inCycle) {
+    return { ...n, inCycle, x: 0, y: 0, vx: 0, vy: 0, r: DEP.NODE_MIN_R };
+  }
+
+  function simulateDep() {
+    const nodes = [...depNodes.values()];
+    const n = nodes.length;
+    if (n === 0) return;
+
+    // deterministic seeded init on a spiral so runs are reproducible
+    for (let i = 0; i < n; i++) {
+      const a = i * 2.399963; // golden angle
+      const rad = 30 + 14 * Math.sqrt(i);
+      nodes[i].x = Math.cos(a) * rad;
+      nodes[i].y = Math.sin(a) * rad;
+      nodes[i].vx = 0;
+      nodes[i].vy = 0;
+    }
+
+    if (n > DEP.MAX_SIM_NODES) {
+      // too big for O(n^2) — leave the spiral (already non-overlapping & readable)
+      return;
+    }
+
+    const area = Math.max(1, n) * 12000;
+    const k = DEP.C * Math.sqrt(area / Math.max(1, n));
+    let temp = Math.sqrt(area) / 8;
+    const cool = temp / (DEP.ITER + 1);
+    const idx = new Map(nodes.map((nd, i) => [nd.id, i]));
+
+    for (let it = 0; it < DEP.ITER; it++) {
+      const dispx = new Float64Array(n);
+      const dispy = new Float64Array(n);
+      // repulsion (all pairs)
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          let dx = nodes[i].x - nodes[j].x;
+          let dy = nodes[i].y - nodes[j].y;
+          let dist = Math.hypot(dx, dy) || 0.01;
+          if (dist > k * 6) continue; // ignore far pairs — cheap cutoff
+          const f = (k * k) / dist;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          dispx[i] += ux * f; dispy[i] += uy * f;
+          dispx[j] -= ux * f; dispy[j] -= uy * f;
+        }
+      }
+      // attraction along edges
+      for (const e of depEdges) {
+        const a = idx.get(e.from);
+        const b = idx.get(e.to);
+        if (a === undefined || b === undefined) continue;
+        let dx = nodes[a].x - nodes[b].x;
+        let dy = nodes[a].y - nodes[b].y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const f = (dist * dist) / k;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        dispx[a] -= ux * f; dispy[a] -= uy * f;
+        dispx[b] += ux * f; dispy[b] += uy * f;
+      }
+      // apply, capped by temperature, plus mild gravity toward origin
+      for (let i = 0; i < n; i++) {
+        let dx = dispx[i] - nodes[i].x * 0.012;
+        let dy = dispy[i] - nodes[i].y * 0.012;
+        const d = Math.hypot(dx, dy) || 0.01;
+        const lim = Math.min(d, temp);
+        nodes[i].x += (dx / d) * lim;
+        nodes[i].y += (dy / d) * lim;
+      }
+      temp = Math.max(0, temp - cool);
+    }
+  }
+
+  function fitDep() {
+    const nodes = [...depNodes.values()];
+    if (nodes.length === 0) {
+      scale = 1;
+      const rect = canvas.getBoundingClientRect();
+      panX = rect.width / 2;
+      panY = rect.height / 2;
+      renderDep();
+      return;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const nd of nodes) {
+      minX = Math.min(minX, nd.x - nd.r);
+      minY = Math.min(minY, nd.y - nd.r);
+      maxX = Math.max(maxX, nd.x + nd.r);
+      maxY = Math.max(maxY, nd.y + nd.r);
+    }
+    const rect = canvas.getBoundingClientRect();
+    const pad = 60;
+    const w = Math.max(1, maxX - minX);
+    const h = Math.max(1, maxY - minY);
+    scale = Math.min(2.2, Math.max(0.12, Math.min((rect.width - pad) / w, (rect.height - pad) / h)));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    panX = rect.width / 2 - cx * scale;
+    panY = rect.height / 2 - cy * scale;
+    renderDep();
+  }
+
+  // Which node ids are "active" (fully lit): the search match set if searching,
+  // else the focused node + its direct neighbors, else everything.
+  function depActiveSet() {
+    if (depFilter) {
+      const s = new Set();
+      for (const nd of depNodes.values()) {
+        if (nd.label.toLowerCase().includes(depFilter) || nd.path.toLowerCase().includes(depFilter)) s.add(nd.id);
+      }
+      return s;
+    }
+    if (depFocus && depNodes.has(depFocus)) {
+      const s = new Set([depFocus]);
+      for (const e of depEdges) {
+        if (e.from === depFocus) s.add(e.to);
+        if (e.to === depFocus) s.add(e.from);
+      }
+      return s;
+    }
+    return null; // null = everything active
+  }
+
+  function renderDep() {
+    const cssW = canvas.width / dpr;
+    const cssH = canvas.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.save();
+    ctx.translate(panX, panY);
+    ctx.scale(scale, scale);
+
+    const active = depActiveSet();
+    const isActive = (id) => active === null || active.has(id);
+
+    const cycleColor = cssVar("--cycle", "#ff5c7c");
+    const extColor = cssVar("--external", "#5cd6a8");
+    const intColor = cssVar("--accent", "#7c5cff");
+
+    // edges under nodes
+    for (const e of depEdges) {
+      const a = depNodes.get(e.from);
+      const b = depNodes.get(e.to);
+      if (!a || !b) continue;
+      const bothActive = isActive(e.from) && isActive(e.to);
+      const cyclic = a.inCycle && b.inCycle && edgeInCycle(e);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = cyclic ? cycleColor : cssVar("--edge", "rgba(255,255,255,0.16)");
+      ctx.globalAlpha = bothActive ? (cyclic ? 0.85 : 0.5) : 0.08;
+      ctx.lineWidth = (cyclic ? 1.8 : 1) / 1;
+      ctx.stroke();
+      // arrowhead
+      if (bothActive) {
+        const ang = Math.atan2(b.y - a.y, b.x - a.x);
+        const hx = b.x - Math.cos(ang) * (b.r + 2);
+        const hy = b.y - Math.sin(ang) * (b.r + 2);
+        const ah = 5;
+        ctx.beginPath();
+        ctx.moveTo(hx, hy);
+        ctx.lineTo(hx - Math.cos(ang - 0.4) * ah, hy - Math.sin(ang - 0.4) * ah);
+        ctx.lineTo(hx - Math.cos(ang + 0.4) * ah, hy - Math.sin(ang + 0.4) * ah);
+        ctx.closePath();
+        ctx.fillStyle = cyclic ? cycleColor : cssVar("--edge", "rgba(255,255,255,0.16)");
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // nodes
+    for (const nd of depNodes.values()) {
+      const act = isActive(nd.id);
+      ctx.globalAlpha = act ? 1 : 0.18;
+      const fill = nd.inCycle ? cycleColor : nd.type === "external" ? extColor : intColor;
+      ctx.beginPath();
+      ctx.arc(nd.x, nd.y, nd.r, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      if (nd.id === depFocus) {
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = "#fff";
+        ctx.stroke();
+      } else if (nd.id === depHover) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(255,255,255,0.7)";
+        ctx.stroke();
+      }
+      // label (only when zoomed in enough or node is prominent, to avoid clutter)
+      if (act && (scale > 0.55 || nd.r > 14 || nd.id === depFocus)) {
+        ctx.globalAlpha = act ? 0.92 : 0.15;
+        ctx.fillStyle = cssVar("--fg", "#c8cede");
+        ctx.font = "600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(truncateText(ctx, nd.label, 130), nd.x, nd.y + nd.r + 3);
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function edgeInCycle(e) {
+    for (const c of depRaw?.cycles || []) {
+      const s = new Set(c);
+      if (s.has(e.from) && s.has(e.to)) return true;
+    }
+    return false;
+  }
+
+  function hitTestDep(worldX, worldY) {
+    let best = null;
+    let bestD = Infinity;
+    for (const nd of depNodes.values()) {
+      const d = Math.hypot(worldX - nd.x, worldY - nd.y);
+      if (d <= nd.r + 3 && d < bestD) {
+        bestD = d;
+        best = nd;
+      }
+    }
+    return best;
+  }
+
+  function handleDepClick(world) {
+    const hit = hitTestDep(world.x, world.y);
+    if (!hit) {
+      depFocus = null;
+      renderDep();
+      return;
+    }
+    if (depFocus === hit.id) {
+      // second click on the already-focused node → open it (internal only)
+      if (hit.type === "internal") transport.openPath(hit.path);
+    } else {
+      depFocus = hit.id;
+    }
+    renderDep();
+  }
+
+  function updateDepStats() {
+    if (!statsEl) return;
+    if (!depRaw) {
+      statsEl.textContent = "";
+      return;
+    }
+    const s = depRaw.stats || {};
+    statsEl.textContent = `${s.internalNodes ?? 0} files · ${s.externalNodes ?? 0} packages · ${s.edgeCount ?? 0} imports · ${s.cycleCount ?? 0} cycles · ${s.orphanCount ?? 0} orphans`;
+  }
 
   // ---------- public API ----------
   function loadGraph({ rootId: rid, nodes, edges: incomingEdges, truncated }) {
@@ -474,15 +874,96 @@ function createGraphApp(canvas, opts) {
     transport = { ...transport, ...t };
   }
 
+  // ---------- dep-mode public methods ----------
+  function loadDependencyGraph(payload) {
+    mode = "dep";
+    depRaw = payload || { nodes: [], edges: [], cycles: [], stats: {} };
+    rawNodeById = new Map((depRaw.nodes || []).map((n) => [n.id, n]));
+    depFocus = null;
+    depHover = null;
+    buildDepView();
+    simulateDep();
+    if (hintEl) hintEl.hidden = depNodes.size > 0;
+    updateDepStats();
+    fitDep();
+  }
+
+  function setMode(next) {
+    if (next !== "call" && next !== "dep") return;
+    mode = next;
+    if (mode === "dep") {
+      if (hintEl) hintEl.hidden = !!(depRaw && depNodes.size > 0);
+      updateDepStats();
+      if (depRaw && depNodes.size > 0) fitDep();
+      else { const rect = canvas.getBoundingClientRect(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, rect.width, rect.height); }
+    } else {
+      if (hintEl) hintEl.hidden = true;
+      hideTooltip();
+      render();
+      // if no call graph has been loaded yet, show the guidance empty-state
+      // rather than a blank canvas (mirrors dep-mode's #depHint).
+      if (emptyEl && !rootId) {
+        emptyEl.textContent = "No call graph yet. Put your cursor on a function or method and run “LakshX: Show Call Graph” (or click the “Call Graph” status bar item).";
+        emptyEl.hidden = false;
+      }
+    }
+  }
+
+  function getMode() { return mode; }
+
+  function setDepFilter(text) {
+    depFilter = String(text || "").trim().toLowerCase();
+    if (mode === "dep") renderDep();
+  }
+
+  function setDepHideExternal(v) {
+    depHideExternal = !!v;
+    rebuildDep();
+  }
+  function setDepCollapseExternal(v) {
+    depCollapseExternal = !!v;
+    rebuildDep();
+  }
+  function rebuildDep() {
+    if (!depRaw) return;
+    depFocus = null;
+    buildDepView();
+    simulateDep();
+    if (hintEl) hintEl.hidden = depNodes.size > 0;
+    fitDep();
+  }
+  // jump the view to the first search match (used by Enter in the search box)
+  function focusFirstMatch() {
+    if (!depFilter) return;
+    for (const nd of depNodes.values()) {
+      if (nd.label.toLowerCase().includes(depFilter) || nd.path.toLowerCase().includes(depFilter)) {
+        depFocus = nd.id;
+        const rect = canvas.getBoundingClientRect();
+        panX = rect.width / 2 - nd.x * scale;
+        panY = rect.height / 2 - nd.y * scale;
+        renderDep();
+        return;
+      }
+    }
+  }
+
   // re-layout whenever nodes/edges change via loadGraph
   const _loadGraph = loadGraph;
   loadGraph = function (data) {
+    mode = "call";
+    if (hintEl) hintEl.hidden = true;
     _loadGraph(data);
     layout();
     render();
   };
 
-  return { loadGraph, applyExpand, showError, setTransport, resetView, resize, zoomBy: (f) => { scale = Math.min(2.5, Math.max(0.25, scale * f)); render(); }, render };
+  return {
+    loadGraph, applyExpand, showError, setTransport, resetView, resize,
+    zoomBy: (f) => { scale = Math.min(2.5, Math.max(0.12, scale * f)); draw(); },
+    render: draw,
+    // dep-mode surface
+    loadDependencyGraph, setMode, getMode, setDepFilter, setDepHideExternal, setDepCollapseExternal, focusFirstMatch,
+  };
 }
 
 // ---------- bootstrap ----------
@@ -493,6 +974,9 @@ function createGraphApp(canvas, opts) {
   const app = createGraphApp(canvas, {
     emptyEl: document.getElementById("empty"),
     titleEl: document.getElementById("title"),
+    tooltipEl: document.getElementById("tooltip"),
+    statsEl: document.getElementById("stats"),
+    hintEl: document.getElementById("depHint"),
   });
   window.__lakshxGraphApp = app;
 
@@ -500,18 +984,60 @@ function createGraphApp(canvas, opts) {
   document.getElementById("zoomOut")?.addEventListener("click", () => app.zoomBy(1 / 1.2));
   document.getElementById("zoomReset")?.addEventListener("click", () => app.resetView());
 
+  // ---- mode toggle (segmented control) ----
+  const modeCall = document.getElementById("modeCall");
+  const modeDep = document.getElementById("modeDep");
+  const callLegend = document.getElementById("legend");
+  const depLegend = document.getElementById("depLegend");
+  const depControls = document.getElementById("depControls");
+  const statsBar = document.getElementById("stats");
+  function reflectMode(m) {
+    modeCall?.classList.toggle("active", m === "call");
+    modeDep?.classList.toggle("active", m === "dep");
+    if (callLegend) callLegend.hidden = m !== "call";
+    if (depLegend) depLegend.hidden = m !== "dep";
+    if (depControls) depControls.hidden = m !== "dep";
+    if (statsBar) statsBar.hidden = m !== "dep";
+  }
+  modeCall?.addEventListener("click", () => { app.setMode("call"); reflectMode("call"); });
+  modeDep?.addEventListener("click", () => {
+    app.setMode("dep");
+    reflectMode("dep");
+    if (app.__needsScan) { app.__needsScan(); }
+  });
+
+  // ---- dep controls ----
+  const search = document.getElementById("depSearch");
+  search?.addEventListener("input", () => app.setDepFilter(search.value));
+  search?.addEventListener("keydown", (e) => { if (e.key === "Enter") app.focusFirstMatch(); });
+  const hideExt = document.getElementById("depHideExt");
+  hideExt?.addEventListener("change", () => app.setDepHideExternal(hideExt.checked));
+  const collapseExt = document.getElementById("depCollapseExt");
+  collapseExt?.addEventListener("change", () => app.setDepCollapseExternal(collapseExt.checked));
+
   const hasVsCodeApi = typeof acquireVsCodeApi === "function";
   if (hasVsCodeApi) {
     const vscode = acquireVsCodeApi();
+    let scanned = false;
     app.setTransport({
       expand: (id, direction) => vscode.postMessage({ type: "expand", id, direction }),
       loadMore: (id, direction) => vscode.postMessage({ type: "loadMore", id, direction }),
       openFile: (id) => vscode.postMessage({ type: "openFile", id }),
+      openPath: (p) => vscode.postMessage({ type: "openPath", path: p }),
+      requestScan: () => vscode.postMessage({ type: "scanDependencies" }),
     });
+    // when the user first switches to dep mode with no data, ask the host to scan
+    app.__needsScan = () => { if (!scanned) { scanned = true; vscode.postMessage({ type: "scanDependencies" }); } };
+    const rescan = document.getElementById("depRescan");
+    rescan?.addEventListener("click", () => { scanned = true; vscode.postMessage({ type: "scanDependencies" }); });
+    document.getElementById("depScanBtn")?.addEventListener("click", () => { scanned = true; vscode.postMessage({ type: "scanDependencies" }); });
+
     window.addEventListener("message", (event) => {
       const msg = event.data;
-      if (msg.type === "init") app.loadGraph(msg);
+      if (msg.type === "init") { app.loadGraph(msg); reflectMode("call"); }
       else if (msg.type === "expandResult") app.applyExpand(msg);
+      else if (msg.type === "depInit") { scanned = true; app.loadDependencyGraph(msg); reflectMode("dep"); }
+      else if (msg.type === "switchToDep") { app.setMode("dep"); reflectMode("dep"); app.__needsScan(); }
       else if (msg.type === "error") app.showError(msg.message);
     });
   }

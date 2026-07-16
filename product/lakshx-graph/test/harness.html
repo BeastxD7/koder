@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<!--
+  Static visual harness for media/graph.js — loads the real graph UI in a plain
+  browser with a mock acquireVsCodeApi() standing in for extension.js. Serve the
+  extension root over http (e.g. `python3 -m http.server` from
+  product/lakshx-graph) and open /test/harness.html. Exercises the DEPENDENCY
+  graph mode: force layout, search/filter, hide/collapse externals, click-to-
+  focus, hover tooltip, and cycle highlighting — plus the mode toggle back to
+  the call graph. NOT loaded by the extension — test-only.
+-->
+<html><head>
+<meta charset="UTF-8">
+<title>LakshX graph harness</title>
+<link rel="stylesheet" href="../media/graph.css">
+</head><body>
+<div id="app">
+  <div id="toolbar">
+    <div id="modeToggle" role="tablist">
+      <button id="modeDep" role="tab">Dependencies</button>
+      <button id="modeCall" role="tab" class="active">Call graph</button>
+    </div>
+    <span id="title">Call Graph</span>
+    <div class="spacer"></div>
+    <button id="zoomOut" class="ghost" title="Zoom out">&#8722;</button>
+    <button id="zoomReset" class="ghost" title="Reset view">Reset</button>
+    <button id="zoomIn" class="ghost" title="Zoom in">&#43;</button>
+  </div>
+  <div id="legend">
+    <span class="chip incoming"><span class="dot"></span>Incoming (callers)</span>
+    <span class="chip outgoing"><span class="dot"></span>Outgoing (callees)</span>
+  </div>
+  <div id="depLegend" hidden>
+    <span class="chip internal"><span class="dot"></span>File</span>
+    <span class="chip external"><span class="dot"></span>External package</span>
+    <span class="chip cycle"><span class="dot"></span>Circular dependency</span>
+  </div>
+  <div id="depControls" hidden>
+    <input id="depSearch" type="text" placeholder="Search files / packages…" spellcheck="false" />
+    <label class="check"><input id="depHideExt" type="checkbox" />Hide externals</label>
+    <label class="check"><input id="depCollapseExt" type="checkbox" />Collapse externals</label>
+    <button id="depRescan" class="ghost" title="Re-scan the workspace">Re-scan</button>
+  </div>
+  <div id="stats" hidden></div>
+  <canvas id="canvas"></canvas>
+  <div id="empty" hidden>No call hierarchy available at the cursor.</div>
+  <div id="depHint" hidden>
+    Build an interactive map of your workspace's file &amp; package dependencies.
+    <br><button id="depScanBtn">Scan workspace</button>
+  </div>
+  <div id="tooltip" hidden></div>
+</div>
+<script>
+  // ---- mock extension host ----
+  // Replies with a synthetic dependency graph on `scanDependencies`, mirroring
+  // extension.js's depInit payload shape. Contains: a hub (app.ts), an A->B->C->A
+  // cycle, external packages (react, lodash, express) and one orphan file.
+  const reply = (msg) => setTimeout(() => window.postMessage(msg, "*"), 0);
+
+  function sampleGraph() {
+    const files = [
+      "src/app.ts", "src/router.ts", "src/store.ts",
+      "src/api/client.ts", "src/api/auth.ts", "src/api/index.ts",
+      "src/ui/Button.tsx", "src/ui/Modal.tsx", "src/ui/index.ts",
+      "src/utils/format.ts", "src/utils/logger.ts",
+      "src/cycleA.ts", "src/cycleB.ts", "src/cycleC.ts",
+      "src/orphan.ts",
+    ];
+    const edges = [
+      ["src/app.ts", "src/router.ts"], ["src/app.ts", "src/store.ts"],
+      ["src/app.ts", "src/ui/index.ts"], ["src/app.ts", "ext:react"],
+      ["src/router.ts", "src/api/index.ts"], ["src/router.ts", "src/ui/index.ts"],
+      ["src/store.ts", "src/api/client.ts"], ["src/store.ts", "ext:lodash"],
+      ["src/api/index.ts", "src/api/client.ts"], ["src/api/index.ts", "src/api/auth.ts"],
+      ["src/api/client.ts", "src/utils/logger.ts"], ["src/api/client.ts", "ext:express"],
+      ["src/api/auth.ts", "src/utils/logger.ts"],
+      ["src/ui/index.ts", "src/ui/Button.tsx"], ["src/ui/index.ts", "src/ui/Modal.tsx"],
+      ["src/ui/Button.tsx", "ext:react"], ["src/ui/Modal.tsx", "ext:react"],
+      ["src/ui/Modal.tsx", "src/utils/format.ts"],
+      // circular dependency cluster:
+      ["src/cycleA.ts", "src/cycleB.ts"], ["src/cycleB.ts", "src/cycleC.ts"], ["src/cycleC.ts", "src/cycleA.ts"],
+      ["src/app.ts", "src/cycleA.ts"],
+    ];
+    const externals = ["ext:react", "ext:lodash", "ext:express"];
+    const nodeIds = [...files, ...externals];
+    const nodes = nodeIds.map((id) => ({
+      id,
+      path: id.startsWith("ext:") ? id.slice(4) : id,
+      label: id.startsWith("ext:") ? id.slice(4) : id.slice(id.lastIndexOf("/") + 1),
+      type: id.startsWith("ext:") ? "external" : "internal",
+      fanIn: edges.filter((e) => e[1] === id).length,
+      fanOut: edges.filter((e) => e[0] === id).length,
+      inCycle: false,
+    }));
+    const cycles = [["src/cycleA.ts", "src/cycleB.ts", "src/cycleC.ts"]];
+    const stats = {
+      fileCount: files.length, internalNodes: files.length, externalNodes: externals.length,
+      edgeCount: edges.length, cycleCount: cycles.length, orphanCount: 1,
+    };
+    return { type: "depInit", nodes, edges: edges.map(([from, to]) => ({ from, to, kind: "import" })), cycles, stats };
+  }
+
+  window.acquireVsCodeApi = () => ({
+    getState() {}, setState() {},
+    postMessage(m) {
+      console.log("[graph→ext]", JSON.stringify(m));
+      if (m.type === "scanDependencies") reply(sampleGraph());
+      else if (m.type === "openPath") console.log("openPath:", m.path);
+    },
+  });
+
+  // Auto-open the dependency view on load so the harness lands directly on the
+  // feature under test.
+  window.addEventListener("load", () => reply({ type: "switchToDep" }));
+</script>
+<script src="../media/graph.js"></script>
+</body></html>
