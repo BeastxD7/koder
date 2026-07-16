@@ -1,0 +1,41 @@
+{
+  "name": "lakshx-commandbar",
+  "displayName": "LakshX Command Bar",
+  "description": "LakshX's JetBrains-style universal entry point — one search box merging file search, workspace symbol search, and command-palette actions into a single ranked list.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.commandbar.open",
+        "title": "LakshX: Open Command Bar",
+        "icon": "$(search)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "lakshx.commandbar.open",
+        "key": "ctrl+k g",
+        "mac": "cmd+k g"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "lakshx.commandbar.open"
+        }
+      ]
+    }
+  }
+}
