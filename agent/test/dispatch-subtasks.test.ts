@@ -297,17 +297,22 @@ test(
       // the three background-task management tools (check_tasks/send_to_task/
       // wait_for_tasks are non-dangerous observe/steer/join operations on the
       // registry, not workspace mutations — review mode's guarantee is about
-      // write_file/edit_file/bash, which stay excluded below).
+      // write_file/edit_file/bash, which stay excluded below) + the
+      // completion-gate pair (set_verification_spec/declare_done —
+      // dangerous:false; declare_done refuses to execute in review mode at
+      // call time, see loop.ts, but is still offered rather than omitted).
       const offeredToParent = fake.requests[0]!.tools.map((tl: any) => tl.function.name).sort();
       assert.deepEqual(offeredToParent, [
         "check_tasks",
         "db_query",
+        "declare_done",
         "dispatch_subtasks",
         "grep",
         "list_dir",
         "list_merge_conflicts",
         "read_file",
         "send_to_task",
+        "set_verification_spec",
         "wait_for_tasks",
       ]);
 

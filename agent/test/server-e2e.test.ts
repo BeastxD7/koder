@@ -174,20 +174,27 @@ test("lakshx agent e2e over ACP against a scripted provider", { timeout: 120_000
             // (allowed in review mode since its own children are forced back
             // into review mode too — see loop.ts's dispatchSubtasks), db_query
             // (kind:"read", dangerous:false — its consent gate lives in
-            // lakshx-db, so it's usable in review mode; docs/research/13), and
-            // the three background-task management tools (check_tasks/
+            // lakshx-db, so it's usable in review mode; docs/research/13), the
+            // three background-task management tools (check_tasks/
             // send_to_task/wait_for_tasks — non-dangerous observe/steer/join
-            // operations on the registry, not workspace mutations).
+            // operations on the registry, not workspace mutations), and the
+            // completion-gate pair (set_verification_spec/declare_done —
+            // dangerous:false; declare_done itself refuses to execute in
+            // review mode at call time, see loop.ts, but the tool is still
+            // offered so the model gets that explicit refusal rather than an
+            // "unknown tool" error).
             const offered = fake.requests.at(-2)!.tools.map((tl) => tl.function.name).sort();
             assert.deepEqual(offered, [
               "check_tasks",
               "db_query",
+              "declare_done",
               "dispatch_subtasks",
               "grep",
               "list_dir",
               "list_merge_conflicts",
               "read_file",
               "send_to_task",
+              "set_verification_spec",
               "wait_for_tasks",
             ]);
             // request 2 carries the declined tool result back to the model

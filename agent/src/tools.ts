@@ -24,7 +24,7 @@ function resolveShell(): string | undefined {
   }
   return undefined; // falls back to /bin/sh, always present on POSIX
 }
-const SHELL = resolveShell();
+export const SHELL = resolveShell();
 
 /**
  * Kill-switch hardening for `bash`: plain `exec({ signal })` sends exactly
@@ -55,7 +55,7 @@ const SHELL = resolveShell();
  */
 const KILL_GRACE_MS = 2000;
 
-function execWithKillEscalation(
+export function execWithKillEscalation(
   command: string,
   opts: { cwd: string; signal?: AbortSignal; timeoutMs: number; maxBuffer: number; shell?: string },
 ): Promise<{ stdout: string; stderr: string }> {
@@ -619,6 +619,73 @@ export const TOOLS: ToolSpec[] = [
       // cb.onDbQuery → the lakshx-db extension) and never reaches this — same
       // pattern as dispatch_subtasks above.
       throw new Error("db_query must be handled by the loop's db_query branch, not executed generically");
+    },
+  },
+  // ---- Harness-enforced completion gate (Royal Mode 2.0 Stage A) ----
+  // Both special-cased in loop.ts (before the generic spec.run path, same
+  // reason as dispatch_subtasks/db_query/the background-task tools above):
+  // they read/write session-scoped state (`session.verificationSpec`)
+  // rather than doing one generic unit of work. `run` below is a defensive
+  // stub that should never actually be invoked. See agent/src/verify.ts for
+  // the VerificationSpec type + the real verifier (`runVerification`) these
+  // two tools are built on.
+  {
+    name: "set_verification_spec",
+    kind: "read",
+    // Not a mutation — it only records, in-memory, what "done" means for
+    // THIS session (a minimal stand-in for Stage B's full PLAN-phase
+    // artifact system). Safe in every mode, including review, since nothing
+    // executes until declare_done is actually called.
+    dangerous: false,
+    description:
+      "Establish (or replace) the VerificationSpec that defines what \"done\" means for the rest of this session — a list of mechanical checks (shell commands + how to judge them) that declare_done will ACTUALLY RE-RUN before it will ever report success. " +
+      "Call this once you know the real verify command(s) for the work you're about to do (e.g. `npm run typecheck`, `npm run test:unit`, a targeted test file) — ideally before you start making changes, so the bar is fixed rather than picked after the fact. " +
+      "Each check is {cmd, expect}: expect is either the exact string \"exitZero\" (pass iff the command exits 0) or {\"pattern\": \"<regex>\"} (pass iff the regex matches the command's combined stdout+stderr, regardless of exit code — useful for tools that print \"0 failures\" but don't always exit non-zero, or vice versa). " +
+      "The spec is content-hashed by the harness when set (not by you) — this is what \"frozen\" means: it's a real commitment, not something you can quietly redefine to make declare_done easier to pass. Calling this again replaces the previous spec with a new frozen one. " +
+      "Behavioral (browser-driven) and visual (screenshot+critic) tiers are part of the design but not yet implemented — only mechanical checks actually run in this version.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mechanical: {
+          type: "array",
+          minItems: 1,
+          description: "1+ real commands that must pass for the work to count as done.",
+          items: {
+            type: "object",
+            properties: {
+              cmd: { type: "string", description: "Shell command to run in the workspace, e.g. \"npm run typecheck\"." },
+              expect: {
+                description: "Either the exact string \"exitZero\", or an object {\"pattern\": \"<regex>\"} matched against the command's combined stdout+stderr.",
+              },
+            },
+            required: ["cmd", "expect"],
+          },
+        },
+      },
+      required: ["mechanical"],
+    },
+    async run() {
+      throw new Error("set_verification_spec must be handled by the loop's verification branch, not executed generically");
+    },
+  },
+  {
+    name: "declare_done",
+    kind: "execute",
+    dangerous: false,
+    description:
+      "Claim that the current work satisfies the active VerificationSpec (set via set_verification_spec) and ask the harness to CONFIRM it. " +
+      "This does not take your word for it: the harness re-runs every mechanical check for real, right now, server-side, and reports the actual result back to you — a pass here means the checks genuinely just ran green, not that you asserted they would. " +
+      "If no VerificationSpec has been set for this session, this returns an error telling you to call set_verification_spec first — there is no way to get a \"done\" confirmation without a real spec to check against. " +
+      "If verification fails, you are NOT done: read which checks failed and why, fix them, and call declare_done again — it can be called as many times as needed. " +
+      "Unavailable in review mode (verification executes real commands; review mode is read-only).",
+    input_schema: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "Optional short summary of what you believe is done — for the human's benefit; has no effect on the verification result itself." },
+      },
+    },
+    async run() {
+      throw new Error("declare_done must be handled by the loop's verification branch, not executed generically");
     },
   },
   // ---- AI-assisted merge conflict resolution (docs/research/15 item #6) ----
