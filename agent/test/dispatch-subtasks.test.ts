@@ -305,6 +305,7 @@ test(
         "dispatch_subtasks",
         "grep",
         "list_dir",
+        "list_merge_conflicts",
         "read_file",
         "send_to_task",
         "wait_for_tasks",

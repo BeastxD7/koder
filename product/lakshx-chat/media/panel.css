@@ -240,6 +240,22 @@ html, body {
   max-height: 140px;
   overflow-y: auto;
 }
+/* "Open diff" shortcut on a completed `resolve_merge_conflict` card (panel.js's
+   `applyMergeConflictSummary`) — same small-pill treatment as the checkpoint
+   card's `.cp-file-undo`, so it reads as the same family of action. */
+.tool-open-diff {
+  margin: 2px 0 2px 14px;
+  align-self: flex-start;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 10.5px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tool-open-diff:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
+
 /* A card created from a delta before the real `tool_call` notification has
    landed yet — same look as "running", `.pending` exists only as a hook in
    case a future style wants to distinguish "guessed title" from confirmed. */

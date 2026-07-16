@@ -472,8 +472,12 @@ function checkPipeToShell(command: string): FloorResult {
 // design (see the module doc comment and `loop.ts`'s `runPrompt()`).
 // ---------------------------------------------------------------------------
 function checkFileOutsideWorkspace(name: string, input: any, cwd: string): FloorResult {
-  if (name !== "write_file" && name !== "edit_file") return SAFE;
-  const path = String(input?.path ?? "").trim();
+  if (name !== "write_file" && name !== "edit_file" && name !== "resolve_merge_conflict") return SAFE;
+  // resolve_merge_conflict's input field is `filePath` (not `path`) — same
+  // write-to-an-arbitrary-path risk as write_file/edit_file (it writes the
+  // model's proposed resolution straight to this path), so it gets the same
+  // outside-workspace check rather than a silent gap.
+  const path = String(input?.path ?? input?.filePath ?? "").trim();
   if (!path) return SAFE;
   return checkDangerousPath(path, cwd, name);
 }
@@ -487,7 +491,7 @@ function checkFileOutsideWorkspace(name: string, input: any, cwd: string): Floor
  * string. Any other tool name falls through as SAFE.
  */
 export function floorCheck(name: string, input: any, cwd: string): FloorResult {
-  if (name === "write_file" || name === "edit_file") {
+  if (name === "write_file" || name === "edit_file" || name === "resolve_merge_conflict") {
     return checkFileOutsideWorkspace(name, input, cwd);
   }
   if (name !== "bash") return SAFE;
@@ -557,8 +561,8 @@ function underGuardedRoot(p: string): string | undefined {
 }
 
 export function royalTamperCheck(name: string, input: any): FloorResult {
-  if (name === "write_file" || name === "edit_file") {
-    const path = String(input?.path ?? "");
+  if (name === "write_file" || name === "edit_file" || name === "resolve_merge_conflict") {
+    const path = String(input?.path ?? input?.filePath ?? "");
     if (!path) return SAFE;
     const hit = underGuardedRoot(path);
     if (hit) {

@@ -168,6 +168,14 @@ function addTool(t) {
     messagesEl.appendChild(el);
     tools.set(t.id, el);
   }
+  // `resolve_merge_conflict` (agent/src/tools.ts) is the only tool call whose
+  // rawInput carries a `filePath` field (write_file/edit_file use `path`) —
+  // tag the card so `toolUpdate` below knows to render a hunk-count summary
+  // instead of leaving this card with just a title, without needing a new
+  // "tool name" field threaded through the ACP tool_call notification.
+  if (t.input && typeof t.input.filePath === "string") {
+    el.dataset.mergeConflictFile = t.input.filePath;
+  }
   scrollBottom();
 }
 
@@ -275,6 +283,38 @@ function applyToolImageData(m) {
 
 function openToolImage(path) {
   if (path) vscode.postMessage({ type: "openToolImage", path });
+}
+
+/**
+ * `resolve_merge_conflict` (agent/src/tools.ts) card summary — the tool's own
+ * return value already IS the exact "Resolved merge conflict in X — N
+ * hunks.\n\n<reasoning>" text (or, on refusal, a plain error message), so this
+ * just renders `m.output` (already forwarded on every `toolUpdate`, see
+ * extension.js's `extractToolOutputText`) into the card's existing
+ * `.tool-preview` box — no new parsing needed. Deliberately modest per this
+ * feature's scope: the actual "open the native merge/diff view to confirm"
+ * affordance is the SAME "Open diff" action the checkpoint ("Files changed")
+ * card already offers for this exact file — `resolve_merge_conflict` is a
+ * normal checkpointed dangerous tool, so that card appears right after this
+ * one with a working, repo-relative-path-correct diff link; this only adds
+ * a shortcut into that same flow rather than a second bespoke diff viewer.
+ */
+function applyMergeConflictSummary(el, m) {
+  const filePath = el.dataset.mergeConflictFile;
+  if (!filePath) return;
+  const preview = el.querySelector(".tool-preview");
+  if (m.output) {
+    preview.hidden = false;
+    preview.textContent = m.output;
+  }
+  if (m.status === "completed" && currentPromptId && !el.querySelector(".tool-open-diff")) {
+    const btn = document.createElement("button");
+    btn.className = "tool-open-diff";
+    btn.textContent = "Open diff";
+    btn.title = "Open VS Code's diff view for this file to confirm the resolution";
+    btn.addEventListener("click", () => openCheckpointFile(currentPromptId, filePath));
+    el.appendChild(btn);
+  }
 }
 
 // ---------- prompt checkpoints + "Files changed" undo (docs/research/11 §7) ----------
@@ -1726,7 +1766,10 @@ function applyEvent(m, replaying) {
     case "tool": addTool(m); break;
     case "toolUpdate": {
       const el = tools.get(m.id);
-      if (el) el.className = `tool ${m.status === "completed" ? "done" : m.status === "failed" ? "failed" : "running"}`;
+      if (el) {
+        el.className = `tool ${m.status === "completed" ? "done" : m.status === "failed" ? "failed" : "running"}`;
+        applyMergeConflictSummary(el, m);
+      }
       break;
     }
     case "toolImage": applyToolImage(m); break;

@@ -1132,6 +1132,15 @@ class AgentViewProvider {
    */
   async openCheckpointDiff(promptId, relPath) {
     if (!this.acp || !this.sessionId) return;
+    // Accept an absolute path too — every existing caller here (the
+    // checkpoint card's own `files` list) already passes a workspace-relative
+    // path, so this is normally a no-op, but the merge-conflict tool card's
+    // "Open diff" button (panel.js) forwards whatever `filePath` the MODEL
+    // used calling resolve_merge_conflict, which is very often absolute
+    // (list_merge_conflicts itself returns absolute paths). Without this,
+    // both `toAbsoluteUri` (below) and the agent-side `git show <sha>:<path>`
+    // lookup silently fail/misresolve against an absolute path.
+    if (path.isAbsolute(relPath)) relPath = toWorkspaceRelative(relPath);
     const rightUri = toAbsoluteUri(relPath);
     let content = null;
     try {

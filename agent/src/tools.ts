@@ -6,6 +6,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import { BROWSER_ACT_ACTIONS, runBrowserAct, runBrowserPreview } from "./browser.js";
 import { DB_ENGINES } from "./db.js";
+import { listMergeConflicts, parseConflictHunks, proposeResolution, readConflictStages } from "./merge.js";
 import type { ToolDef } from "./providers/types.js";
 
 const execAsync = promisify(exec);
@@ -607,6 +608,61 @@ export const TOOLS: ToolSpec[] = [
       // cb.onDbQuery → the lakshx-db extension) and never reaches this — same
       // pattern as dispatch_subtasks above.
       throw new Error("db_query must be handled by the loop's db_query branch, not executed generically");
+    },
+  },
+  // ---- AI-assisted merge conflict resolution (docs/research/15 item #6) ----
+  {
+    name: "list_merge_conflicts",
+    kind: "read",
+    dangerous: false,
+    description:
+      "List files in the workspace with unresolved git merge conflicts (the same 'unmerged' set git itself tracks during an in-progress merge/rebase/cherry-pick, and what VS Code's Source Control view groups as \"Merge Changes\"). " +
+      "Falls back to a conflict-marker text scan only if the workspace has no usable git repo. Use this before resolve_merge_conflict to find what needs resolving.",
+    input_schema: { type: "object", properties: {} },
+    async run(_input, cwd) {
+      const { files, method } = await listMergeConflicts(cwd);
+      if (files.length === 0) return "(no files with unresolved merge conflicts)";
+      const note =
+        method === "marker-scan"
+          ? "\n(note: this workspace has no usable git repo — found via a conflict-marker text scan instead of git status, which is less reliable)"
+          : "";
+      return files.join("\n") + note;
+    },
+  },
+  {
+    name: "resolve_merge_conflict",
+    kind: "edit",
+    dangerous: true,
+    description:
+      "Propose and apply an AI-generated resolution for ONE file with unresolved git merge conflict markers. " +
+      "Reads the file's ours/theirs (and base, when available from the git index) content per hunk, asks a small, dedicated model call — separate from this conversation — to resolve every hunk with reasoning, then WRITES the fully resolved file (conflict markers removed) to disk. " +
+      "This is a normal dangerous tool: blocked outright in review mode, requires explicit approval in approve mode, auto-applies (with an undoable checkpoint, same 'Files changed' safety net as write_file/edit_file) in auto/royal mode. " +
+      "The write is refused entirely (nothing touches disk) if the model's response doesn't parse into a clean resolution or still contains conflict markers — never a partial/corrupt write. " +
+      "This only rewrites the file's CONTENT — it does not `git add` it, so git's index still shows the file as unmerged (list_merge_conflicts will keep listing it) until it is staged separately, e.g. via `bash` (`git add <path>`) or the user's own Source Control view. That's deliberate: writing the content and marking the merge complete are kept as two separate, explicit steps. " +
+      "Use list_merge_conflicts first if you don't already know which file(s) need resolving.",
+    input_schema: {
+      type: "object",
+      properties: {
+        filePath: { type: "string", description: "Path (absolute or relative to workspace) of the conflicted file to resolve." },
+      },
+      required: ["filePath"],
+    },
+    async run(input, cwd, signal) {
+      const p = abs(cwd, input.filePath);
+      const content = await readFile(p, "utf8");
+      const hunks = parseConflictHunks(content);
+      if (hunks.length === 0) {
+        throw new Error(
+          `${input.filePath} has no unresolved conflict markers (<<<<<<< / ======= / >>>>>>>) — nothing to resolve`,
+        );
+      }
+      const stages = await readConflictStages(cwd, p);
+      const { resolvedContent, reasoning } = await proposeResolution(input.filePath, content, hunks, stages, signal);
+      await writeFile(p, resolvedContent, "utf8");
+      return (
+        `Resolved merge conflict in ${input.filePath} — ${hunks.length} hunk${hunks.length === 1 ? "" : "s"}.\n\n${reasoning}` +
+        `\n\n(Content written; the file is not yet staged — git still shows it as unmerged until it is \`git add\`ed.)`
+      );
     },
   },
 ];

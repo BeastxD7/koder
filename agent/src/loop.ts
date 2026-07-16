@@ -303,6 +303,8 @@ export function toolTitle(name: string, input: any): string {
       const sql = String(input.query ?? "").replace(/\s+/g, " ").trim();
       return `Query ${engine}${sql ? `: ${sql.slice(0, 40)}` : ""}`;
     }
+    case "list_merge_conflicts": return "List merge conflicts";
+    case "resolve_merge_conflict": return `Resolve merge conflict: ${input.filePath}`;
     default: return name;
   }
 }
@@ -1332,8 +1334,14 @@ async function runPromptLoop(
         let output = clip(rawOutput, 60_000);
 
         // failed-edit retry hints: the #1 agent flail is retrying edit_file
-        // blindly against a wrong old_string assumption
-        const path = (tc.input as any)?.path;
+        // blindly against a wrong old_string assumption. `?? filePath` covers
+        // resolve_merge_conflict, whose input field is named `filePath` (not
+        // `path`, to read naturally as "the conflicted file") — this lets it
+        // reuse the SAME checkpoint-narrowing/wrapToolOutput path attribution
+        // every other single-file dangerous tool already gets, with no new
+        // machinery. No other tool has a `filePath` field, so this is a
+        // no-op everywhere else.
+        const path = (tc.input as any)?.path ?? (tc.input as any)?.filePath;
         if (tc.name === "edit_file") session.editFails!.delete(path); // success clears the counter
         if (tc.name === "read_file" && path) session.editFails!.delete(path); // re-reading resets it too
 
