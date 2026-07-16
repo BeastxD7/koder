@@ -25,6 +25,7 @@
     relHint: document.getElementById("relHint"),
     relList: document.getElementById("relList"),
     title: document.getElementById("title"),
+    aiQueries: document.getElementById("aiQueries"),
   };
 
   document.getElementById("refresh").addEventListener("click", () => {
@@ -33,6 +34,20 @@
   document.getElementById("changeConnection").addEventListener("click", () => {
     vscodeApi.postMessage({ type: "changeConnection" });
   });
+  // "Allow AI queries" opt-in (design §6): the confirmation dialog and the
+  // actual flag live in the extension host — this just requests the toggle
+  // and reflects whatever state comes back.
+  el.aiQueries.addEventListener("click", () => {
+    vscodeApi.postMessage({ type: "toggleAiQueries" });
+  });
+
+  function renderAiQueries(enabled) {
+    el.aiQueries.classList.toggle("on", !!enabled);
+    el.aiQueries.textContent = enabled ? "AI queries: On" : "Allow AI queries";
+    el.aiQueries.title = enabled
+      ? "The AI assistant may run read-only queries against this connection. Click to disable."
+      : "Let the AI assistant run read-only queries against this connection";
+  }
 
   function showOnly(name) {
     for (const key of ["loading", "error", "diagramWrap", "relPanel"]) {
@@ -133,8 +148,12 @@
         el.banner.hidden = true; // don't leave a stale "N collections shown" banner sitting above an error from a failed refresh
         el.error.textContent = msg.message || "Unknown error.";
         break;
+      case "aiQueries":
+        renderAiQueries(msg.enabled);
+        break;
     }
   });
 
   vscodeApi.postMessage({ type: "refresh" }); // kick off the first load
+  vscodeApi.postMessage({ type: "getAiQueries" }); // reflect the current opt-in state in the toolbar
 })();

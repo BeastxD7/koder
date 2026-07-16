@@ -23,6 +23,13 @@
 
 const path = require("path");
 const { buildSqlPayload, markForeignKeyFields } = require("../sql-common.js");
+const {
+  classifyStatement,
+  isWrappable,
+  wrapWithRowLimit,
+  clampMaxRows,
+  DEFAULT_TIMEOUT_MS,
+} = require("../query-guard.js");
 
 function getSqlite() {
   try {
@@ -143,6 +150,55 @@ async function introspect(db, dbName) {
   });
 }
 
+// ---- read-only ad-hoc query (db_query feature; design §3/§4) --------------
+//
+// Layer 1 (PRIMARY): a FRESH `DatabaseSync(path, { readOnly: true })` — SQLite
+// itself refuses any write against a database opened read-only ("attempt to
+// write a readonly database"). This is verified live in the test suite (a
+// direct `db.exec("DELETE ...")` on a read-only handle throws), independent
+// of the allowlist. Layer 3: subquery wrap with LIMIT maxRows+1 PLUS a
+// cursor-stop via `iterate()`. Layer 4: a wall-clock guard checked BETWEEN
+// yielded rows — note node:sqlite runs synchronously, so a single
+// long-scanning statement that yields no rows (e.g. `SELECT count(*) FROM
+// huge`) is NOT interrupted mid-scan; the row-cap wrapper bounds most
+// runaway result sets, which is the realistic case here.
+
+/** Opens a fresh read-only handle on the SQLite file and runs `sql`. `conn`
+ * is the file path (the stored secret). vscode-free / unit-tested live. */
+async function runReadOnlyQuery(conn, sql, opts = {}) {
+  const maxRows = clampMaxRows(opts.maxRows);
+  const timeoutMs = Math.floor(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const { kind } = classifyStatement(sql); // throws QueryRejectedError (allowlist) before opening anything
+
+  const { DatabaseSync } = getSqlite();
+  const db = new DatabaseSync(conn, { readOnly: true });
+  try {
+    const finalSql = isWrappable(kind) ? wrapWithRowLimit(sql, maxRows + 1) : sql;
+    const stmt = db.prepare(finalSql);
+    stmt.setReturnArrays(true); // positional rows[][] regardless of duplicate column names
+    const columns = stmt.columns().map((c) => c.name);
+
+    const rows = [];
+    let truncated = false;
+    const deadline = Date.now() + timeoutMs;
+    for (const row of stmt.iterate()) {
+      if (rows.length >= maxRows) {
+        truncated = true; // a (maxRows+1)th row was yielded — cursor-stop here
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`Query exceeded the ${timeoutMs}ms time limit.`);
+      }
+      rows.push(row);
+    }
+    return { columns, rows, rowCount: rows.length, truncated, databaseName: path.basename(conn) };
+  } finally {
+    try {
+      db.close();
+    } catch {}
+  }
+}
+
 module.exports = {
   id: "sqlite",
   label: "SQLite",
@@ -158,6 +214,7 @@ module.exports = {
   close,
   resolveDatabase,
   introspect,
+  runReadOnlyQuery,
   // exported for unit tests
   mapSqliteIntrospection,
 };

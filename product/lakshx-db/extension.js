@@ -19,6 +19,19 @@ const fs = require("fs");
 const path = require("path");
 const { listEngines, getDriver } = require("./lib/engines.js");
 const { redactText } = require("./lib/redact.js");
+const { createRunReadOnlyQuery } = require("./lib/query-api.js");
+const { DEFAULT_TIMEOUT_MS } = require("./lib/query-guard.js");
+
+// Per-connection "Allow AI queries" opt-in (design §6), default OFF. Stored in
+// globalState (it's a boolean policy flag, not a secret), keyed per engine so
+// enabling it for one engine never enables it for another.
+const aiQueriesKey = (engineId) => `lakshx.db.${engineId}.allowAiQueries`;
+function isAiQueriesAllowed(context, engineId) {
+  return context.globalState.get(aiQueriesKey(engineId), false) === true;
+}
+function setAiQueriesAllowed(context, engineId, value) {
+  return context.globalState.update(aiQueriesKey(engineId), value === true);
+}
 
 const log = vscode.window.createOutputChannel("LakshX Database");
 
@@ -153,6 +166,7 @@ function panelHtml(context, webview) {
   <div id="toolbar">
     <span id="title">Database Schema</span>
     <div class="spacer"></div>
+    <button id="aiQueries" class="ghost" title="Let the AI assistant run read-only queries against this connection">Allow AI queries</button>
     <button id="refresh" class="ghost" title="Re-read the schema and redraw">Refresh</button>
     <button id="changeConnection" class="ghost" title="Forget this connection and connect elsewhere">Change Connection&hellip;</button>
   </div>
@@ -206,6 +220,7 @@ async function showPanel(context) {
     currentPanel.reveal(vscode.ViewColumn.Beside, true);
     session.panel = currentPanel;
     if (engineChanged) await session.refresh();
+    postAiState(context); // engine may have changed — refresh the toolbar's opt-in state
     return;
   }
 
@@ -234,8 +249,45 @@ async function showPanel(context) {
       await session.forgetOwnCredentials();
       await session.dispose();
       await session.refresh();
+    } else if (m.type === "getAiQueries") {
+      postAiState(context);
+    } else if (m.type === "toggleAiQueries") {
+      await handleToggleAiQueries(context);
     }
   });
+}
+
+/** Posts the current engine's "Allow AI queries" state to the webview so the
+ * toolbar button reflects it. */
+function postAiState(context) {
+  const engineId = session?.engineId;
+  currentPanel?.webview.postMessage({
+    type: "aiQueries",
+    enabled: engineId ? isAiQueriesAllowed(context, engineId) : false,
+  });
+}
+
+/** Turning the flag ON requires a one-time confirmation that spells out the
+ * PII-egress consequence (design §6); turning it OFF is immediate. */
+async function handleToggleAiQueries(context) {
+  const engineId = session?.engineId;
+  if (!engineId) return;
+  if (isAiQueriesAllowed(context, engineId)) {
+    await setAiQueriesAllowed(context, engineId, false);
+  } else {
+    const choice = await vscode.window.showWarningMessage(
+      "This lets the AI assistant read real rows from this database and send them to your model provider. " +
+        "Prefer a non-production connection. Enable?",
+      { modal: true },
+      "Enable",
+    );
+    if (choice !== "Enable") {
+      postAiState(context);
+      return;
+    }
+    await setAiQueriesAllowed(context, engineId, true);
+  }
+  postAiState(context);
 }
 
 async function forgetCredentials(context) {
@@ -271,6 +323,20 @@ function activate(context) {
     statusItem,
     log,
   );
+
+  // Exported cross-extension API (design §"Wire path" step 7): lakshx-chat's
+  // ACP relay calls this to run the agent's db_query tool. It ALWAYS resolves
+  // to { text, isError } and NEVER throws across the boundary. The opt-in gate,
+  // secret read, driver dispatch, formatting, and redaction all live behind it.
+  const runReadOnlyQuery = createRunReadOnlyQuery({
+    getDriver,
+    getSecret: (secretKey) => context.secrets.get(secretKey),
+    isAiQueriesAllowed: (engineId) => isAiQueriesAllowed(context, engineId),
+    redactText,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+  });
+
+  return { runReadOnlyQuery };
 }
 
 function deactivate() {

@@ -79,6 +79,24 @@ button.ghost:hover {
   border-color: rgba(255, 255, 255, 0.16);
 }
 
+/* "Allow AI queries" toolbar toggle, enabled state: same calm blue as the
+   enforced-FK accent, so "on" reads as a deliberate, live capability. */
+#aiQueries.on {
+  color: var(--fk);
+  border-color: var(--fk);
+  background: rgba(122, 162, 247, 0.1);
+}
+#aiQueries.on::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--fk);
+  vertical-align: middle;
+}
+
 #banner {
   margin: 12px;
   padding: 8px 12px;

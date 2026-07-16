@@ -14,6 +14,13 @@
 const { Client } = require("pg");
 const { redactText } = require("../redact.js");
 const { buildSqlPayload, markForeignKeyFields } = require("../sql-common.js");
+const {
+  classifyStatement,
+  isWrappable,
+  wrapWithRowLimit,
+  clampMaxRows,
+  DEFAULT_TIMEOUT_MS,
+} = require("../query-guard.js");
 
 // The database is fixed by the connection (Postgres can't switch databases
 // on a live connection), so introspection covers every schema on the
@@ -152,6 +159,65 @@ async function introspect(client, dbName) {
   });
 }
 
+// ---- read-only ad-hoc query (db_query feature; design §3/§4) --------------
+//
+// Layer 1 (PRIMARY): `BEGIN TRANSACTION READ ONLY` — Postgres rejects any
+// write inside a read-only transaction with 25006 (read_only_sql_transaction),
+// including writes reached through a CTE or a volatile function. This rests on
+// the Postgres docs / SET TRANSACTION semantics; it is NOT verified against a
+// live server here (no local Postgres was reachable during development).
+// Layer 3 (row cap): wrap the query in a subquery with LIMIT maxRows+1.
+// Layer 4 (timeout): SET LOCAL statement_timeout, scoped to this transaction.
+// A FRESH connection is opened per call — the introspection handle is never
+// reused — and the transaction is ALWAYS rolled back in `finally`.
+
+/** Runs the read-only transaction against an already-connected client.
+ * Split out (and exported) so it can be unit-tested with a fake client that
+ * records the exact command sequence, without a live Postgres. */
+async function runReadOnlyWithClient(client, sql, { maxRows, timeoutMs, kind }) {
+  let inTxn = false;
+  try {
+    await client.query("BEGIN TRANSACTION READ ONLY");
+    inTxn = true;
+    await client.query(`SET LOCAL statement_timeout = ${Math.floor(timeoutMs)}`);
+
+    const dbRes = await client.query("SELECT current_database() AS db");
+    const databaseName = dbRes?.rows?.[0]?.db;
+
+    const finalSql = isWrappable(kind) ? wrapWithRowLimit(sql, maxRows + 1) : sql;
+    // rowMode:"array" so we return positional rows[][] regardless of duplicate
+    // column names; `fields` still carries the (aliased) column names.
+    const res = await client.query({ text: finalSql, rowMode: "array" });
+
+    const columns = (res.fields || []).map((f) => f.name);
+    let rows = res.rows || [];
+    let truncated = false;
+    if (rows.length > maxRows) {
+      truncated = true;
+      rows = rows.slice(0, maxRows);
+    }
+    return { columns, rows, rowCount: rows.length, truncated, databaseName };
+  } finally {
+    if (inTxn) await client.query("ROLLBACK").catch(() => {});
+  }
+}
+
+/** Opens a fresh connection and runs `sql` read-only. `conn` is the
+ * connection URI (the stored secret), NOT a live handle. */
+async function runReadOnlyQuery(conn, sql, opts = {}) {
+  const maxRows = clampMaxRows(opts.maxRows);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const { kind } = classifyStatement(sql); // throws QueryRejectedError (allowlist) before opening anything
+
+  const client = new Client({ connectionString: conn, connectionTimeoutMillis: 8000 });
+  await client.connect();
+  try {
+    return await runReadOnlyWithClient(client, sql, { maxRows, timeoutMs, kind });
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 module.exports = {
   id: "postgres",
   label: "PostgreSQL",
@@ -169,6 +235,8 @@ module.exports = {
   close,
   resolveDatabase,
   introspect,
+  runReadOnlyQuery,
   // exported for unit tests
   mapPostgresIntrospection,
+  runReadOnlyWithClient,
 };

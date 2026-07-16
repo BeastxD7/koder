@@ -9,6 +9,13 @@
 const mysql = require("mysql2/promise");
 const { redactText } = require("../redact.js");
 const { buildSqlPayload, markForeignKeyFields } = require("../sql-common.js");
+const {
+  classifyStatement,
+  isWrappable,
+  wrapWithRowLimit,
+  clampMaxRows,
+  DEFAULT_TIMEOUT_MS,
+} = require("../query-guard.js");
 
 // MySQL's built-in schemas — filtered out of the database picker, same idea
 // as the Mongo driver's SYSTEM_DB_NAMES.
@@ -133,6 +140,60 @@ async function introspect(conn, dbName) {
   });
 }
 
+// ---- read-only ad-hoc query (db_query feature; design §3/§4) --------------
+//
+// Layer 1 (PRIMARY): `START TRANSACTION READ ONLY` — MySQL/InnoDB rejects
+// writes inside a read-only transaction (ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION,
+// 1792). Rests on the MySQL docs; NOT verified against a live server here (no
+// local MySQL was reachable during development). Layer 3: subquery wrap with
+// LIMIT maxRows+1. Layer 4: session `max_execution_time` (applies to SELECT).
+// Fresh connection per call; always rolled back in `finally`.
+
+/** Runs the read-only transaction against an already-connected connection.
+ * Exported so it can be unit-tested with a fake connection that records the
+ * command sequence, without a live MySQL. */
+async function runReadOnlyWithConnection(conn, sql, { maxRows, timeoutMs, kind }) {
+  let inTxn = false;
+  try {
+    await conn.query("START TRANSACTION READ ONLY");
+    inTxn = true;
+    await conn.query(`SET SESSION max_execution_time = ${Math.floor(timeoutMs)}`);
+
+    const [dbRows] = await conn.query("SELECT DATABASE() AS db");
+    const databaseName = dbRows?.[0]?.db;
+
+    const finalSql = isWrappable(kind) ? wrapWithRowLimit(sql, maxRows + 1) : sql;
+    // rowsAsArray so duplicate column names don't collapse; `fields` carries names.
+    const [rawRows, fields] = await conn.query({ sql: finalSql, rowsAsArray: true });
+
+    const columns = (fields || []).map((f) => f.name);
+    let rows = Array.isArray(rawRows) ? rawRows : [];
+    let truncated = false;
+    if (rows.length > maxRows) {
+      truncated = true;
+      rows = rows.slice(0, maxRows);
+    }
+    return { columns, rows, rowCount: rows.length, truncated, databaseName };
+  } finally {
+    if (inTxn) await conn.query("ROLLBACK").catch(() => {});
+  }
+}
+
+/** Opens a fresh connection and runs `sql` read-only. `conn` is the
+ * connection URI (the stored secret), NOT a live handle. */
+async function runReadOnlyQuery(connString, sql, opts = {}) {
+  const maxRows = clampMaxRows(opts.maxRows);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const { kind } = classifyStatement(sql); // throws QueryRejectedError (allowlist) before opening anything
+
+  const conn = await mysql.createConnection({ uri: connString, connectTimeout: 8000 });
+  try {
+    return await runReadOnlyWithConnection(conn, sql, { maxRows, timeoutMs, kind });
+  } finally {
+    await conn.end().catch(() => {});
+  }
+}
+
 module.exports = {
   id: "mysql",
   label: "MySQL",
@@ -150,6 +211,8 @@ module.exports = {
   close,
   resolveDatabase,
   introspect,
+  runReadOnlyQuery,
   // exported for unit tests
   mapMysqlIntrospection,
+  runReadOnlyWithConnection,
 };
