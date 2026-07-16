@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<!--
+  Static visual harness for media/welcome.js — loads the real welcome UI in a
+  plain browser with a mock acquireVsCodeApi() standing in for extension.js.
+  Serve the extension root over http (e.g. `python3 -m http.server` from
+  product/lakshx-welcome) and open /test/harness.html. Logs every
+  postMessage the page sends (quickstart button clicks) to the console and
+  to the on-page log panel below the app, so a click can be confirmed
+  without needing the real extension host. NOT loaded by the extension —
+  test-only.
+-->
+<html><head>
+<meta charset="UTF-8">
+<title>LakshX welcome harness</title>
+<link rel="stylesheet" href="../media/welcome.css">
+<style>
+  /* harness-only chrome, never shipped */
+  #harness-log {
+    max-width: 920px;
+    margin: 0 auto 40px;
+    padding: 10px 14px;
+    background: #0b0d12;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: #7cd6c4;
+    white-space: pre-wrap;
+    min-height: 20px;
+  }
+  #harness-log-label {
+    max-width: 920px;
+    margin: 24px auto 6px;
+    padding: 0 14px;
+    color: #5c6577;
+    font-family: -apple-system, sans-serif;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+</style>
+</head><body>
+<div id="app">
+  <header id="hero">
+    <div id="wordmark"><span id="mark">Laksh</span><span id="mark-x">X</span></div>
+    <p id="tagline">A VS Code fork with its own agent built in — not a Copilot re-skin.</p>
+  </header>
+
+  <section id="pitch">
+    <h2>What makes this different</h2>
+    <p>
+      LakshX runs its own hand-written agent — a system-prompt-and-tool-calling loop, no
+      LangChain/AutoGPT framework — as a separate process talking to the editor over a real,
+      open protocol (ACP). Bring your own API key for Anthropic, OpenAI, OpenRouter, DeepSeek,
+      Groq, xAI, Gemini, or a local Ollama model. Everything below actually ships in this build.
+    </p>
+  </section>
+
+  <section id="features">
+    <h2>The real feature set</h2>
+    <div id="feature-grid" class="grid"></div>
+  </section>
+
+  <section id="quickstart">
+    <h2>Quick start</h2>
+    <div id="quickstart-actions" class="grid"></div>
+  </section>
+
+  <footer id="foot">
+    <span id="foot-note">Reopen this anytime: Command Palette &rarr; "LakshX: Show Welcome"</span>
+  </footer>
+</div>
+
+<div id="harness-log-label">Harness log (postMessage traffic, not part of the real UI)</div>
+<div id="harness-log">(waiting for a quickstart click...)</div>
+
+<script>
+  // ---- mock extension host ----
+  const logEl = document.getElementById("harness-log");
+  window.acquireVsCodeApi = () => ({
+    getState() {},
+    setState() {},
+    postMessage(m) {
+      const line = "[welcome→ext] " + JSON.stringify(m);
+      console.log(line);
+      logEl.textContent = line;
+    },
+  });
+</script>
+<script src="../media/welcome.js"></script>
+</body></html>

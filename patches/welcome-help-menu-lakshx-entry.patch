@@ -1,0 +1,57 @@
+diff --git a/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution.ts b/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution.ts
+index bcf5e9e2..a737d338 100644
+--- a/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution.ts
++++ b/src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.contribution.ts
+@@ -7,7 +7,7 @@ import { localize, localize2 } from '../../../../nls.js';
+ import { GettingStartedInputSerializer, GettingStartedPage, inWelcomeContext } from './gettingStarted.js';
+ import { Registry } from '../../../../platform/registry/common/platform.js';
+ import { EditorExtensions, IEditorFactoryRegistry } from '../../../common/editor.js';
+-import { MenuId, registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
++import { MenuId, MenuRegistry, registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
+ import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+ import { ContextKeyExpr, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+ import { IEditorService, SIDE_GROUP } from '../../../services/editor/common/editorService.js';
+@@ -48,6 +48,18 @@ registerAction2(class extends Action2 {
+ 				id: MenuId.MenubarHelpMenu,
+ 				group: '1_welcome',
+ 				order: 1,
++				// LakshX: keep the command itself registered (so an argument-
++				// driven `openWalkthrough` call and any legacy keybinding still
++				// work) but drop it from the Help menu. With every built-in
++				// walkthrough category gated to when:false
++				// (gettingStartedService.ts), calling this with no argument
++				// now opens the GettingStartedInput overview page with an
++				// empty/near-empty categories grid — still recognizably the
++				// stock VS Code "Welcome" page chrome, which is exactly the
++				// kind of leftover this pass is meant to remove. Replaced
++				// below by LakshX's own Help-menu entry, which opens the
++				// custom product/lakshx-welcome webview instead.
++				when: ContextKeyExpr.false(),
+ 			},
+ 			metadata: {
+ 				description: localize2('minWelcomeDescription', 'Opens a Walkthrough to help you get started in VS Code.')
+@@ -113,6 +125,24 @@ registerAction2(class extends Action2 {
+ 	}
+ });
+ 
++// LakshX: real Help-menu replacement for the "Welcome" entry hidden above.
++// The `walkthroughs`/menu contribution points extensions can use
++// (menusExtensionPoint.ts's apiMenus allowlist) do not include
++// MenuId.MenubarHelpMenu, so product/lakshx-welcome's package.json cannot
++// place a Help-menu item on its own — this core-side registration is the
++// only way to put an extension-contributed command (`lakshx.showWelcome`,
++// registered by that extension's extension.js) onto the Help menu. Same
++// group/order slot the stock "Welcome" entry used, since that one is now
++// hidden.
++MenuRegistry.appendMenuItem(MenuId.MenubarHelpMenu, {
++	group: '1_welcome',
++	command: {
++		id: 'lakshx.showWelcome',
++		title: localize2('lakshxWelcome', 'Welcome to LakshX'),
++	},
++	order: 1,
++});
++
+ Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(GettingStartedInput.ID, GettingStartedInputSerializer);
+ Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+ 	EditorPaneDescriptor.create(

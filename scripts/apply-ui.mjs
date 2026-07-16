@@ -19,7 +19,7 @@ if (!existsSync(join(upstream, "package.json"))) {
 }
 
 // 1. built-in extensions
-for (const ext of ["lakshx-ui", "lakshx-chat", "lakshx-graph", "lakshx-db", "lakshx-commentary", "theme-lakshx-carbon", "theme-lakshx-symbols"]) {
+for (const ext of ["lakshx-ui", "lakshx-chat", "lakshx-graph", "lakshx-db", "lakshx-commentary", "lakshx-welcome", "theme-lakshx-carbon", "theme-lakshx-symbols"]) {
   cpSync(join(root, "product", ext), join(upstream, "extensions", ext), { recursive: true });
   console.log(`${ext} extension → extensions/${ext}`);
 }

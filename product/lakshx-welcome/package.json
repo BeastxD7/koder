@@ -1,0 +1,34 @@
+{
+  "name": "lakshx-welcome",
+  "displayName": "LakshX Welcome",
+  "description": "LakshX's own first-launch and getting-started experience — a custom-branded webview replacing the stock VS Code walkthroughs (hidden by patches/welcome-hide-builtin-vscode-walkthroughs.patch) with real LakshX content: what makes it different, its actual feature set, and quick-start actions.",
+  "version": "0.0.1",
+  "publisher": "lakshx",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.128.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test:unit": "node --test test/*.test.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lakshx.showWelcome",
+        "title": "LakshX: Show Welcome",
+        "icon": "$(sparkle)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "lakshx.showWelcome"
+        }
+      ]
+    }
+  }
+}
