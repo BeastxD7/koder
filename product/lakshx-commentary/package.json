@@ -28,13 +28,23 @@
       {
         "command": "lakshx.commentary.testLine",
         "title": "LakshX Commentary: Show a Test Line"
+      },
+      {
+        "command": "lakshx.commentary.music.toggle",
+        "title": "LakshX FM: Toggle Background Music (Play/Pause)"
+      },
+      {
+        "command": "lakshx.commentary.music.pickStation",
+        "title": "LakshX FM: Pick Station / Add Custom Stream"
       }
     ],
     "menus": {
       "commandPalette": [
         { "command": "lakshx.commentary.toggleMute" },
         { "command": "lakshx.commentary.toggleVoice" },
-        { "command": "lakshx.commentary.testLine" }
+        { "command": "lakshx.commentary.testLine" },
+        { "command": "lakshx.commentary.music.toggle" },
+        { "command": "lakshx.commentary.music.pickStation" }
       ]
     },
     "configuration": {
@@ -67,6 +77,28 @@
           "minimum": 0,
           "maximum": 20,
           "description": "Maximum number of Tier-2 AI-generated quips per day (resets at local midnight). Only used when tier2.enabled is on."
+        },
+        "lakshx.commentary.music.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "LakshX FM background music. OFF by default and fully independent of commentary mute — this only controls the music player. When on, a player panel is available and the '$(play) LakshX FM' status-bar item lets you start/pause it. The first play must be a click inside the player panel (browser autoplay rules)."
+        },
+        "lakshx.commentary.music.station": {
+          "type": "string",
+          "default": "rp-main",
+          "description": "The current LakshX FM station: a built-in id ('rp-main' = Radio Paradise Main Mix, 'rp-mellow' = Radio Paradise Mellow Mix), or a custom https:// stream URL you added via 'LakshX FM: Pick Station / Add Custom Stream'."
+        },
+        "lakshx.commentary.music.volume": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "LakshX FM playback volume (0–100). Also settable live from the volume slider in the player panel."
+        },
+        "lakshx.commentary.music.duckDuringCommentary": {
+          "type": "boolean",
+          "default": true,
+          "description": "While a spoken commentary line plays, briefly lower LakshX FM's volume (to ~15%) so the line is audible, then restore it. Turn off to keep the music at full volume during commentary."
         }
       }
     }

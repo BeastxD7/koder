@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!--
+  LakshX FM player — the webview shell hosted by extension.js.
+
+  This file is a TEMPLATE, not loaded directly: extension.js reads it and
+  string-substitutes the __CSP__, __CSS_URI__, __JS_URI__ and __NONCE__ tokens
+  (webview.asWebviewUri / webview.cspSource / a fresh nonce) before assigning
+  it to panel.webview.html — the same asWebviewUri + CSP approach as the
+  sibling lakshx-db webview.
+
+  For visual testing without a VS Code host, test/harness.html reproduces this
+  DOM with a permissive dev CSP + a mock acquireVsCodeApi() and loads the REAL
+  media/player.js. Keep the element ids here in sync with that harness.
+-->
+<html><head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="__CSP__">
+<link rel="stylesheet" href="__CSS_URI__">
+</head><body>
+<div id="app">
+  <div id="nowplaying">
+    <div id="stationRow">
+      <span id="stationName">LakshX FM</span>
+      <a id="stationLink" href="#" target="_blank" rel="noreferrer noopener" hidden>site</a>
+    </div>
+    <div id="status" class="status paused">Stopped</div>
+  </div>
+  <div id="controls">
+    <button id="playPause" type="button" aria-label="Play">
+      <span id="playPauseLabel">▶ Play</span>
+    </button>
+    <div id="volumeWrap">
+      <span class="vol-icon" aria-hidden="true">🔊</span>
+      <input id="volume" type="range" min="0" max="100" value="60" aria-label="Volume">
+    </div>
+  </div>
+  <p id="hint">First play must be a click here — browser autoplay rules. After that, the LakshX FM status-bar button controls it.</p>
+  <!-- Single HTML5 audio element. No `autoplay` attribute: the first play is a real user click (Chromium autoplay-gesture policy). -->
+  <audio id="audio" preload="none"></audio>
+</div>
+<script nonce="__NONCE__" src="__JS_URI__"></script>
+</body></html>

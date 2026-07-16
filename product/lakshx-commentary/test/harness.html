@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<!--
+  Static visual harness for media/player.js — loads the REAL player UI + logic
+  in a plain browser with a mock acquireVsCodeApi() standing in for
+  extension.js. Serve the extension root over http (e.g. `python3 -m http.server`
+  from product/lakshx-commentary) and open /test/harness.html.
+
+  The CSP here mirrors the production one closely (media-src pinned to Radio
+  Paradise) so the harness exercises the same constraints the real webview does,
+  while adding 'unsafe-inline' for this file's mock script only. NOT loaded by
+  the extension — test-only. Keep the element ids in sync with media/player.html.
+-->
+<html><head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src https://stream.radioparadise.com; img-src 'self';">
+<title>LakshX FM player harness</title>
+<link rel="stylesheet" href="../media/player.css">
+<style>
+  body { background: #0e1116; }
+  #devbar { max-width: 460px; margin: 12px auto 0; padding: 10px 18px; border-top: 1px solid rgba(255,255,255,.1); display: flex; flex-wrap: wrap; gap: 6px; }
+  #devbar button { font-size: 11px; padding: 4px 8px; cursor: pointer; }
+  #devlog { max-width: 460px; margin: 8px auto; padding: 8px 18px; font: 11px/1.5 monospace; color: #8aa; white-space: pre-wrap; }
+</style>
+</head><body>
+<div id="app">
+  <div id="nowplaying">
+    <div id="stationRow">
+      <span id="stationName">LakshX FM</span>
+      <a id="stationLink" href="#" target="_blank" rel="noreferrer noopener" hidden>site</a>
+    </div>
+    <div id="status" class="status paused">Stopped</div>
+  </div>
+  <div id="controls">
+    <button id="playPause" type="button" aria-label="Play">
+      <span id="playPauseLabel">▶ Play</span>
+    </button>
+    <div id="volumeWrap">
+      <span class="vol-icon" aria-hidden="true">🔊</span>
+      <input id="volume" type="range" min="0" max="100" value="60" aria-label="Volume">
+    </div>
+  </div>
+  <p id="hint">First play must be a click here — browser autoplay rules. After that, the LakshX FM status-bar button controls it.</p>
+  <audio id="audio" preload="none"></audio>
+</div>
+
+<div id="devbar">
+  <button id="btnStationMain">→ setStation Main Mix</button>
+  <button id="btnStationMellow">→ setStation Mellow</button>
+  <button id="btnPlay">→ play</button>
+  <button id="btnPause">→ pause</button>
+  <button id="btnDuck">→ duck</button>
+  <button id="btnUnduck">→ unduck</button>
+  <button id="btnVol30">→ volume 30</button>
+</div>
+<div id="devlog"></div>
+
+<script>
+  // ---- mock extension host ----
+  const logEl = document.getElementById("devlog");
+  const logLine = (s) => { logEl.textContent += s + "\n"; };
+
+  // player.js -> host messages arrive here
+  const seen = [];
+  const handlers = {
+    ready() {
+      logLine("[player→ext] ready — sending handshake (setStation Main Mix + volume 60)");
+      send({ type: "setStation", url: "https://stream.radioparadise.com/aac-128", name: "Radio Paradise — Main Mix", homepage: "https://radioparadise.com" });
+      send({ type: "volume", value: 60 });
+    },
+    state(m) { logLine("[player→ext] state=" + m.value); },
+    volumeChanged(m) { logLine("[player→ext] volumeChanged=" + m.value); },
+    needsGesture() { logLine("[player→ext] needsGesture (click Play)"); },
+  };
+
+  window.acquireVsCodeApi = () => ({
+    getState() {}, setState() {},
+    postMessage(m) {
+      seen.push(m);
+      (handlers[m.type] || ((x) => logLine("[player→ext] " + JSON.stringify(x))))(m);
+    },
+  });
+
+  // host -> player.js (mirrors extension.js postMessage into the webview)
+  function send(msg) { window.postMessage(msg, "*"); }
+
+  document.getElementById("btnStationMain").onclick = () => send({ type: "setStation", url: "https://stream.radioparadise.com/aac-128", name: "Radio Paradise — Main Mix", homepage: "https://radioparadise.com" });
+  document.getElementById("btnStationMellow").onclick = () => send({ type: "setStation", url: "https://stream.radioparadise.com/mellow-aac-128", name: "Radio Paradise — Mellow Mix", homepage: "https://radioparadise.com" });
+  document.getElementById("btnPlay").onclick = () => send({ type: "play" });
+  document.getElementById("btnPause").onclick = () => send({ type: "pause" });
+  document.getElementById("btnDuck").onclick = () => send({ type: "duck" });
+  document.getElementById("btnUnduck").onclick = () => send({ type: "unduck" });
+  document.getElementById("btnVol30").onclick = () => send({ type: "volume", value: 30 });
+
+  // expose for automated inspection
+  window.__player = {
+    audio: document.getElementById("audio"),
+    seenMessages: seen,
+    send,
+  };
+</script>
+<!-- the REAL player logic under test -->
+<script src="../media/player.js"></script>
+</body></html>

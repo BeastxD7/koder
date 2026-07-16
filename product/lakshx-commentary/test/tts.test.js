@@ -63,3 +63,31 @@ test("speak() calls onUnavailable exactly once when no TTS is available", () => 
   }
   assert.equal(calls, 1);
 });
+
+test("speak() fires onDone (once) even when no TTS is available, so a ducking caller never stays stuck", () => {
+  // The synchronous no-plan path must still resolve onDone so background music
+  // can un-duck. Guarantee it fires, and only once.
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "sunos" });
+  let done = 0;
+  try {
+    const launched = speak("test line", { onUnavailable: () => {}, onDone: () => done++ });
+    assert.equal(launched, false);
+  } finally {
+    Object.defineProperty(process, "platform", originalPlatform);
+  }
+  assert.equal(done, 1);
+});
+
+test("speak() stays backward-compatible: callers passing no onDone are unaffected and it still returns synchronously", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "sunos" });
+  try {
+    assert.doesNotThrow(() => {
+      const launched = speak("hi");
+      assert.equal(typeof launched, "boolean");
+    });
+  } finally {
+    Object.defineProperty(process, "platform", originalPlatform);
+  }
+});

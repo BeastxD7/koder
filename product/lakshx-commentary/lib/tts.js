@@ -64,8 +64,26 @@ function buildSpeakPlan(text, platform = process.platform, linuxTts = undefined)
  * TTS was available or the spawn itself failed synchronously.
  * `onUnavailable` is called at most once per invocation, for callers that
  * want to show a one-time "voice not available, falling back to text" notice.
+ *
+ * `onDone` (optional, backward-compatible) is called at most once when the
+ * spawned TTS process finishes — on its `close` event (spoke, then exited) OR
+ * on an async `error` event (e.g. post-spawn ENOENT). It exists so callers
+ * that duck other audio while speaking can un-duck the instant speech ends.
+ * Callers that pass no `onDone` are completely unaffected: `speak()` still
+ * returns synchronously (true if a process launched, false otherwise), and
+ * no behavior changes for them. If the child never fires either event,
+ * `onDone` is not called — callers needing a hard guarantee should keep their
+ * own timeout fallback (extension.js does).
  */
-function speak(text, { onUnavailable } = {}) {
+function speak(text, { onUnavailable, onDone } = {}) {
+  // Fire onDone at most once, whichever path resolves first (no plan,
+  // synchronous spawn failure, async error, or normal close).
+  let doneFired = false;
+  const fireDone = () => {
+    if (doneFired) return;
+    doneFired = true;
+    try { onDone?.(); } catch { /* never let a caller's callback crash us */ }
+  };
   let plan;
   try {
     plan = buildSpeakPlan(text);
@@ -74,6 +92,7 @@ function speak(text, { onUnavailable } = {}) {
   }
   if (!plan) {
     try { onUnavailable?.(); } catch { /* never let a caller's callback crash us */ }
+    fireDone(); // speech won't happen — resolve immediately so a ducking caller un-ducks
     return false;
   }
   try {
@@ -86,6 +105,10 @@ function speak(text, { onUnavailable } = {}) {
     // that into a graceful fallback instead of taking down the extension host.
     child.on("error", () => {
       try { onUnavailable?.(); } catch { /* ignore */ }
+      fireDone(); // an ENOENT here means speech never happens — don't leave a ducked caller stuck
+    });
+    child.on("close", () => {
+      fireDone(); // normal completion: process spoke (or no-op'd) and exited
     });
     if (plan.stdin !== undefined && child.stdin) {
       child.stdin.write(plan.stdin);
@@ -94,6 +117,7 @@ function speak(text, { onUnavailable } = {}) {
     return true;
   } catch {
     try { onUnavailable?.(); } catch { /* ignore */ }
+    fireDone();
     return false;
   }
 }
