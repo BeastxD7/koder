@@ -1,0 +1,618 @@
+<title>LakshX — Product Pitch</title>
+<meta name="description" content="LakshX product pitch deck — the agentic IDE built for one developer today, an engineering team's shared brain tomorrow.">
+<style>
+  :root {
+    --void: #0a0b0f;
+    --panel: #14161d;
+    --panel-2: #1b1e27;
+    --hair: rgba(157,127,255,0.16);
+    --hair-strong: rgba(157,127,255,0.32);
+    --ink: #eae8f2;
+    --muted: #8d90a6;
+    --faint: #5b5e70;
+    --accent: #9d7fff;
+    --accent-2: #6a48f0;
+    --accent-soft: rgba(157,127,255,0.12);
+    --good: #57d9a3;
+    --good-soft: rgba(87,217,163,0.13);
+    --warn: #ffb454;
+    --warn-soft: rgba(255,180,84,0.13);
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "SF Mono", "Cascadia Code", "Consolas", "Menlo", ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--void); color: var(--ink);
+    font-family: var(--sans);
+    overflow: hidden;
+  }
+  ::selection { background: var(--accent); color: #0a0b0f; }
+
+  /* ---------- deck shell ---------- */
+  #deck {
+    position: relative;
+    width: 100vw; height: 100vh;
+    background:
+      radial-gradient(1200px 700px at 82% -10%, rgba(157,127,255,0.10), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(106,72,240,0.08), transparent 55%),
+      var(--void);
+  }
+
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 6.4vh 8vw 11vh;
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  .slide.active {
+    display: flex;
+    animation: rise .5s cubic-bezier(.16,1,.3,1) forwards;
+  }
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .slide.active { animation: none; opacity: 1; transform: none; }
+  }
+
+  .slide::before {
+    content: "";
+    position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2) 45%, transparent 75%);
+  }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 22px;
+  }
+  .kicker::before {
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    flex: none;
+  }
+  .kicker.warn { color: var(--warn); }
+  .kicker.warn::before { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+
+  h1, h2 {
+    font-family: var(--serif);
+    font-weight: 400;
+    line-height: 1.12;
+    text-wrap: balance;
+    margin: 0 0 20px;
+    max-width: 20ch;
+  }
+  h1 { font-size: clamp(34px, 4.6vw, 62px); }
+  h2 { font-size: clamp(28px, 3.6vw, 46px); }
+  em { font-style: italic; color: var(--accent); }
+
+  .lede {
+    font-size: 18px;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 62ch;
+    margin: 0 0 8px;
+  }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 5px 10px 5px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .chip.good { background: var(--good-soft); color: var(--good); border: 1px solid rgba(87,217,163,0.28); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid rgba(255,180,84,0.28); }
+  .chip .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  .body-area { flex: 1; display: flex; flex-direction: column; justify-content: center; min-height: 0; }
+
+  /* ---------- title slide ---------- */
+  .mark { width: 76px; height: 76px; flex: none; }
+  .title-top { display: flex; align-items: center; gap: 22px; margin-bottom: 34px; }
+  .wordmark { font-family: var(--serif); font-size: clamp(46px, 7vw, 88px); letter-spacing: 0.01em; }
+  .wordmark sup { font-family: var(--mono); font-size: 14px; color: var(--muted); letter-spacing: 0.08em; vertical-align: super; margin-left: 10px; }
+  .tagline { font-size: clamp(19px, 2vw, 24px); color: var(--ink); max-width: 30ch; line-height: 1.45; margin-bottom: 30px; font-family: var(--serif); font-style: italic; }
+  .status-row { display: flex; gap: 12px; margin-bottom: auto; flex-wrap: wrap; }
+  .footer-row {
+    font-family: var(--mono); font-size: 12px; color: var(--faint);
+    display: flex; gap: 22px; letter-spacing: 0.02em;
+  }
+
+  /* ---------- grids / cards ---------- */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--hair);
+    border-radius: 6px;
+    padding: 18px 20px;
+  }
+  .card .label { font-family: var(--mono); font-size: 13px; color: var(--ink); font-weight: 600; letter-spacing: 0.01em; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .card .desc { font-size: 14.5px; color: var(--muted); line-height: 1.5; }
+  .mini-chip { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.07em; padding: 2px 6px; border-radius: 3px; text-transform: uppercase; flex: none; }
+  .mini-chip.good { background: var(--good-soft); color: var(--good); }
+  .mini-chip.warn { background: var(--warn-soft); color: var(--warn); }
+
+  /* ---------- numbered / labeled list ---------- */
+  .stack { display: flex; flex-direction: column; gap: 16px; max-width: 74ch; }
+  .stack-item { display: flex; gap: 16px; align-items: baseline; }
+  .stack-item .tag { font-family: var(--mono); font-size: 13px; color: var(--accent); flex: none; width: 15ch; }
+  .stack-item .txt { font-size: 16px; color: var(--ink); line-height: 1.55; }
+  .stack-item .txt b { color: var(--ink); font-weight: 600; }
+
+  .closing-line { font-family: var(--serif); font-style: italic; font-size: 20px; color: var(--ink); margin-top: 26px; max-width: 50ch; }
+
+  /* ---------- phase diagram ---------- */
+  .phase-row { display: flex; align-items: center; gap: 0; margin: 30px 0 10px; flex-wrap: wrap; }
+  .phase-node {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em;
+    padding: 12px 18px; border-radius: 5px;
+    background: var(--panel); border: 1px solid var(--hair-strong); color: var(--muted);
+  }
+  .phase-node.pass { color: var(--good); border-color: rgba(87,217,163,0.35); background: var(--good-soft); }
+  .phase-node.active { color: var(--ink); border-color: var(--hair-strong); }
+  .phase-arrow { color: var(--faint); font-size: 18px; padding: 0 10px; }
+  .loop-row { display: flex; gap: 30px; margin-top: 18px; flex-wrap: wrap; }
+  .loop {
+    font-family: var(--mono); font-size: 12.5px; color: var(--warn);
+    border: 1px dashed rgba(255,180,84,0.4); border-radius: 5px; padding: 9px 14px;
+    background: var(--warn-soft);
+  }
+  .diagram-caption { margin-top: 22px; font-size: 15px; color: var(--muted); max-width: 66ch; line-height: 1.6; }
+
+  /* ---------- brain diagram ---------- */
+  .brain-wrap { display: flex; align-items: center; justify-content: center; gap: 8vw; margin: 20px 0; }
+  .brain-col { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .brain-col-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; }
+  .agent-nodes { display: flex; flex-direction: column; gap: 10px; }
+  .agent-node {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--hair);
+    border-radius: 4px; padding: 7px 12px; width: 15ch;
+  }
+  .agent-node.connected { color: var(--ink); border-color: var(--hair-strong); }
+  .brain-core {
+    font-family: var(--mono); font-size: 13px; color: var(--void); font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border-radius: 50%;
+    width: 108px; height: 108px;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; line-height: 1.25; letter-spacing: 0.02em;
+    box-shadow: 0 0 0 10px rgba(157,127,255,0.08), 0 0 40px rgba(157,127,255,0.25);
+  }
+
+  /* ---------- table ---------- */
+  .tbl-wrap { overflow-x: auto; max-width: 100%; }
+  table.cmp { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 13px 18px; border-bottom: 1px solid var(--hair); }
+  table.cmp th { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  table.cmp th.hl, table.cmp td.hl { background: var(--accent-soft); }
+  table.cmp td.row-label { color: var(--ink); font-weight: 500; }
+  table.cmp td.yes { color: var(--good); font-family: var(--mono); }
+  table.cmp td.no { color: var(--faint); font-family: var(--mono); }
+
+  /* ---------- scenario cards ---------- */
+  .scenario { border-left: 2px solid var(--accent); padding-left: 16px; }
+  .scenario .s-title { font-family: var(--mono); font-size: 13px; color: var(--ink); margin-bottom: 6px; letter-spacing: 0.01em; }
+  .scenario .s-desc { font-size: 14px; color: var(--muted); line-height: 1.55; }
+
+  /* ---------- mapping rows ---------- */
+  .map-row { display: grid; grid-template-columns: 1fr 40px 1fr; align-items: center; gap: 18px; padding: 16px 0; border-bottom: 1px solid var(--hair); }
+  .map-row:last-child { border-bottom: none; }
+  .map-side { font-size: 15px; line-height: 1.5; }
+  .map-side .k { font-family: var(--mono); font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.08em; display: block; margin-bottom: 5px; }
+  .map-side.left .k { color: var(--good); }
+  .map-side.right .k { color: var(--warn); }
+  .map-arrow { color: var(--accent); font-size: 20px; text-align: center; }
+
+  /* ---------- big statement ---------- */
+  .statement { font-family: var(--serif); font-size: clamp(30px, 4vw, 50px); line-height: 1.18; max-width: 22ch; text-wrap: balance; }
+
+  /* ---------- ask cards ---------- */
+  .ask-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .ask-card .who { font-family: var(--mono); font-size: 12.5px; color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 10px; }
+
+  /* ---------- nav chrome ---------- */
+  #chrome { position: fixed; left: 0; right: 0; bottom: 0; height: 8vh; min-height: 56px; display: flex; align-items: center; justify-content: space-between; padding: 0 3vw; z-index: 20; }
+  #dots { display: flex; gap: 7px; }
+  .navdot { width: 6px; height: 6px; border-radius: 50%; background: var(--hair-strong); border: none; padding: 0; cursor: pointer; }
+  .navdot.on { background: var(--accent); }
+  #counter { font-family: var(--mono); font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+  .navbtn {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    background: transparent; border: 1px solid var(--hair-strong); color: var(--muted);
+    padding: 7px 14px; border-radius: 4px; cursor: pointer;
+  }
+  .navbtn:hover { color: var(--ink); border-color: var(--accent); }
+  .navbtn:focus-visible, .navdot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #nav-btns { display: flex; gap: 8px; }
+
+  /* ---------- print ---------- */
+  @media print {
+    html, body { overflow: visible; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #chrome { display: none; }
+    #deck { height: auto; }
+    .slide { position: relative; display: flex !important; opacity: 1 !important; transform: none !important; animation: none !important;
+      page-break-after: always; width: 100%; height: 100vh; }
+    @page { size: landscape; margin: 0; }
+  }
+
+  @media (max-width: 900px) {
+    .grid-2, .grid-3, .grid-4, .ask-grid { grid-template-columns: 1fr; }
+    .brain-wrap { gap: 8vw; transform: scale(0.85); }
+  }
+</style>
+
+<div id="deck">
+
+  <!-- 1 : TITLE -->
+  <section class="slide active">
+    <div class="body-area">
+      <div class="title-top">
+        <svg class="mark" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#15181f"/><stop offset="1" stop-color="#0a0c10"/></linearGradient>
+            <linearGradient id="spark1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9d7fff"/><stop offset="1" stop-color="#6a48f0"/></linearGradient>
+          </defs>
+          <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg1)"/>
+          <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#7c5cff" stroke-opacity="0.35" stroke-width="8"/>
+          <path d="M512 200 L568 424 L768 320 L616 496 L824 512 L616 528 L768 704 L568 600 L512 824 L456 600 L256 704 L408 528 L200 512 L408 496 L256 320 L456 424 Z" fill="url(#spark1)"/>
+          <circle cx="512" cy="512" r="56" fill="#0a0c10"/>
+          <circle cx="512" cy="512" r="34" fill="#c8b6ff"/>
+        </svg>
+        <div>
+          <div class="kicker">Product Pitch — YC · Microsoft for Startups · AWS Activate</div>
+          <div class="wordmark">LakshX<sup>IDE</sup></div>
+        </div>
+      </div>
+      <p class="tagline">The agentic IDE that remembers — built for one developer today, an entire engineering team tomorrow.</p>
+      <div class="status-row">
+        <span class="chip good"><span class="dot"></span>Prototype — shipped</span>
+        <span class="chip warn"><span class="dot"></span>Enterprise Agent Brain — ideation</span>
+      </div>
+    </div>
+    <div class="footer-row">
+      <span>lakshx.in</span>
+      <span>MIT licensed</span>
+      <span>VS Code fork</span>
+    </div>
+  </section>
+
+  <!-- 2 : THE PROBLEM -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">The problem</div>
+      <h1>Every AI coding agent today is a <em>brilliant amnesiac.</em></h1>
+      <div class="stack">
+        <div class="stack-item"><span class="tag">session-scoped</span><span class="txt">Close the chat and the reasoning is gone. Tomorrow's session starts from zero, even on the same file.</span></div>
+        <div class="stack-item"><span class="tag">machine-scoped</span><span class="txt">The agent only knows the one folder open on the one laptop it happens to be running on.</span></div>
+        <div class="stack-item"><span class="tag">unverified "done"</span><span class="txt">The model <b>tells you</b> it finished. Nothing independently re-checks that claim against reality.</span></div>
+      </div>
+      <p class="closing-line">None of this is a model problem. It's an infrastructure problem.</p>
+    </div>
+  </section>
+
+  <!-- 3 : OUR INSIGHT -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Our insight</div>
+      <h1>The next unlock isn't a smarter model. It's <em>trustworthy autonomy.</em></h1>
+      <div class="grid-3" style="margin-top: 8px;">
+        <div class="card">
+          <div class="label">Verification, not vibes</div>
+          <div class="desc">"Done" is a re-run of a real, hash-frozen spec — a process exits 0, a test actually passes — not a sentence the model generated.</div>
+        </div>
+        <div class="card">
+          <div class="label">Persistent memory, not sessions</div>
+          <div class="desc">Every action the agent takes is traced and stored locally, always on — the record outlives the chat window.</div>
+        </div>
+        <div class="card">
+          <div class="label">Shared context, not one machine</div>
+          <div class="desc">The long-term bet: that memory shouldn't stop at one person's laptop when the work never did.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 : WHAT WE'VE BUILT -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Product today — shipped</div>
+      <h2>A VS Code fork with a real engineer inside it.</h2>
+      <div class="grid-2" style="margin-top: 6px;">
+        <div class="card"><div class="label">Royal Mode 2.0 <span class="mini-chip good">shipped</span></div><div class="desc">Plans, executes, and verifies its own work through a gated phase machine before it's allowed to call anything done.</div></div>
+        <div class="card"><div class="label">Background subagents <span class="mini-chip good">shipped</span></div><div class="desc">Dispatches and monitors parallel work without blocking the main session — check in, don't babysit.</div></div>
+        <div class="card"><div class="label">Local trace store <span class="mini-chip good">shipped</span></div><div class="desc">Every agent action recorded locally and always on, no external observability service required.</div></div>
+        <div class="card"><div class="label">Bring-your-own-model <span class="mini-chip good">shipped</span></div><div class="desc">Plug in any provider you already pay for — nothing is locked to one vendor's API.</div></div>
+        <div class="card"><div class="label">Structural search & secrets scan <span class="mini-chip good">shipped</span></div><div class="desc">AST-aware find/replace and SAST-lite security checks built directly into the editor, not bolted on.</div></div>
+        <div class="card"><div class="label">Dependency & call graph <span class="mini-chip good">shipped</span></div><div class="desc">A guided tour of any unfamiliar codebase — entry points to core logic — generated automatically.</div></div>
+        <div class="card"><div class="label">Voice mode <span class="mini-chip good">shipped</span></div><div class="desc">Offline, local speech-to-text push-to-talk dictation straight into the composer.</div></div>
+        <div class="card"><div class="label">Remote access <span class="mini-chip good">shipped</span></div><div class="desc">Pair a phone over WiFi to watch — and steer — a running agent session from across the room.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 : ROYAL MODE DIAGRAM -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">How it earns trust</div>
+      <h1>The agent can't just <em>say</em> it's done.</h1>
+      <div class="phase-row">
+        <div class="phase-node">INTAKE</div><div class="phase-arrow">→</div>
+        <div class="phase-node">RECON + PLAN</div><div class="phase-arrow">→</div>
+        <div class="phase-node">EXECUTE</div><div class="phase-arrow">→</div>
+        <div class="phase-node active">VERIFY</div><div class="phase-arrow">→</div>
+        <div class="phase-node pass">DONE</div>
+      </div>
+      <div class="loop-row">
+        <div class="loop">VERIFY fails → FIX (≤ 2 rounds) → back to EXECUTE</div>
+        <div class="loop">Still wrong → REWIND (≤ 2 re-entries) → back to PLAN</div>
+      </div>
+      <p class="diagram-caption">VERIFY re-runs a real, hash-frozen spec set before the plan was even executed — the model cannot quietly redefine "done" partway through a task. If it can't pass, it doesn't get to stop.</p>
+    </div>
+  </section>
+
+  <!-- 6 : COMPETITIVE LANDSCAPE -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Why not just Cursor / Copilot / Windsurf?</div>
+      <h2>They optimize the <em>typing.</em> We're building the <em>trust layer</em> underneath it.</h2>
+      <div class="tbl-wrap">
+        <table class="cmp">
+          <thead><tr><th></th><th>Typical AI IDE</th><th class="hl">LakshX</th></tr></thead>
+          <tbody>
+            <tr><td class="row-label">Memory survives the session</td><td class="no">— session only</td><td class="hl yes">✓ persistent, local</td></tr>
+            <tr><td class="row-label">Independently verifies "done"</td><td class="no">— self-reported</td><td class="hl yes">✓ hash-frozen spec re-run</td></tr>
+            <tr><td class="row-label">Runs background multi-agent work</td><td class="no">— single-threaded chat</td><td class="hl yes">✓ dispatch + monitor</td></tr>
+            <tr><td class="row-label">Shares context across teammates</td><td class="no">— isolated per machine</td><td class="hl yes">→ Agent Brain (roadmap)</td></tr>
+            <tr><td class="row-label">Model-agnostic, local-first</td><td class="no">— one vendor, cloud-only</td><td class="hl yes">✓ bring your own model</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 : THE BIG SWING -->
+  <section class="slide">
+    <div class="body-area" style="align-items: flex-start;">
+      <div class="kicker warn">The big swing</div>
+      <h1 style="max-width: 17ch;">Every agent today is isolated — to one employee, on one machine, inside one project folder.</h1>
+      <p class="statement" style="margin-top: 10px; color: var(--muted); font-size: clamp(20px,2.4vw,28px);">Real engineering isn't done by one person. Why is the agent?</p>
+    </div>
+  </section>
+
+  <!-- 8 : COORDINATION PROBLEM WORKED EXAMPLE -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker warn">A client project, five engineers</div>
+      <h2>One team, five modules, five agents that have never met.</h2>
+      <div class="grid-2" style="align-items: center; gap: 40px;">
+        <div class="stack">
+          <div class="stack-item"><span class="tag">auth dev</span><span class="txt">renames a token field — their agent knows, nobody else's does.</span></div>
+          <div class="stack-item"><span class="tag">api dev</span><span class="txt">ships an integration against the <em>old</em> field name — breaks silently in staging, three days later.</span></div>
+          <div class="stack-item"><span class="tag">qa engineer</span><span class="txt">files the bug. Her agent starts debugging from zero — it has no idea Tuesday's change even happened.</span></div>
+          <div class="stack-item"><span class="tag">new hire</span><span class="txt">joins mid-project and gets re-briefed by <em>humans</em> on decisions five agents already individually "knew."</span></div>
+        </div>
+        <div class="brain-wrap" style="gap: 3vw;">
+          <div class="brain-col">
+            <div class="brain-col-label">Today</div>
+            <div class="agent-nodes">
+              <div class="agent-node">auth · agent</div>
+              <div class="agent-node">api · agent</div>
+              <div class="agent-node">frontend · agent</div>
+              <div class="agent-node">infra · agent</div>
+              <div class="agent-node">qa · agent</div>
+            </div>
+          </div>
+          <div class="phase-arrow" style="font-size: 26px;">→</div>
+          <div class="brain-col">
+            <div class="brain-col-label">With Agent Brain</div>
+            <div class="brain-core">shared<br/>context</div>
+          </div>
+        </div>
+      </div>
+      <p class="diagram-caption">One shared Agent Brain per project. Any teammate's agent can ask "has anyone touched this, and why?" and get a real, current answer — instead of a Slack archaeology dig.</p>
+    </div>
+  </section>
+
+  <!-- 9 : MORE SCENARIOS -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker warn">This pattern is everywhere</div>
+      <h2>The five-person team is one example. It's not the only one.</h2>
+      <div class="grid-2" style="gap: 22px 32px; margin-top: 8px;">
+        <div class="scenario"><div class="s-title">Agencies with rotating developers</div><div class="s-desc">A contractor rolls off a client project after two months — today, everything their agent learned evaporates with them. Agent Brain persists at the project level, not the person level.</div></div>
+        <div class="scenario"><div class="s-title">2 a.m. incident response</div><div class="s-desc">Whoever's on call starts cold. If this exact failure was already root-caused six weeks ago by a different agent, the Brain says so — and cuts time-to-resolution.</div></div>
+        <div class="scenario"><div class="s-title">Regulated industries</div><div class="s-desc">Fintech and healthcare need a provable record of what changed, why, and how it was verified. The verification + trace infrastructure already produces exactly that.</div></div>
+        <div class="scenario"><div class="s-title">Distributed, cross-timezone teams</div><div class="s-desc">A handoff today is a Slack message or a stale doc. With a shared Brain, the next timezone's agent already has full context on what happened eight hours ago.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 : BUSINESS CASE -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">The business case</div>
+      <h2>Companies already pay for coordination. We're the first coding agent that reduces the bill instead of ignoring it.</h2>
+      <div class="stack">
+        <div class="stack-item"><span class="tag">already budgeted</span><span class="txt">Standups, sprint planning, code-review context-gathering, onboarding docs, tribal-knowledge risk on attrition — all real, existing line items on an engineering leader's budget.</span></div>
+        <div class="stack-item"><span class="tag">compliance angle</span><span class="txt">Verification + trace infrastructure, already shipped, turns "an AI agent wrote this" from a liability into a searchable, provable audit trail.</span></div>
+        <div class="stack-item"><span class="tag">who buys</span><span class="txt">This sells to a VP Eng or CTO for the <b>whole team</b> — not one developer's individual seat. Bigger contract, stickier, less churn.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 : FROM LOCAL TO SHARED -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Not a pivot — an extension</div>
+      <h2>The hard infrastructure is already built. Agent Brain is what happens when we open it up.</h2>
+      <div style="max-width: 78ch;">
+        <div class="map-row">
+          <div class="map-side left"><span class="k">shipped, solo</span>Local trace store</div>
+          <div class="map-arrow">→</div>
+          <div class="map-side right"><span class="k">team-scale</span>Shared, project-level trace index</div>
+        </div>
+        <div class="map-row">
+          <div class="map-side left"><span class="k">shipped, solo</span>Background subagent registry</div>
+          <div class="map-arrow">→</div>
+          <div class="map-side right"><span class="k">team-scale</span>Cross-person task registry</div>
+        </div>
+        <div class="map-row">
+          <div class="map-side left"><span class="k">shipped, solo</span>Hash-frozen verification spec</div>
+          <div class="map-arrow">→</div>
+          <div class="map-side right"><span class="k">team-scale</span>Shared, team-wide "definition of done" per module</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 : WHY US -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Why we can build this</div>
+      <h1>We didn't start with the vision slide. We started with the infrastructure it needs.</h1>
+      <div class="grid-3">
+        <div class="card"><div class="label">A shipped verification engine</div><div class="desc">Not a plan for one — running, tested, hash-frozen specs re-run against real process exit codes today.</div></div>
+        <div class="card"><div class="label">Shipped multi-agent orchestration</div><div class="desc">Dispatching and monitoring parallel background work is the exact substrate a multiplayer Brain needs.</div></div>
+        <div class="card"><div class="label">Shipped structured, persistent traces</div><div class="desc">The exact substrate shared memory needs — we just haven't opened it past one machine yet.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 : BUSINESS MODEL -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">How this makes money</div>
+      <h2>Two tiers. Value scales with team size, not just seat count.</h2>
+      <div class="grid-2">
+        <div class="card">
+          <div class="label">Individual <span class="mini-chip good">live today</span></div>
+          <div class="desc">Seat-based. Bring your own model, run locally, keep every feature on this deck. The prototype you can install right now.</div>
+        </div>
+        <div class="card">
+          <div class="label">Team Agent Brain <span class="mini-chip warn">roadmap</span></div>
+          <div class="desc">Org-wide. Priced on team/project, not per head — the more people share one project's Brain, the more value it returns. Natural expansion revenue as teams grow.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 : STATUS -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Where we are</div>
+      <h2>Prototype. Ideation phase for the enterprise layer. Exactly where we say we are.</h2>
+      <div class="phase-row">
+        <div class="phase-node pass">PROTOTYPE — SHIPPED</div><div class="phase-arrow">→</div>
+        <div class="phase-node active">DESIGNING THE SHARED-CONTEXT PROTOCOL</div><div class="phase-arrow">→</div>
+        <div class="phase-node">TEAM PILOT</div><div class="phase-arrow">→</div>
+        <div class="phase-node">GENERAL AVAILABILITY</div>
+      </div>
+      <p class="diagram-caption">No overclaiming: the single-player product on slide 4 is real and running. Enterprise Agent Brain is the ideation-stage bet this raise is for.</p>
+    </div>
+  </section>
+
+  <!-- 15 : THE ASK -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">What we're applying for</div>
+      <h2>Fuel for the single-player product's growth, and the infrastructure the multiplayer bet needs.</h2>
+      <div class="ask-grid">
+        <div class="card ask-card"><div class="who">YC</div><div class="desc">Speed and rigor on GTM — turning five design-partner teams into a repeatable enterprise motion.</div></div>
+        <div class="card ask-card"><div class="who">Microsoft for Startups</div><div class="desc">Azure credits to host the shared Agent Brain service, plus a natural distribution channel through VS Code's own ecosystem.</div></div>
+        <div class="card ask-card"><div class="who">AWS Activate</div><div class="desc">Compute credits for the trace/index infrastructure a team-scale Brain runs on, at the scale a pilot cohort needs.</div></div>
+      </div>
+      <p class="diagram-caption">Raise amount, equity, and cohort details: fill in before submitting — deliberately left open here.</p>
+    </div>
+  </section>
+
+  <!-- 16 : CLOSING -->
+  <section class="slide">
+    <div class="body-area">
+      <div class="kicker">Where this goes</div>
+      <h1 style="max-width: 18ch;">From autocomplete. To an autonomous agent. To an engineering team's <em>shared brain.</em></h1>
+    </div>
+    <div class="footer-row">
+      <span>lakshx.in</span>
+      <span>github.com/lakshx-ide/lakshx</span>
+      <span>[ your contact here ]</span>
+    </div>
+  </section>
+
+</div>
+
+<div id="chrome">
+  <div id="dots"></div>
+  <div id="counter">01 / 16</div>
+  <div id="nav-btns">
+    <button class="navbtn" id="prevBtn" aria-label="Previous slide">Prev</button>
+    <button class="navbtn" id="nextBtn" aria-label="Next slide">Next</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var dotsEl = document.getElementById('dots');
+  var counterEl = document.getElementById('counter');
+  var total = slides.length;
+  var current = 0;
+
+  slides.forEach(function (_, i) {
+    var d = document.createElement('button');
+    d.className = 'navdot' + (i === 0 ? ' on' : '');
+    d.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+    d.addEventListener('click', function () { go(i); });
+    dotsEl.appendChild(d);
+  });
+  var dots = Array.prototype.slice.call(dotsEl.children);
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function go(i) {
+    if (i < 0 || i >= total || i === current) return;
+    slides[current].classList.remove('active');
+    dots[current].classList.remove('on');
+    current = i;
+    slides[current].classList.add('active');
+    dots[current].classList.add('on');
+    counterEl.textContent = pad(current + 1) + ' / ' + total;
+  }
+
+  document.getElementById('prevBtn').addEventListener('click', function () { go(current - 1); });
+  document.getElementById('nextBtn').addEventListener('click', function () { go(current + 1); });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(current + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(current - 1); }
+    else if (e.key === 'Home') { go(0); }
+    else if (e.key === 'End') { go(total - 1); }
+  });
+
+  var touchStartX = null;
+  document.addEventListener('touchstart', function (e) { touchStartX = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener('touchend', function (e) {
+    if (touchStartX === null) return;
+    var dx = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(dx) > 60) go(current + (dx < 0 ? 1 : -1));
+    touchStartX = null;
+  }, { passive: true });
+})();
+</script>
