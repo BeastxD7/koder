@@ -48,6 +48,7 @@
     padding: 6.4vh 8vw 11vh;
     opacity: 0;
     transform: translateY(14px);
+    overflow: hidden;
   }
   .slide.active {
     display: flex;
@@ -147,6 +148,9 @@
   .mini-chip { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.07em; padding: 2px 6px; border-radius: 3px; text-transform: uppercase; flex: none; }
   .mini-chip.good { background: var(--good-soft); color: var(--good); }
   .mini-chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .grid-4.compact .card { padding: 14px 15px; }
+  .grid-4.compact .label { font-size: 12px; margin-bottom: 5px; }
+  .grid-4.compact .desc { font-size: 12.5px; line-height: 1.45; }
 
   /* ---------- numbered / labeled list ---------- */
   .stack { display: flex; flex-direction: column; gap: 16px; max-width: 74ch; }
@@ -335,15 +339,15 @@
     <div class="body-area">
       <div class="kicker">Product today — shipped</div>
       <h2>A VS Code fork with a real engineer inside it.</h2>
-      <div class="grid-2" style="margin-top: 6px;">
+      <div class="grid-4 compact" style="margin-top: 10px;">
         <div class="card"><div class="label">Royal Mode 2.0 <span class="mini-chip good">shipped</span></div><div class="desc">Plans, executes, and verifies its own work through a gated phase machine before it's allowed to call anything done.</div></div>
-        <div class="card"><div class="label">Background subagents <span class="mini-chip good">shipped</span></div><div class="desc">Dispatches and monitors parallel work without blocking the main session — check in, don't babysit.</div></div>
+        <div class="card"><div class="label">Background subagents <span class="mini-chip good">shipped</span></div><div class="desc">Dispatches and monitors parallel work without blocking the main session.</div></div>
         <div class="card"><div class="label">Local trace store <span class="mini-chip good">shipped</span></div><div class="desc">Every agent action recorded locally and always on, no external observability service required.</div></div>
-        <div class="card"><div class="label">Bring-your-own-model <span class="mini-chip good">shipped</span></div><div class="desc">Plug in any provider you already pay for — nothing is locked to one vendor's API.</div></div>
-        <div class="card"><div class="label">Structural search & secrets scan <span class="mini-chip good">shipped</span></div><div class="desc">AST-aware find/replace and SAST-lite security checks built directly into the editor, not bolted on.</div></div>
-        <div class="card"><div class="label">Dependency & call graph <span class="mini-chip good">shipped</span></div><div class="desc">A guided tour of any unfamiliar codebase — entry points to core logic — generated automatically.</div></div>
-        <div class="card"><div class="label">Voice mode <span class="mini-chip good">shipped</span></div><div class="desc">Offline, local speech-to-text push-to-talk dictation straight into the composer.</div></div>
-        <div class="card"><div class="label">Remote access <span class="mini-chip good">shipped</span></div><div class="desc">Pair a phone over WiFi to watch — and steer — a running agent session from across the room.</div></div>
+        <div class="card"><div class="label">Bring-your-own-model <span class="mini-chip good">shipped</span></div><div class="desc">Plug in any provider you already pay for — nothing locked to one vendor's API.</div></div>
+        <div class="card"><div class="label">Structural search & secrets scan <span class="mini-chip good">shipped</span></div><div class="desc">AST-aware find/replace and SAST-lite security checks built into the editor.</div></div>
+        <div class="card"><div class="label">Dependency & call graph <span class="mini-chip good">shipped</span></div><div class="desc">A guided tour of any unfamiliar codebase, generated automatically.</div></div>
+        <div class="card"><div class="label">Voice mode <span class="mini-chip good">shipped</span></div><div class="desc">Offline, local speech-to-text push-to-talk dictation into the composer.</div></div>
+        <div class="card"><div class="label">Remote access <span class="mini-chip good">shipped</span></div><div class="desc">Pair a phone over WiFi to watch — and steer — a running agent session.</div></div>
       </div>
     </div>
   </section>
