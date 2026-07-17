@@ -5,12 +5,14 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const cp = require("child_process");
 const { CHANGELOG } = require("./changelog.js");
 const diagnostics = require("./diagnostics.js");
 const { discoverCommands, expandCommandBody } = require("./commands.js");
 const { EXPLAIN_LANGUAGES, normalizeExplainLanguage } = require("./explain-language.js");
 const { AcpClient } = require("./acp-client.js");
 const { buildCrashContext } = require("./crash-context.js");
+const prWalkthrough = require("./pr-walkthrough.js");
 const voice = require("./voice.js");
 
 // ---------- voice mode (docs/research/14-voice-mode.md) ----------
@@ -282,6 +284,94 @@ async function searchWorkspaceFiles(q) {
   } catch {
     return [];
   }
+}
+
+// ---------- PR walkthrough auto-generator (docs/research/16-ide-feature-roadmap-round2.md §"PR walkthrough auto-generator") ----------
+// Prompt assembly lives in pr-walkthrough.js (pure, unit-tested); this side
+// only gathers the raw inputs it needs — `git diff` text and a bounded set of
+// workspace file contents for the lightweight dependents/test-coverage scan —
+// then hands them to pr-walkthrough.js exactly like the crash-explanation
+// flow hands DAP results to crash-context.js. This is the one place in this
+// extension that shells out to git directly: everywhere else (checkpoint
+// diffing, undo, the merge-conflict UI) that touches git does so through the
+// agent process's shadow-git plumbing over ACP (`lakshx/checkpoint_file_before`,
+// `lakshx/undo_file`, etc.), because those flows need the agent's own
+// checkpoint history. A PR walkthrough only needs the user's REAL, current
+// working-tree diff against HEAD — plain read-only `git` commands are the
+// right tool, and running them here (instead of a round-trip through the
+// agent) keeps this a client-side "compose context, then send it through the
+// normal prompt path" feature, same as crash-explanation, not a new agent tool.
+const GIT_EXEC_OPTS = { maxBuffer: 10 * 1024 * 1024 }; // 10MB — generous for even a large diff/log, never unbounded
+
+/** Run `git <args>` in `cwd`; resolves to stdout, or "" on any failure (not a git repo, git not on PATH, etc.) — never rejects/throws. */
+function execGit(args, cwd) {
+  return new Promise((resolve) => {
+    cp.execFile("git", args, { cwd, ...GIT_EXEC_OPTS }, (err, stdout) => {
+      resolve(err ? "" : stdout);
+    });
+  });
+}
+
+/** True if `cwd` has at least one commit (HEAD resolves) — see gatherWalkthroughDiff's doc comment for why this matters. */
+function hasHeadCommit(cwd) {
+  return new Promise((resolve) => {
+    cp.execFile("git", ["rev-parse", "--verify", "-q", "HEAD"], { cwd }, (err) => resolve(!err));
+  });
+}
+
+/**
+ * Fetch the current working-tree diff (staged + unstaged combined) as ONE
+ * unified diff, suitable for pr-walkthrough.js's getDiffSummary().
+ *
+ * Deliberately `git diff HEAD` rather than concatenating `git diff --cached`
+ * + `git diff` separately: those two commands each emit their OWN
+ * `diff --git a/X b/X` block for any file that has BOTH staged and unstaged
+ * hunks (stage part of a file, then keep editing it — a common flow), which
+ * would make getDiffSummary() see two separate entries for the same path and
+ * double-count/double-list it in the walkthrough. `git diff HEAD` compares
+ * the working tree directly against HEAD (bypassing the index entirely), so
+ * it always emits exactly one block per changed path — verified directly
+ * against a real repo with a file in that mixed state before choosing this.
+ *
+ * `git diff HEAD` needs an existing commit, so a brand-new repo (no commits
+ * yet) falls back to `git diff --cached` + `git diff` concatenated — the
+ * double-listing risk there is real but narrow (a file can only be "staged
+ * and further edited" pre-first-commit too, just a rarer combination to hit
+ * in a repo that has nothing committed at all).
+ */
+async function gatherWalkthroughDiff(cwd) {
+  if (await hasHeadCommit(cwd)) return execGit(["diff", "HEAD"], cwd);
+  const [staged, unstaged] = await Promise.all([execGit(["diff", "--cached"], cwd), execGit(["diff"], cwd)]);
+  return [staged, unstaged].filter(Boolean).join("\n");
+}
+
+/**
+ * Read a bounded set of JS/TS workspace files as `{path, text}` for
+ * pr-walkthrough.js's findLightweightDependents()/hasTestCoverage() scan.
+ * Same exclusion globs as searchWorkspaceFiles's @-mention search; capped at
+ * pr-walkthrough.js's own MAX_SCAN_FILES so this can't blow up on a huge repo.
+ * Unreadable individual files are skipped, not fatal.
+ */
+async function gatherWorkspaceFilesForScan() {
+  let uris = [];
+  try {
+    uris = await vscode.workspace.findFiles(
+      "**/*.{js,jsx,ts,tsx,mjs,cjs}",
+      "**/{node_modules,.git,.venv,venv,__pycache__,dist,build,out,.next,target,.pytest_cache}/**",
+      prWalkthrough.MAX_SCAN_FILES,
+    );
+  } catch {
+    return [];
+  }
+  const files = [];
+  for (const u of uris) {
+    try {
+      files.push({ path: toWorkspaceRelative(u.fsPath), text: fs.readFileSync(u.fsPath, "utf8") });
+    } catch {
+      // unreadable (permissions, race with a delete, binary misdetected as text, ...) — skip, not fatal
+    }
+  }
+  return files;
 }
 
 // ---------- webview view ----------
@@ -1538,6 +1628,58 @@ class AgentViewProvider {
     });
   }
 
+  // ---------- /walkthrough — PR/diff walkthrough auto-generator ----------
+  // (docs/research/16-ide-feature-roadmap-round2.md §"PR walkthrough
+  // auto-generator"). Gathers `git diff` text + a bounded workspace-file scan
+  // (see execGit/gatherWorkspaceFilesForScan above), hands it all to
+  // pr-walkthrough.js's pure functions, then sends the composed result
+  // through the exact same sendPrompt() path a normal typed message uses —
+  // no new agent tool, just a richer client-composed prompt, mirroring the
+  // "Explain this crash" flow (see explainCrash() below) exactly.
+  async runPrWalkthrough() {
+    const root = workspaceRoot();
+    if (!root) {
+      this.view?.webview.postMessage({ type: "system", text: "No workspace folder open — nothing to walk through." });
+      return;
+    }
+    // sendPrompt() itself no-ops on turnInProgress too, but checking first
+    // avoids doing the git/file-scan work at all when a turn is already
+    // running, and lets us give the user an actual toast/system message
+    // instead of a silent no-op.
+    if (this.turnInProgress) {
+      this.view?.webview.postMessage({ type: "system", text: "Agent is busy — wait for the turn to finish." });
+      return;
+    }
+
+    const diffText = await gatherWalkthroughDiff(root);
+    if (!diffText.trim()) {
+      // Graceful "nothing to do" case — a clean system message, never an
+      // empty/confusing walkthrough request sent to the model.
+      this.view?.webview.postMessage({ type: "system", text: "No staged or unstaged changes to walk through." });
+      return;
+    }
+
+    const diffSummary = prWalkthrough.getDiffSummary(diffText);
+    const workspaceFiles = await gatherWorkspaceFilesForScan();
+    const allPaths = workspaceFiles.map((f) => f.path);
+    const dependents = {};
+    const testCoverage = {};
+    for (const f of diffSummary.files) {
+      dependents[f.path] = prWalkthrough.findLightweightDependents(f.path, workspaceFiles);
+      testCoverage[f.path] = prWalkthrough.hasTestCoverage(f.path, allPaths);
+    }
+    const logOut = await execGit(["log", "--oneline", "-n", String(prWalkthrough.MAX_COMMITS)], root);
+    const commitMessages = logOut.split("\n").map((s) => s.trim()).filter(Boolean);
+
+    const { displayText, promptBlock } = prWalkthrough.buildWalkthroughPrompt({
+      diffSummary,
+      dependents,
+      testCoverage,
+      commitMessages,
+    });
+    await this.sendPrompt(displayText, [], promptBlock);
+  }
+
   async onWebviewMessage(m) {
     switch (m.type) {
       case "send":
@@ -1561,6 +1703,9 @@ class AgentViewProvider {
         await this.sendPrompt(expandCommandBody(cmd.body, m.args));
         break;
       }
+      case "walkthrough":
+        await this.runPrWalkthrough();
+        break;
       case "permissionChoice": {
         const w = this.permissionWaiters.get(m.id);
         if (w) {

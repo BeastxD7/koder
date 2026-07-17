@@ -1526,6 +1526,7 @@ const BUILTIN_COMMANDS = [
   { name: "new", description: "Start a new chat", takesArgs: false, run: () => vscode.postMessage({ type: "newChat" }) },
   { name: "undo", description: "Rewind to the last message — revert its file changes and remove it from the conversation", takesArgs: false, run: () => slashUndo() },
   { name: "report", description: "Copy the full diagnostic session report to the clipboard", takesArgs: false, run: () => slashReport() },
+  { name: "walkthrough", description: "Narrate the current diff, grounded in dependency + test-coverage data", takesArgs: false, run: () => slashWalkthrough() },
   { name: "help", description: "List all slash commands", takesArgs: false, run: () => renderSlashHelp() },
 ];
 
@@ -1604,6 +1605,27 @@ function slashReport() {
   if (diagBtn.disabled) return; // a copy is already in flight
   diagBtn.disabled = true; // "diagnosticsCopied" re-enables it and shows the note, same as a button click
   vscode.postMessage({ type: "copyDiagnostics" });
+}
+
+/**
+ * /walkthrough (docs/research/16-ide-feature-roadmap-round2.md §"PR
+ * walkthrough auto-generator") — unlike the mode-switch/undo/report
+ * built-ins above (side-channel actions that must work mid-turn, per the
+ * comment on send() below), this one STARTS a real turn: extension.js's
+ * "walkthrough" handler shells to git, scans the diff for lightweight
+ * dependents/test coverage, composes a rich prompt, and sends it through
+ * sendPrompt() exactly like a custom .md command's expanded body does. So
+ * it respects `busy` explicitly here, the same way runSlashCommand() does
+ * for custom commands — the general busy guard in send() is skipped for
+ * ALL built-ins (they run before it), so a turn-starting built-in has to
+ * opt back into the check itself.
+ */
+function slashWalkthrough() {
+  if (busy) {
+    toast("Agent is busy — wait for the turn to finish");
+    return;
+  }
+  vscode.postMessage({ type: "walkthrough" });
 }
 
 /**
