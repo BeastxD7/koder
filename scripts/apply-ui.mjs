@@ -199,8 +199,31 @@ const gulpfileVscode = join(upstream, "build", "gulpfile.vscode.ts");
     process.exit(1);
   }
   src = src.replace(before, after);
+
+  // 3b-ii. Same task (patchWin32DependenciesTask) globs EVERY **/*.node in the
+  // package and runs rcedit on each to stamp Windows version resources.
+  // smart-whisper (voice mode) bundles whisper.cpp's example addon at
+  //   node_modules/smart-whisper/whisper.cpp/examples/addon.node
+  // which is a NON-PE .node that rcedit cannot load ("rcedit.exe failed ...
+  // Unable to load file ... addon.node", exit 1), failing the whole min build
+  // at the very last step (package-win32 -> vscode-win32-x64-min-ci). Upstream
+  // already excludes @parcel/watcher's .node from this exact glob for the same
+  // "rcedit fails on non-PE .node" reason (see build/.moduleignore); extend the
+  // ignore list to also skip smart-whisper. Stamping is cosmetic version
+  // metadata, so skipping it is harmless — voice mode still loads its real
+  // addon at runtime.
+  const rceditBefore = "glob('**/*.node', { cwd, ignore: 'extensions/node_modules/@parcel/watcher/**' }),";
+  const rceditAfter = "glob('**/*.node', { cwd, ignore: ['extensions/node_modules/@parcel/watcher/**', '**/smart-whisper/**'] }),";
+  if (!src.includes(rceditBefore)) {
+    console.error(
+      "upstream/build/gulpfile.vscode.ts: expected patchWin32DependenciesTask's **/*.node rcedit glob to patch, but it wasn't found — upstream's format may have changed. Fix scripts/apply-ui.mjs's patch."
+    );
+    process.exit(1);
+  }
+  src = src.replace(rceditBefore, rceditAfter);
+
   writeFileSync(gulpfileVscode, src);
-  console.log("patched build/gulpfile.vscode.ts (signtool.exe ENOENT no longer fatal)");
+  console.log("patched build/gulpfile.vscode.ts (signtool.exe ENOENT no longer fatal; rcedit skips smart-whisper non-PE .node)");
 }
 
 // 3c. build-system tweak: the Windows installer (Inno Setup) task sets

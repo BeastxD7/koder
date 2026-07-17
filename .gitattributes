@@ -1,0 +1,9 @@
+# Line-ending policy. Windows contributors typically run with core.autocrlf=true,
+# which would otherwise check these files out with CRLF and break tooling:
+#   *.patch — `git apply` rejects CRLF patches ("corrupt patch at <file>:N" on an
+#             empty context line whose lone \r is not a valid diff prefix).
+#   *.sh    — bash (Git Bash on Windows) mis-parses CRLF scripts ("\r command
+#             not found", shebang breakage).
+# Pin them to LF regardless of the machine's autocrlf setting.
+*.patch text eol=lf
+*.sh    text eol=lf

@@ -43,7 +43,15 @@ for p in patches/*.patch; do
   # broke the Windows job outright). --ignore-whitespace tolerates the CRLF
   # difference when matching context without needing to touch upstream/'s
   # own autocrlf setting.
-  git -C upstream apply --3way --ignore-whitespace "../$p"
+  #
+  # `tr -d '\r'`: autocrlf=true ALSO checks the patch FILES out with CRLF, and
+  # git apply rejects a bare \r on an otherwise-empty context line as "corrupt
+  # patch at <file>:N" (hit on voice-mode-webview-inner-iframe-microphone.patch:7
+  # — an empty context line in that hunk). Feed the LF-normalized patch in on
+  # stdin so application is EOL-agnostic regardless of how git checked the file
+  # out. (.gitattributes pins *.patch to LF for future checkouts, but that does
+  # not rewrite a working tree already sitting on disk with CRLF.)
+  tr -d '\r' < "$p" | git -C upstream apply --3way --ignore-whitespace
 done
 
 # LakshX UI layer: built-in theme extension + CSS injection
