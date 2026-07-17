@@ -50,8 +50,8 @@ export interface DownloadTarget {
 /** Bump the value for a platform every time a new file is uploaded to its
  * (stable) blob path — see the cache-busting note above. */
 const BLOB_VERSION: Record<Exclude<DownloadKey, "macIntel">, string> = {
-  macArm: "2026-07-15",
-  windows: "2026-07-15",
+  macArm: "2026-07-17",
+  windows: "2026-07-17",
   linux: "2026-07-16",
 };
 
@@ -79,7 +79,11 @@ export const DOWNLOADS: Record<DownloadKey, DownloadTarget> = {
     shortLabel: "Windows",
     // A real installer .exe now (CI build 29410662610), not the old zip of
     // loose files — see .github/workflows/build.yml's Windows installer fix.
-    url: withVersion("https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/Koder-Windows-x64-Setup.exe", BLOB_VERSION.windows),
+    // Filename changed from Koder-Windows-x64-Setup.exe to LakshX-Windows-x64.exe
+    // as part of the rebrand — this is a NEW blob path, not a re-upload to the
+    // old one, so the old path is orphaned (harmless, just unreferenced) rather
+    // than overwritten.
+    url: withVersion("https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Windows-x64.exe", BLOB_VERSION.windows),
   },
   linux: {
     label: "Linux",
