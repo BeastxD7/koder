@@ -50,15 +50,25 @@ export default function DatabasesPage() {
 
       <h2>Reading the diagram</h2>
       <p>
-        The panel renders your schema as an entity-relationship diagram, so you can see structure and joins
-        at a glance instead of piecing them together from migration files. LakshX also suggests opening the
-        DB panel when you open a database-related file.
+        The panel&rsquo;s <strong>Schema</strong> tab renders your database as an entity-relationship
+        diagram, so you can see structure and joins at a glance instead of piecing them together from
+        migration files.
       </p>
 
-      <Callout variant="tip" title="Let the agent read the data too">
-        Visualization shows you the shape of the database. If you want the coding agent to read actual rows
-        while it works, turn on <Link href="/docs/db-query">db_query</Link> — a separate, read-only,
-        opt-in feature.
+      <h2>Browsing real rows — the Data tab</h2>
+      <p>
+        Switch to the <strong>Data</strong> tab to browse actual rows yourself: pick a table/collection from
+        the dropdown and page through its contents directly, with client-side column sorting. This is
+        <strong> you</strong> looking at your own data — it works whether or not <strong>Allow AI
+        queries</strong> is on, and it&rsquo;s unrelated to the agent.
+      </p>
+
+      <Callout variant="tip" title="Data tab vs. Allow AI queries — two different things">
+        The <strong>Data</strong> tab has no query box — there&rsquo;s nowhere to type a question here.
+        &ldquo;Allow AI queries&rdquo; is a separate opt-in that lets the <em>coding agent</em> (in the chat
+        panel) read rows while it works, in response to something you ask it in plain language — see{" "}
+        <Link href="/docs/db-query">db_query</Link>. Turning that toggle on doesn&rsquo;t add anything to
+        this panel; it changes what the agent is allowed to do elsewhere.
       </Callout>
     </DocArticle>
   );

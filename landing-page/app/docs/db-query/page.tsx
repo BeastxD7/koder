@@ -23,7 +23,7 @@ export default function DbQueryPage() {
         items={[
           { label: "Toggle", value: "Allow AI queries" },
           { label: "Default", value: "OFF" },
-          { label: "Engines", value: "Postgres · MySQL · SQLite" },
+          { label: "Engines", value: "Postgres · MySQL · SQLite · MongoDB" },
         ]}
       />
 
@@ -73,9 +73,13 @@ rows (showing 3 of 4123)
 
       <h2>Engine support</h2>
       <p>
-        <code>db_query</code> targets the SQL engines — <strong>PostgreSQL, MySQL, and SQLite</strong>.
-        MongoDB is supported for <Link href="/docs/databases">visualization</Link> but not for AI queries in
-        this version.
+        <code>db_query</code> works against all four engines — <strong>PostgreSQL, MySQL, SQLite, and
+        MongoDB</strong>. The SQL engines take a query written as SQL text; MongoDB instead takes a
+        JSON-stringified query spec (<code>{`{"collection":"users","filter":{"active":true},"limit":20}`}</code>).
+        MongoDB has no engine-level read-only transaction to roll back, so its read-only guarantee is
+        structural instead: only <code>find</code> runs — no <code>$out</code>/<code>$merge</code>/aggregation
+        side effects, and no update operators (<code>$set</code>, <code>$inc</code>, …) are accepted anywhere
+        in the filter, including nested inside <code>$and</code>/<code>$or</code>.
       </p>
     </DocArticle>
   );
