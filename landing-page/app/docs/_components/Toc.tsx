@@ -21,14 +21,18 @@ const slugify = (text: string) =>
  * article's h2/h3 headings from the DOM after mount (assigning ids where
  * missing), then highlights the section currently in view via
  * IntersectionObserver. Re-runs whenever the route changes.
+ *
+ * `articleId` defaults to "docs-article" (DocArticle's fixed id) so every
+ * existing docs page keeps working unchanged; pass a different id to scan
+ * some other container (e.g. the changelog page's own article shell).
  */
-export default function Toc() {
+export default function Toc({ articleId = "docs-article" }: { articleId?: string }) {
   const pathname = usePathname();
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [activeId, setActiveId] = useState<string>("");
 
   useEffect(() => {
-    const article = document.getElementById("docs-article");
+    const article = document.getElementById(articleId);
     if (!article) return;
     const nodes = Array.from(article.querySelectorAll("h2, h3")) as HTMLElement[];
     const found: Heading[] = nodes.map((node) => {
@@ -49,7 +53,7 @@ export default function Toc() {
     );
     nodes.forEach((n) => observer.observe(n));
     return () => observer.disconnect();
-  }, [pathname]);
+  }, [pathname, articleId]);
 
   if (headings.length === 0) return null;
 

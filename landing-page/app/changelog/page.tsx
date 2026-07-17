@@ -18,8 +18,12 @@ export default function ChangelogPage() {
   const dates = Array.from(new Set(CHANGELOG_ENTRIES.map((e) => e.date))).sort((a, b) => b.localeCompare(a));
 
   return (
-    <div>
-      <header className="mb-12 max-w-2xl">
+    // Same shell convention as DocArticle (app/docs/_components/DocArticle.tsx):
+    // a fixed id the right-hand Toc scans for h2/h3 headings (see
+    // ChangelogChrome's <Toc articleId="changelog-article" />), at the same
+    // max-w-3xl reading measure every docs page uses.
+    <article id="changelog-article" className="mx-auto max-w-3xl">
+      <header className="mb-12">
         <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-lakshx-violet-active">
           Changelog
         </p>
@@ -51,7 +55,9 @@ export default function ChangelogPage() {
               className="rounded-2xl border border-white/10 bg-white/[0.05] p-6 backdrop-blur-2xl sm:p-8"
             >
               <div className="mb-6 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-white/10 pb-5">
-                <h2 className="font-heading text-xl font-bold text-white sm:text-2xl">{formatDate(date)}</h2>
+                <h2 id={date} className="scroll-mt-24 font-heading text-xl font-bold text-white sm:text-2xl">
+                  {formatDate(date)}
+                </h2>
                 <span className="text-sm text-white/45">
                   {dayEntries.length} commit{dayEntries.length === 1 ? "" : "s"}
                 </span>
@@ -102,6 +108,6 @@ export default function ChangelogPage() {
         Sourced from <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/60">git log</code> across
         the whole repo — {CHANGELOG_ENTRIES.length} commits, {dates[dates.length - 1]} through {dates[0]}.
       </p>
-    </div>
+    </article>
   );
 }
