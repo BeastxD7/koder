@@ -210,6 +210,26 @@ export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   { date: "2026-07-17", hash: "b51823e", category: "Agent", text: "Regional-language / Hinglish explain toggle" },
   { date: "2026-07-17", hash: "af0c9d7", category: "UI", text: "Codebase Guided Tour mode (product/lakshx-graph)" },
   { date: "2026-07-17", hash: "7adbdcf", category: "UI", text: "PR walkthrough auto-generator (/walkthrough slash command)" },
+  { date: "2026-07-17", hash: "85b2794", category: "Agent", text: "Agent trace/observability inspector (closes the Langfuse-gated visibility gap)" },
+  { date: "2026-07-17", hash: "dcc3b60", category: "Docs", text: "Deep-dive rewrite of architecture.md (agentic loop, memory, context, a full worked example)" },
+  { date: "2026-07-17", hash: "94bc678", category: "Build/Distribution", text: "prepare.sh: reset upstream to pristine HEAD before applying patches (fixes a stuck-dirty-tree re-run failure)" },
+  { date: "2026-07-17", hash: "2eda6f3", category: "Build/Distribution", text: "build-windows.ps1: add a Spectre-mitigated-libs gate check with a self-elevating auto-fix" },
+  { date: "2026-07-17", hash: "c7d27bf", category: "Build/Distribution", text: "Fix build-windows.ps1 gate crashes (Python Store-alias stub, bash-not-on-PATH); document the one-command Windows build" },
+  { date: "2026-07-17", hash: "dca8b36", category: "Build/Distribution", text: "OS-Build/README: copy-paste per-OS build commands + the stale-lockfile gotcha" },
+  { date: "2026-07-17", hash: "8caf2fd", category: "Build/Distribution", text: "Regenerate lakshx-chat's package-lock.json (fixes a smart-whisper dependency mismatch)" },
+  { date: "2026-07-17", hash: "c57ab45", category: "Build/Distribution", text: "Fix a real Windows build failure: an em-dash broke PowerShell 5.1's BOM-less file parsing" },
+  { date: "2026-07-17", hash: "fa702c1", category: "Build/Distribution", text: "gitignore build artifacts (.dmg/.exe/.deb) at the repo root, now that both Mac and Windows produce them from the same clone" },
+  { date: "2026-07-17", hash: "1c99daa", category: "UI", text: "Fix lakshx-extensions activation crash on a frozen ExtensionContext (was silently breaking the Recommended Extensions panel on every launch)" },
+  { date: "2026-07-17", hash: "8cd114e", category: "Build/Distribution", text: "apply-ui.mjs: skip smart-whisper's non-PE .node file in the Windows rcedit version-stamp glob (was failing the whole build at the last step)" },
+  { date: "2026-07-17", hash: "a675104", category: "UI", text: "Fix a stale CSP hash that silently blanked every webview app-wide (chat, DB, graph, search, remote access) — one voice-mode patch edited the shared webview host's inline script without recomputing its CSP hash" },
+  { date: "2026-07-17", hash: "882e3b5", category: "Build/Distribution", text: "Apply patches EOL-agnostically: CRLF-safe prepare.sh + .gitattributes (Windows checkouts were corrupting patch files with CRLF line endings)" },
+  { date: "2026-07-17", hash: "1d2afeb", category: "UI", text: "Fix voice mode's UX ordering: check model/addon readiness before arming the recorder, not after a full record-and-stop for nothing" },
+  { date: "2026-07-17", hash: "c6558dc", category: "Databases", text: "Fix the Data tab always failing to browse MongoDB collections — a branch-order bug routed every Mongo browse through the SQL query path instead of Mongo's own cursor" },
+  { date: "2026-07-17", hash: "81b4cfe", category: "UI", text: "Fix overlapping empty-state text and a stray title label in the Dependencies/Call Graph/Guided Tour panel" },
+  { date: "2026-07-17", hash: "a0e1d2e", category: "UI", text: "Fix light-on-light dropdowns on Windows across six webviews (each followed the overall workbench theme instead of staying hardcoded dark); add an in-panel usage hint for \"Allow AI queries\"" },
+  { date: "2026-07-17", hash: "1d2d270", category: "Agent", text: "Sync the composer's model dropdown to the persisted default model; explain Guided Tour's empty state instead of a bare \"No tour data yet\"" },
+  { date: "2026-07-17", hash: "9e125df", category: "Docs", text: "Fix stale/inaccurate doc claims (MongoDB db_query support, two nonexistent \"suggests opening on file open\" features) and document the DB panel's Data tab and Guided Tour, neither of which was covered before" },
+  { date: "2026-07-17", hash: "d0f060a", category: "Agent", text: "Fix the grep tool's bundled-ripgrep lookup — the editor's vendored ripgrep package changed to a per-platform layout, so the lookup silently never found it and every grep call failed outright" },
 ];
 
 export const REPO_URL = "https://github.com/BeastxD7/koder";
@@ -227,5 +247,5 @@ export const DATE_BLURBS: Record<string, string> = {
   "2026-07-16":
     "This cycle's feature sprint — multi-engine database tools, the interactive browser tool, native distribution builds.",
   "2026-07-17":
-    "The biggest single day yet: background subagents and the full Royal Mode 2.0 phase machine, a round of real security work (secret scanning, SAST-lite, escaping fixes, dependency-vuln hints), the first ten items of the IDE feature roadmap (tab prediction, testing gutter, command bar, terminal blocks, structural search, semantic search, crash explanation, merge-conflict resolution, curated extensions, guided tour), voice mode, Hinglish explain, a PR walkthrough generator, this changelog itself, and the cloud/SaaS pivot research.",
+    "The biggest single day yet: background subagents and the full Royal Mode 2.0 phase machine, a round of real security work (secret scanning, SAST-lite, escaping fixes, dependency-vuln hints), the first ten items of the IDE feature roadmap (tab prediction, testing gutter, command bar, terminal blocks, structural search, semantic search, crash explanation, merge-conflict resolution, curated extensions, guided tour), voice mode, Hinglish explain, a PR walkthrough generator, this changelog itself, and the cloud/SaaS pivot research — followed by a real hardening pass once the app was actually rebuilt and used: a webview-wide CSP regression, the Data tab's MongoDB browsing being completely broken, the grep tool's bundled ripgrep silently failing on every call, Windows-only dropdown theming, and a first cross-machine Windows build getting fixed end to end.",
 };
