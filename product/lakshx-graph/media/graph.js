@@ -936,6 +936,12 @@ function createGraphApp(canvas, opts) {
     if (next !== "call" && next !== "dep" && next !== "tour") return;
     mode = next;
     if (mode === "dep" || mode === "tour") {
+      // Call-graph mode's own empty-state ("No call graph yet...") must be
+      // cleared here — it only ever gets HIDDEN by the `else` branch below,
+      // never by this one, so switching straight from Call graph into
+      // Dependencies/Guided Tour left it sitting on screen, overlapping
+      // dep-mode's own #depHint text (real bug, hit in the wild).
+      if (emptyEl) emptyEl.hidden = true;
       if (hintEl) hintEl.hidden = !!(depRaw && depNodes.size > 0);
       updateDepStats();
       if (depRaw && depNodes.size > 0) fitDep();
@@ -953,6 +959,8 @@ function createGraphApp(canvas, opts) {
       if (emptyEl && !rootId) {
         emptyEl.textContent = "No call graph yet. Put your cursor on a function or method and run “LakshX: Show Call Graph” (or click the “Call Graph” status bar item).";
         emptyEl.hidden = false;
+      } else if (emptyEl && rootId) {
+        emptyEl.hidden = true;
       }
     }
   }
@@ -1143,10 +1151,15 @@ function createGraphApp(canvas, opts) {
   const depControls = document.getElementById("depControls");
   const statsBar = document.getElementById("stats");
   const tourPanel = document.getElementById("tourPanel");
+  const titleEl = document.getElementById("title");
   function reflectMode(m) {
     modeCall?.classList.toggle("active", m === "call");
     modeDep?.classList.toggle("active", m === "dep");
     modeTour?.classList.toggle("active", m === "tour");
+    // #title ("Call Graph" / "Call Graph: <fn>") is call-mode-only context —
+    // left out of this mode-based show/hide before, so it sat next to the
+    // tabs reading like a stray 4th tab in Dependencies/Guided Tour mode.
+    if (titleEl) titleEl.hidden = m !== "call";
     if (callLegend) callLegend.hidden = m !== "call";
     if (depLegend) depLegend.hidden = m === "call";
     // search/hide-externals/collapse/re-scan controls only make sense for the
