@@ -33,19 +33,20 @@ let currentPanel = null;
 /** @type {Map<string, object>} id -> latest verify.checkExtension() result for this session */
 let verifyResultsById = new Map();
 let verifyInFlight = null;
+let outputChannel = null;
 
-function log(context, message) {
-  if (!context.__lakshxExtensionsLog) {
-    context.__lakshxExtensionsLog = vscode.window.createOutputChannel("LakshX Extensions");
+function log(message) {
+  if (!outputChannel) {
+    outputChannel = vscode.window.createOutputChannel("LakshX Extensions");
   }
-  context.__lakshxExtensionsLog.appendLine(message);
+  outputChannel.appendLine(message);
 }
 
 /** Kick off (or reuse an in-flight) live verification of the whole curated list. */
 async function runVerification(context) {
   if (verifyInFlight) return verifyInFlight;
   verifyInFlight = (async () => {
-    log(context, `Checking ${curated.CURATED_EXTENSIONS.length} curated extensions against ${verify.OPEN_VSX_HOST}…`);
+    log(`Checking ${curated.CURATED_EXTENSIONS.length} curated extensions against ${verify.OPEN_VSX_HOST}…`);
     const results = await verify.checkAll(curated.CURATED_EXTENSIONS);
     verifyResultsById = new Map(results.map((r) => [r.id, r]));
     const stamp = { at: Date.now(), results };
@@ -53,7 +54,7 @@ async function runVerification(context) {
     const passed = results.filter((r) => r.found === true).length;
     const failed = results.filter((r) => r.found === false).length;
     const errored = results.filter((r) => r.found === null).length;
-    log(context, `Open VSX check complete: ${passed} resolved, ${failed} confirmed absent, ${errored} could not be checked.`);
+    log(`Open VSX check complete: ${passed} resolved, ${failed} confirmed absent, ${errored} could not be checked.`);
     return results;
   })();
   try {
@@ -200,7 +201,7 @@ function activate(context) {
 
   // Kick off a background verification early (best-effort; a fresh check
   // also runs whenever the panel is opened, so this just warms the cache).
-  runVerification(context).catch((err) => log(context, `Background Open VSX check failed: ${err.message || err}`));
+  runVerification(context).catch((err) => log(`Background Open VSX check failed: ${err.message || err}`));
 }
 
 function deactivate() {}
