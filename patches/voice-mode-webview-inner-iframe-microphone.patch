@@ -1,7 +1,16 @@
 diff --git a/src/vs/workbench/contrib/webview/browser/pre/index.html b/src/vs/workbench/contrib/webview/browser/pre/index.html
-index 1b722167..4b003ffb 100644
+index 1b722167..233dc13e 100644
 --- a/src/vs/workbench/contrib/webview/browser/pre/index.html
 +++ b/src/vs/workbench/contrib/webview/browser/pre/index.html
+@@ -5,7 +5,7 @@
+ 	<meta charset="UTF-8">
+
+ 	<meta http-equiv="Content-Security-Policy"
+-		content="default-src 'none'; script-src 'sha256-nXjtuhBilO++r8hfxl5VjEScSmdm07wDAk6jw228DgM=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
++		content="default-src 'none'; script-src 'sha256-WMztTLL4DUiknXYuaxdyGjDHww0NdHDwt2Cu9aUMO90=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
+
+ 	<!-- Disable pinch zooming -->
+ 	<meta name="viewport"
 @@ -1035,6 +1035,16 @@
  				if (!isFirefox && options.allowScripts) {
  					allowRules.push('clipboard-read;', 'clipboard-write;');
