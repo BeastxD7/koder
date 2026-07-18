@@ -23,3 +23,4 @@ out/
 # belong in git. .lakshx/rules.md is deliberately NOT ignored here — it's
 # committed project config, the same convention as AGENTS.md/CLAUDE.md.
 .lakshx/plans/
+.vercel

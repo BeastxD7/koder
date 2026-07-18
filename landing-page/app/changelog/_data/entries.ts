@@ -27,6 +27,21 @@ export interface ChangelogEntry {
  * and extend the array below (newest commits go at the end — the page sorts
  * for display, this array's own order doesn't matter).
  */
+// LAST SYNCED THROUGH: 1726bf0 (1726bf091433255156931148ab910b6dffe2e478),
+// committed 2026-07-19. To update this changelog for newer commits, run:
+//   git log --format="%H|%h|%cd|%s" --date=short --no-merges 1726bf0..HEAD
+// and add entries for whatever's genuinely user-facing, then update this
+// marker to the new latest commit hash once done.
+//
+// Known pre-existing gap (not introduced by this sync, not fixed by it —
+// flagging so it isn't missed): commit 5e0c861 ("Migrate hosted model to
+// Azure Responses API, add cloud feedback/audit telemetry, ship onboarding +
+// model-picker UX fixes", committer date 2026-07-19) is an ancestor of HEAD
+// and chronologically precedes the existing 2026-07-19 entries below, but
+// has no entry of its own — it looks genuinely user-facing and was missed
+// when those entries were added. A future sync should check it explicitly;
+// the range command above won't surface it since it's already behind the
+// marker.
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   { date: "2026-07-19", hash: "3184875", category: "Agent", text: "Automatic retry with backoff for transient provider errors (429/502/503/504) — a single Azure/Anthropic blip no longer fails the whole turn" },
   { date: "2026-07-19", hash: "5b58fb1", category: "UI", text: "Configurable push-to-talk hotkey for voice dictation (toggle-based, set from the settings panel)" },
@@ -240,6 +255,12 @@ export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   { date: "2026-07-17", hash: "9e125df", category: "Docs", text: "Fix stale/inaccurate doc claims (MongoDB db_query support, two nonexistent \"suggests opening on file open\" features) and document the DB panel's Data tab and Guided Tour, neither of which was covered before" },
   { date: "2026-07-17", hash: "d0f060a", category: "Agent", text: "Fix the grep tool's bundled-ripgrep lookup — the editor's vendored ripgrep package changed to a per-platform layout, so the lookup silently never found it and every grep call failed outright" },
   { date: "2026-07-17", hash: "38c4924", category: "Build/Distribution", text: "Refresh the site's macOS/Windows download links to the day's rebuilt binaries — verified byte-for-byte against the local files before wiring them in, cache-busted so returning visitors don't get served stale bytes" },
+  { date: "2026-07-18", hash: "b612d00", category: "Security", text: "Add a hosted \"LakshX\" free model — a Vercel-side proxy holds the Azure key server-side, checks a Supabase session, and enforces a per-user cost cap plus a global spend ceiling before calling Azure, metering real token usage from the stream" },
+  { date: "2026-07-18", hash: "b612d00", category: "Agent", text: "Fix: GPT-5-family models reject max_tokens and require max_completion_tokens instead — fixed in the shared OpenAI-compatible adapter, so it also covers BYOK Azure" },
+  { date: "2026-07-18", hash: "4f3d104", category: "Security", text: "IDE: Add lakshx:// deep-link sign-in — login/logout commands, a first-run signup prompt when no provider is configured, and correct persistence of Supabase's rotating refresh tokens" },
+  { date: "2026-07-18", hash: "4f3d104", category: "UI", text: "Web: Ship the first /admin dashboard — global budget plus per-user usage/cost and credit-limit editing, gated server-side by a founder-email allowlist" },
+  { date: "2026-07-18", hash: "899a248", category: "UI", text: "Web: Rebuild /admin as a full shadcn dashboard — sidebar navigation, a daily spend-over-time chart, and a sortable/searchable users table with a proper edit-cap dialog" },
+  { date: "2026-07-18", hash: "df962e5", category: "Security", text: "Replace magic-link login with Google OAuth for both the IDE's /login and the /admin dashboard — the lakshx:// deep-link handler needed no changes since it just parses whatever tokens land in the callback" },
 ];
 
 export const REPO_URL = "https://github.com/BeastxD7/koder";
@@ -258,6 +279,8 @@ export const DATE_BLURBS: Record<string, string> = {
     "This cycle's feature sprint — multi-engine database tools, the interactive browser tool, native distribution builds.",
   "2026-07-17":
     "The biggest single day yet: background subagents and the full Royal Mode 2.0 phase machine, a round of real security work (secret scanning, SAST-lite, escaping fixes, dependency-vuln hints), the first ten items of the IDE feature roadmap (tab prediction, testing gutter, command bar, terminal blocks, structural search, semantic search, crash explanation, merge-conflict resolution, curated extensions, guided tour), voice mode, Hinglish explain, a PR walkthrough generator, this changelog itself, and the cloud/SaaS pivot research — followed by a real hardening pass once the app was actually rebuilt and used: a webview-wide CSP regression, the Data tab's MongoDB browsing being completely broken, the grep tool's bundled ripgrep silently failing on every call, Windows-only dropdown theming, and a first cross-machine Windows build getting fixed end to end — and closing with a refreshed download link for both platforms, verified against the exact bytes just built.",
+  "2026-07-18":
+    "The hosted-product day: a Vercel-proxied \"LakshX\" free model backed by Azure Foundry with Supabase-enforced per-user and global spend caps, deep-link sign-in for the IDE, a first real /admin dashboard for budget and usage — rebuilt hours later into a full shadcn dashboard with charts and a sortable users table — and a late-night swap from magic-link email login to Google OAuth for both the IDE and admin.",
   "2026-07-19":
     "Reliability and trust: automatic retry for transient provider errors, a real fix for a usage-tracking cost-leak on interrupted requests, and admin-visible telemetry for audit events, crash/timeout incidents, and user-submitted error reports with full diagnostics. Plus a configurable push-to-talk hotkey, a fixed find-widget close button, and the in-IDE What's New panel retired in favor of this page.",
 };
