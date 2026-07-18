@@ -5,7 +5,7 @@
  */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { sseLines, toolResultText } from "./types.js";
+import { fetchWithRetry, httpErrorMessage, sseLines, toolResultText } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 // OpenAI's reasoning-model family (o1/o3/o4/gpt-5*) rejects `max_tokens`
@@ -28,30 +28,34 @@ export class OpenAICompatAdapter implements ChatAdapter {
     // SSE deltas, tool_calls) is identical to the rest of this adapter.
     const authHeader: Record<string, string> =
       this.cfg.kind === "azure" ? { "api-key": this.cfg.apiKey ?? "" } : { authorization: `Bearer ${this.cfg.apiKey}` };
-    const res = await fetch(`${this.cfg.baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "content-type": "application/json",
-        ...authHeader,
-        ...this.cfg.headers,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        [maxTokensParamName(req.model)]: req.maxTokens ?? 8192,
-        messages: [{ role: "system", content: req.system }, ...toWire(req.messages, isVisionCapableModel(req.model))],
-        tools: req.tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.input_schema },
-        })),
-        stream: true,
-        // without this the usage-bearing final chunk is never sent, and we
-        // silently fall back to character-based token estimates
-        stream_options: { include_usage: true },
-      }),
-    });
+    const res = await fetchWithRetry(
+      () =>
+        fetch(`${this.cfg.baseUrl}/chat/completions`, {
+          method: "POST",
+          signal: req.signal,
+          headers: {
+            "content-type": "application/json",
+            ...authHeader,
+            ...this.cfg.headers,
+          },
+          body: JSON.stringify({
+            model: req.model,
+            [maxTokensParamName(req.model)]: req.maxTokens ?? 8192,
+            messages: [{ role: "system", content: req.system }, ...toWire(req.messages, isVisionCapableModel(req.model))],
+            tools: req.tools.map((t) => ({
+              type: "function",
+              function: { name: t.name, description: t.description, parameters: t.input_schema },
+            })),
+            stream: true,
+            // without this the usage-bearing final chunk is never sent, and we
+            // silently fall back to character-based token estimates
+            stream_options: { include_usage: true },
+          }),
+        }),
+      { signal: req.signal },
+    );
     if (!res.ok) {
-      throw new Error(`${this.cfg.baseUrl} ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, await res.text()));
     }
 
     let text = "";

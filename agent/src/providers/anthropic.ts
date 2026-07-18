@@ -1,37 +1,41 @@
 /** Anthropic Messages API adapter — fetch + SSE, no SDK dependency. */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { sseLines } from "./types.js";
+import { fetchWithRetry, httpErrorMessage, sseLines } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 export class AnthropicAdapter implements ChatAdapter {
   constructor(private cfg: ProviderConfig) {}
 
   async runTurn(req: TurnRequest): Promise<TurnResult> {
-    const res = await fetch(`${this.cfg.baseUrl}/v1/messages`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": this.cfg.apiKey!,
-        "anthropic-version": "2023-06-01",
-        ...this.cfg.headers,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        max_tokens: req.maxTokens ?? 8192,
-        system: req.system,
-        messages: req.messages.map((m) => toWire(m, isVisionCapableModel(req.model))),
-        tools: req.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          input_schema: t.input_schema,
-        })),
-        stream: true,
-      }),
-    });
+    const res = await fetchWithRetry(
+      () =>
+        fetch(`${this.cfg.baseUrl}/v1/messages`, {
+          method: "POST",
+          signal: req.signal,
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": this.cfg.apiKey!,
+            "anthropic-version": "2023-06-01",
+            ...this.cfg.headers,
+          },
+          body: JSON.stringify({
+            model: req.model,
+            max_tokens: req.maxTokens ?? 8192,
+            system: req.system,
+            messages: req.messages.map((m) => toWire(m, isVisionCapableModel(req.model))),
+            tools: req.tools.map((t) => ({
+              name: t.name,
+              description: t.description,
+              input_schema: t.input_schema,
+            })),
+            stream: true,
+          }),
+        }),
+      { signal: req.signal },
+    );
     if (!res.ok) {
-      throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      throw new Error(httpErrorMessage("anthropic", res.status, await res.text()));
     }
 
     let text = "";

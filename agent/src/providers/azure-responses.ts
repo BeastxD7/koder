@@ -37,49 +37,53 @@
  */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { sseLines, toolResultText } from "./types.js";
+import { fetchWithRetry, httpErrorMessage, sseLines, toolResultText } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 export class AzureResponsesAdapter implements ChatAdapter {
   constructor(private cfg: ProviderConfig) {}
 
   async runTurn(req: TurnRequest): Promise<TurnResult> {
-    const res = await fetch(`${this.cfg.baseUrl}/responses`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.cfg.apiKey}`,
-        ...this.cfg.headers,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        // Responses API's system-prompt equivalent — a top-level field,
-        // never an `input` item (unlike Chat Completions' `role:"system"`
-        // message).
-        instructions: req.system,
-        input: toWire(req.messages, isVisionCapableModel(req.model)),
-        // Flat tool shape — NOT nested under a `function` key like Chat
-        // Completions (openai-compat.ts's `{type:"function", function:{...}}`).
-        tools: req.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.input_schema })),
-        // Responses API's token cap field — verified distinct from Chat
-        // Completions' `max_tokens`/`max_completion_tokens`
-        // (openai-compat.ts's `maxTokensParamName`).
-        max_output_tokens: req.maxTokens ?? 8192,
-        // "low": this is the free/hosted, budget-capped path ($800 global
-        // ceiling, $20/user cap — landing-page's check_budget/record_usage),
-        // and an agentic coding loop pays this cost on EVERY tool-calling
-        // round-trip, not once per conversation — favor latency/cost over
-        // reasoning depth. Not verified against the (now-deleted) disposable
-        // test route that first proved reasoning-summary streaming; revisit
-        // if response quality suffers in practice.
-        reasoning: { effort: "low", summary: "auto" },
-        store: false,
-        stream: true,
-      }),
-    });
+    const res = await fetchWithRetry(
+      () =>
+        fetch(`${this.cfg.baseUrl}/responses`, {
+          method: "POST",
+          signal: req.signal,
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.cfg.apiKey}`,
+            ...this.cfg.headers,
+          },
+          body: JSON.stringify({
+            model: req.model,
+            // Responses API's system-prompt equivalent — a top-level field,
+            // never an `input` item (unlike Chat Completions' `role:"system"`
+            // message).
+            instructions: req.system,
+            input: toWire(req.messages, isVisionCapableModel(req.model)),
+            // Flat tool shape — NOT nested under a `function` key like Chat
+            // Completions (openai-compat.ts's `{type:"function", function:{...}}`).
+            tools: req.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.input_schema })),
+            // Responses API's token cap field — verified distinct from Chat
+            // Completions' `max_tokens`/`max_completion_tokens`
+            // (openai-compat.ts's `maxTokensParamName`).
+            max_output_tokens: req.maxTokens ?? 8192,
+            // "low": this is the free/hosted, budget-capped path ($800 global
+            // ceiling, $20/user cap — landing-page's check_budget/record_usage),
+            // and an agentic coding loop pays this cost on EVERY tool-calling
+            // round-trip, not once per conversation — favor latency/cost over
+            // reasoning depth. Not verified against the (now-deleted) disposable
+            // test route that first proved reasoning-summary streaming; revisit
+            // if response quality suffers in practice.
+            reasoning: { effort: "low", summary: "auto" },
+            store: false,
+            stream: true,
+          }),
+        }),
+      { signal: req.signal },
+    );
     if (!res.ok) {
-      throw new Error(`${this.cfg.baseUrl} ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, await res.text()));
     }
 
     let text = "";

@@ -144,6 +144,110 @@ export function streamMaxMs(): number {
   return Number.isFinite(v) && v > 0 ? v : 10 * 60_000;
 }
 
+/**
+ * Builds a clean, user-facing message for a failed HTTP response — never
+ * dumps a raw HTML error page (e.g. a platform-level 404/500 from an infra
+ * layer in front of the actual app, which returns its own styled error page
+ * instead of the app's JSON error shape) straight into the chat transcript.
+ * Structured JSON error bodies (our own routes' `{"error": "..."}` shape,
+ * or similar from third-party providers) still surface their real message —
+ * only genuinely unstructured/HTML bodies get replaced with a generic,
+ * status-coded message.
+ */
+export function httpErrorMessage(baseUrl: string, status: number, rawBody: string): string {
+  const trimmed = rawBody.trim();
+  if (/^<!doctype html|^<html[\s>]/i.test(trimmed)) {
+    return `${baseUrl} returned an unexpected server error (HTTP ${status}). Try again in a moment — if it keeps happening, use the Report button to let us know.`;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    const msg =
+      typeof parsed?.error === "string" ? parsed.error : typeof parsed?.error?.message === "string" ? parsed.error.message : undefined;
+    if (msg) return `${baseUrl} ${status}: ${msg.slice(0, 400)}`;
+  } catch {
+    // not JSON — fall through to the plain-text handling below
+  }
+  // Plain text (not HTML, not structured JSON) — still show it, truncated,
+  // since some providers return genuinely useful short plain-text errors.
+  return `${baseUrl} ${status}: ${trimmed.slice(0, 400)}`;
+}
+
+/** HTTP statuses worth a retry: rate-limited or upstream/gateway trouble. Never 4xx auth/client errors — retrying those just delays the real error reaching the user. */
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+/** Fallback exponential-ish backoff (ms) when no `Retry-After` header is present, indexed by attempt number (1-based) that just failed. */
+const RETRY_BACKOFF_MS = [250, 750, 1500];
+
+/** Hard cap on any single backoff wait (including a provider-supplied `Retry-After`) — this is a live chat turn, not a batch job, so total added latency across all retries must stay in the low single-digit seconds, not tens of seconds. */
+const MAX_BACKOFF_MS = 2000;
+
+/**
+ * Sleep for `ms`, but reject immediately with the signal's abort reason if
+ * `signal` fires while waiting — used so a mid-backoff Stop-button cancel
+ * interrupts a retry wait instead of silently continuing it.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** How long to wait before the NEXT attempt, given the just-failed response — `Retry-After` (seconds, or an HTTP-date) if present, else the fixed backoff ladder. Always capped at `MAX_BACKOFF_MS`. */
+function retryDelayMs(res: Response, attemptNumber: number): number {
+  const retryAfter = res.headers.get("retry-after");
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs)) return Math.max(0, Math.min(secs * 1000, MAX_BACKOFF_MS));
+    const dateMs = Date.parse(retryAfter);
+    if (!Number.isNaN(dateMs)) return Math.max(0, Math.min(dateMs - Date.now(), MAX_BACKOFF_MS));
+  }
+  return Math.min(RETRY_BACKOFF_MS[Math.min(attemptNumber - 1, RETRY_BACKOFF_MS.length - 1)], MAX_BACKOFF_MS);
+}
+
+/**
+ * Retries a fetch-returning function for transient failures only (429 rate
+ * limit, 502/503/504 — NOT other 4xx, which are real client/auth errors that
+ * retrying can't fix). Exponential-ish backoff, small fixed number of
+ * attempts — this is a hosted coding assistant mid-agentic-turn, not a batch
+ * job, so bound the total added latency tightly (a few seconds max across
+ * all retries, not tens of seconds).
+ *
+ * Only retries the FULL request, not a partial stream: this wraps the
+ * initial connection-level `fetch()` call, before any `!res.ok` check — a
+ * stream that starts successfully (`res.ok`) and then fails mid-SSE is a
+ * different failure mode, out of scope here (no partial-stream resumption
+ * exists in this codebase).
+ *
+ * Respects `opts.signal` (the caller's `AbortSignal`, e.g. the chat's Stop
+ * button): if it fires while waiting out a backoff, the wait rejects
+ * immediately instead of silently continuing the retry loop.
+ */
+export async function fetchWithRetry(
+  fn: () => Promise<Response>,
+  opts?: { maxAttempts?: number; signal?: AbortSignal },
+): Promise<Response> {
+  const maxAttempts = opts?.maxAttempts ?? 3;
+  const signal = opts?.signal;
+  let res: Response;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    res = await fn();
+    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === maxAttempts) return res;
+    const waitMs = retryDelayMs(res, attempt);
+    console.error(`[fetchWithRetry] attempt ${attempt}/${maxAttempts} got HTTP ${res.status} — retrying in ${waitMs}ms`);
+    await abortableSleep(waitMs, signal);
+  }
+  return res!;
+}
+
 /** Minimal SSE line parser shared by both adapters. */
 export async function* sseLines(
   body: ReadableStream<Uint8Array>,
