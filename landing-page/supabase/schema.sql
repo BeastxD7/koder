@@ -55,6 +55,43 @@ alter table public.global_budget enable row level security;
 -- the running totals directly from source-of-truth tables (no cache, no
 -- eventually-consistent counter) so the check is as fresh as the DB allows.
 -- Auto-provisions a user_budget row (default $20) on first use.
+--
+-- TOCTOU note (row lock below), stated honestly: the proxy calls this
+-- function and record_usage() as two SEPARATE `supabase.rpc()` calls (see
+-- app/api/lakshx-model/{chat/completions,responses}/route.ts) — each its own
+-- implicit transaction, with no connection/transaction shared between them.
+-- The `select ... for update` below takes an exclusive lock on this user's
+-- user_budget row and genuinely serializes concurrent check_budget() calls
+-- for the SAME user against EACH OTHER (a second call's lock acquisition
+-- blocks until the first call's transaction ends). But — and this is the
+-- part worth being precise about — that alone does NOT prevent two
+-- concurrent requests from both overshooting the cap under the CURRENT
+-- architecture: record_usage() never touches user_budget at all (its body
+-- below only writes usage_ledger and updates global_budget), so it never
+-- contends for this lock, at any request spacing, back-to-back or
+-- simultaneous. Trace it through: A.check_budget() runs, commits (releasing
+-- the lock), having read a spend total that doesn't yet include A's own
+-- request; B.check_budget() then acquires the lock, but reads that SAME
+-- pre-A-write total (nothing has changed it) and also passes; only later do
+-- A.record_usage() and B.record_usage() both post, and by then both checks
+-- already said yes. So today, this lock closes NO real-world instance of the
+-- race by itself — real overshoot protection continues to come entirely
+-- from the deliberate buffer already built into the ceilings themselves
+-- (global_budget's ceiling_usd defaults to $800, 80% of the true $1000
+-- credit, specifically to absorb exactly this kind of overshoot — see its
+-- comment above).
+--
+-- What this lock DOES do is put the serialization point in the right place
+-- for the future: user_budget is the correct row to hold locked across BOTH
+-- the check and the eventual write, so if a later change ever wraps
+-- check_budget() + record_usage() in one explicit transaction for the same
+-- request (the fully-correct fix), this lock is exactly the primitive that
+-- makes that refactor race-free — no further schema change would be needed,
+-- only a caller-side transaction wrapper. That caller re-architecture (a
+-- single atomic check+reserve+finalize call) was judged a bigger change
+-- than this pass warrants for a low-concurrency, pre-revenue product; this
+-- lock is added now so it's already in place, correctly scoped, whenever
+-- that caller-side work happens.
 create or replace function public.check_budget(p_user_id uuid, p_default_limit numeric default 20.00)
 returns table(allowed boolean, reason text)
 language plpgsql
@@ -67,12 +104,23 @@ declare
   global_spent numeric;
   global_ceiling numeric;
 begin
-  select credit_limit_usd into user_limit from user_budget where user_id = p_user_id;
-  if user_limit is null then
-    insert into user_budget (user_id, credit_limit_usd) values (p_user_id, p_default_limit)
-      on conflict (user_id) do nothing;
-    user_limit := p_default_limit;
-  end if;
+  -- Provision the row BEFORE locking it: `for update` locks rows that
+  -- already exist, so a lock attempt against a not-yet-created row locks
+  -- nothing and two concurrent first-time callers for a brand-new user
+  -- would both sail through unserialized. `insert ... on conflict do
+  -- nothing` itself blocks a concurrent inserter of the same user_id until
+  -- the first inserter's transaction commits, so this ordering is safe even
+  -- when two first-ever requests for the same user land at the same time.
+  insert into user_budget (user_id, credit_limit_usd) values (p_user_id, p_default_limit)
+    on conflict (user_id) do nothing;
+
+  -- Row-level lock: takes an exclusive lock on this user's user_budget row
+  -- for the rest of THIS function's transaction. A second concurrent
+  -- check_budget() call for the same user_id blocks right here until the
+  -- first call's transaction ends, then reads whatever the first call left
+  -- behind. See the TOCTOU note above this function for exactly what this
+  -- does and does not guarantee.
+  select credit_limit_usd into user_limit from user_budget where user_id = p_user_id for update;
 
   select coalesce(sum(cost_usd), 0) into user_spent from usage_ledger where user_id = p_user_id;
   select spent_usd, ceiling_usd into global_spent, global_ceiling from global_budget where id = true;
@@ -457,3 +505,171 @@ $$;
 
 revoke all on function public.get_my_usage() from public, anon;
 grant execute on function public.get_my_usage() to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 5. Error reports: the IDE chat panel's "Report" button on an error message
+-- (see product/lakshx-chat's buildDiagnosticReport()) POSTs here via
+-- /api/error-report so an admin can see the FULL session context behind a
+-- user-visible error, not just the sanitized one-line message the panel
+-- itself shows (see agent/src/providers/types.ts's httpErrorMessage() for
+-- why the panel never displays a raw error body in the first place — this
+-- table is the escape hatch for when an admin needs the raw detail anyway).
+--
+-- diagnostic_report is a full text dump of the session (transcript,
+-- workspace name, chat title/id, session id, model, mode) — genuinely larger
+-- than every other free-text field in this file, hence the wider 50000-char
+-- truncation ceiling below (vs. 2000 elsewhere). Same default-deny RLS +
+-- SECURITY DEFINER + service-role-only pattern as feedback_events/
+-- audit_events above: writes happen exclusively via record_error_report(),
+-- called from /api/error-report after that route independently verifies the
+-- caller's Supabase session token.
+-- -----------------------------------------------------------------------------
+create table if not exists public.error_reports (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  error_message text not null,
+  diagnostic_report text,
+  model text,
+  mode text,
+  created_at timestamptz not null default now()
+);
+create index if not exists error_reports_user_id_idx on public.error_reports(user_id);
+create index if not exists error_reports_created_at_idx on public.error_reports(created_at);
+
+alter table public.error_reports enable row level security;
+-- no policies at all -> default deny for anon/authenticated; only
+-- service-role can touch this table. Writes happen exclusively via
+-- record_error_report() below, called from the /api/error-report route with
+-- the service-role key.
+
+create or replace function public.record_error_report(
+  p_user_id uuid,
+  p_error_message text,
+  p_diagnostic_report text,
+  p_model text,
+  p_mode text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_id uuid;
+begin
+  insert into error_reports (
+    user_id, error_message, diagnostic_report, model, mode
+  ) values (
+    p_user_id, left(p_error_message, 2000), left(p_diagnostic_report, 50000), p_model, p_mode
+  )
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+
+revoke all on function public.record_error_report(uuid, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.record_error_report(uuid, text, text, text, text) to service_role;
+
+-- Admin dashboard convenience view — latest error reports with the
+-- submitting user's email joined in, same shape/pattern as
+-- admin_feedback_recent above (no LIMIT here — the admin page applies its
+-- own `.limit()` when querying this view).
+create or replace view public.admin_error_reports_recent as
+select
+  r.id,
+  r.user_id,
+  u.email,
+  r.error_message,
+  r.diagnostic_report,
+  r.model,
+  r.mode,
+  r.created_at
+from error_reports r
+left join auth.users u on u.id = r.user_id
+order by r.created_at desc;
+
+revoke all on public.admin_error_reports_recent from public, anon, authenticated;
+grant select on public.admin_error_reports_recent to service_role;
+
+-- -----------------------------------------------------------------------------
+-- 6. Agent runtime incidents: the agent child process crashing/failing to
+-- spawn (extension.js's ensureAgent() — `onError` "agent failed to start"
+-- and `onExit` "agent exited (code)" handlers), or a turn timing out
+-- (acp-client.js's AcpClient.request() watchdog — PROMPT_REQUEST_TIMEOUT_MS,
+-- 30 min, surfaced to extension.js's sendPrompt() catch block as "request
+-- ... timed out after ...ms ... may be wedged"). Previously this only ever
+-- showed up as a local IDE chat "system" message — nothing reached any
+-- admin-visible table. This is the aggregate-visibility fix for that gap.
+--
+-- Deliberately a short reason string, not a log dump: `detail` is truncated
+-- to 500 chars (see record_agent_incident() below) — error_reports already
+-- exists for the "full session transcript" case via the panel's Report
+-- button. Same default-deny RLS + SECURITY DEFINER + service-role-only
+-- pattern as every other telemetry table in this file: writes happen
+-- exclusively via record_agent_incident(), called from the
+-- /api/agent-incident route with the service-role key, after that route
+-- independently verifies the caller's Supabase session token.
+-- -----------------------------------------------------------------------------
+create table if not exists public.agent_incidents (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  incident_type text not null check (incident_type in ('crash', 'timeout')),
+  detail text,
+  created_at timestamptz not null default now()
+);
+create index if not exists agent_incidents_user_id_idx on public.agent_incidents(user_id);
+create index if not exists agent_incidents_created_at_idx on public.agent_incidents(created_at);
+
+alter table public.agent_incidents enable row level security;
+-- no policies at all -> default deny for anon/authenticated; only
+-- service-role can touch this table, same as audit_events/error_reports
+-- above.
+
+create or replace function public.record_agent_incident(
+  p_user_id uuid,
+  p_incident_type text,
+  p_detail text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_id uuid;
+begin
+  insert into agent_incidents (user_id, incident_type, detail)
+    -- left(): same defense-in-depth truncation pattern as
+    -- record_feedback_event()/record_error_report() above. incident_type's
+    -- check constraint already restricts it to 'crash'/'timeout', but the
+    -- route-level validation (returning a clean 400) is what actually
+    -- prevents a caller from ever hitting that constraint and getting a 500.
+    values (p_user_id, p_incident_type, left(p_detail, 500))
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+
+revoke all on function public.record_agent_incident(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.record_agent_incident(uuid, text, text) to service_role;
+
+-- Admin dashboard convenience view — latest agent incidents with the
+-- affected user's email joined in, same shape/pattern as
+-- admin_error_reports_recent above. No admin UI reads this yet (schema +
+-- logging call site only, per this migration's scope) — an admin page for
+-- this can follow later using the same pattern as the existing admin_*
+-- pages.
+create or replace view public.admin_agent_incidents_recent as
+select
+  i.id,
+  i.user_id,
+  u.email,
+  i.incident_type,
+  i.detail,
+  i.created_at
+from agent_incidents i
+left join auth.users u on u.id = i.user_id
+order by i.created_at desc;
+
+revoke all on public.admin_agent_incidents_recent from public, anon, authenticated;
+grant select on public.admin_agent_incidents_recent to service_role;

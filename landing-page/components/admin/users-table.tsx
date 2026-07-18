@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   type ColumnDef,
   type SortingState,
@@ -10,7 +11,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowUpDown, Pencil } from "lucide-react";
+import { ArrowUpDown, Eye, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -134,6 +135,18 @@ const columns: ColumnDef<AdminUserRow>[] = [
         <Badge variant="secondary">{formatUsd(row.original.credit_limit_usd)}</Badge>
         <EditCapDialog row={row.original} />
       </div>
+    ),
+  },
+  {
+    id: "actions",
+    header: "",
+    cell: ({ row }) => (
+      <Button variant="ghost" size="icon" className="size-7" asChild>
+        <Link href={`/admin/users/${row.original.user_id}`}>
+          <Eye className="size-3.5" />
+          <span className="sr-only">View user detail</span>
+        </Link>
+      </Button>
     ),
   },
 ];

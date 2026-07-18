@@ -2,10 +2,16 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-// Same lakshx:// deep-link target the magic-link flow used — the
-// extension's URI handler is provider-agnostic (see product/lakshx-chat's
-// registerUriHandler), so nothing there needs to change for this.
-const REDIRECT_TO = "lakshx://lakshx.lakshx-chat/auth-callback";
+// Routes through our own /auth/ide-redirect page rather than straight to
+// lakshx:// — a raw custom-scheme redirectTo leaves the browser tab with
+// nothing to render (no page loads, no confirmation, just a stuck-looking
+// "loading" state) even though the sign-in itself succeeded and the
+// extension's URI handler received the tokens fine. The relay page reads the
+// token fragment client-side and forwards it to the same lakshx:// deep link
+// itself, but with a real page to show a confirmation on. Already covered by
+// this project's Supabase redirect allowlist's `https://lakshx.in/**` entry
+// — no Supabase config change needed for this.
+const REDIRECT_TO = "https://lakshx.in/auth/ide-redirect";
 
 /**
  * Returns the Google consent URL for the client to navigate to — kept

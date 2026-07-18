@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { after } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { cleanAzureError } from "../../../../../lib/upstream-error";
 
 export const runtime = "nodejs";
 // Agentic turns can run long (multi-tool-call loops) — this is the ceiling
@@ -76,16 +77,36 @@ export async function POST(req: NextRequest) {
   // it on regardless of what the client sent.
   body.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
 
+  // Deliberately NOT passing `signal: req.signal` here. Next.js ties that
+  // signal to the incoming connection from the agent process — it fires
+  // identically whether the user clicked Stop or the connection just
+  // dropped (laptop sleep, network blip), and there is no way to tell those
+  // apart at this layer. Wiring it straight through used to abort the SAME
+  // underlying fetch that `meterStream` (tee'd below) reads from, so ANY
+  // interruption silently dropped usage recording entirely — Azure had
+  // already generated (and billed for) tokens that never made it into
+  // usage_ledger, undermining the $20/user and $800 global caps this whole
+  // proxy exists to enforce. Letting the Azure call run to natural
+  // completion regardless of the client's presence costs nothing extra
+  // (Azure bills generated tokens either way) and means we always get an
+  // authoritative final usage figure. The tradeoff: clicking Stop no longer
+  // instantly cuts off the CURRENT in-flight generation — but it still stops
+  // the agent loop from starting further turns/tool calls, which is what
+  // actually drives runaway cost in an agentic system. `maxDuration` above
+  // remains the hard ceiling either way.
   const azureRes = await fetch(`${endpoint}/chat/completions`, {
     method: "POST",
-    signal: req.signal,
     headers: { "content-type": "application/json", "api-key": apiKey },
     body: JSON.stringify(body),
   });
 
   if (!azureRes.ok || !azureRes.body) {
     const text = await azureRes.text().catch(() => "");
-    return Response.json({ error: `azure ${azureRes.status}: ${text.slice(0, 500)}` }, { status: azureRes.status || 502 });
+    // Full raw body stays server-side only (see cleanAzureError()'s doc
+    // comment for why the client-facing error is sanitized here rather than
+    // relying solely on the client's own HTML-body sniffing).
+    console.error(`lakshx-model: azure ${azureRes.status}`, text.slice(0, 2000));
+    return Response.json({ error: cleanAzureError(azureRes.status, text) }, { status: azureRes.status || 502 });
   }
 
   // Tee: the client gets the raw bytes untouched (same SSE shape every

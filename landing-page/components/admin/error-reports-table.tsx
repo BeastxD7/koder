@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import {
   type ColumnDef,
   type SortingState,
@@ -11,26 +10,20 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowUpDown, Eye } from "lucide-react";
+import { ArrowUpDown, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
-export type AdminFeedbackRow = {
+export type AdminErrorReportRow = {
   id: string;
   user_id: string;
   email: string | null;
-  rating: "up" | "down" | "retry";
+  error_message: string;
+  diagnostic_report: string | null;
   model: string | null;
   mode: string | null;
-  chat_id: string | null;
-  session_id: string | null;
-  prompt_excerpt: string | null;
-  response_excerpt: string | null;
-  comment: string | null;
-  expected: string | null;
-  went_wrong: string | null;
   created_at: string;
 };
 
@@ -39,13 +32,48 @@ function truncate(text: string | null | undefined, n = 80) {
   return text.length > n ? `${text.slice(0, n)}…` : text;
 }
 
-function RatingBadge({ rating }: { rating: AdminFeedbackRow["rating"] }) {
-  if (rating === "up") return <Badge className="bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/20">up</Badge>;
-  if (rating === "down") return <Badge variant="destructive">down</Badge>;
-  return <Badge variant="secondary">retry</Badge>;
+function ViewReportSheet({ row }: { row: AdminErrorReportRow }) {
+  return (
+    <Sheet>
+      <SheetTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-7">
+          <FileText className="size-3.5" />
+          <span className="sr-only">View full report</span>
+        </Button>
+      </SheetTrigger>
+      <SheetContent className="flex w-full flex-col gap-0 data-[side=right]:sm:max-w-2xl">
+        <SheetHeader>
+          <SheetTitle>Error report</SheetTitle>
+          <SheetDescription>
+            {row.email ?? "unknown user"} · {new Date(row.created_at).toLocaleString()}
+            {row.model && ` · ${row.model}`}
+            {row.mode && ` · ${row.mode}`}
+          </SheetDescription>
+        </SheetHeader>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Error message</span>
+            <pre className="whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 text-xs text-foreground">
+              {row.error_message}
+            </pre>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Diagnostic report</span>
+            {row.diagnostic_report ? (
+              <pre className="whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 font-mono text-xs text-foreground">
+                {row.diagnostic_report}
+              </pre>
+            ) : (
+              <p className="text-sm text-muted-foreground">No diagnostic report was attached to this submission.</p>
+            )}
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
 }
 
-const columns: ColumnDef<AdminFeedbackRow>[] = [
+const columns: ColumnDef<AdminErrorReportRow>[] = [
   {
     accessorKey: "created_at",
     header: ({ column }) => (
@@ -54,11 +82,6 @@ const columns: ColumnDef<AdminFeedbackRow>[] = [
       </Button>
     ),
     cell: ({ row }) => <span className="text-muted-foreground whitespace-nowrap">{new Date(row.original.created_at).toLocaleString()}</span>,
-  },
-  {
-    accessorKey: "rating",
-    header: "Rating",
-    cell: ({ row }) => <RatingBadge rating={row.original.rating} />,
   },
   {
     accessorKey: "email",
@@ -71,38 +94,23 @@ const columns: ColumnDef<AdminFeedbackRow>[] = [
     cell: ({ row }) => <span className="text-muted-foreground">{row.original.model ?? "—"}</span>,
   },
   {
-    id: "prompt",
-    header: "Prompt",
-    cell: ({ row }) => <span className="text-muted-foreground" title={row.original.prompt_excerpt ?? ""}>{truncate(row.original.prompt_excerpt)}</span>,
+    accessorKey: "mode",
+    header: "Mode",
+    cell: ({ row }) => <span className="text-muted-foreground">{row.original.mode ?? "—"}</span>,
   },
   {
-    id: "response",
-    header: "Response",
-    cell: ({ row }) => <span className="text-muted-foreground" title={row.original.response_excerpt ?? ""}>{truncate(row.original.response_excerpt)}</span>,
-  },
-  {
-    id: "note",
-    header: "Note",
-    cell: ({ row }) => {
-      const note = row.original.comment || row.original.went_wrong || row.original.expected;
-      return <span className="text-muted-foreground" title={note ?? ""}>{truncate(note)}</span>;
-    },
+    id: "error_message",
+    header: "Error",
+    cell: ({ row }) => <span className="text-muted-foreground" title={row.original.error_message}>{truncate(row.original.error_message, 100)}</span>,
   },
   {
     id: "actions",
     header: "",
-    cell: ({ row }) => (
-      <Button variant="ghost" size="icon" className="size-7" asChild>
-        <Link href={`/admin/feedback/${row.original.id}`}>
-          <Eye className="size-3.5" />
-          <span className="sr-only">View feedback detail</span>
-        </Link>
-      </Button>
-    ),
+    cell: ({ row }) => <ViewReportSheet row={row.original} />,
   },
 ];
 
-export function FeedbackTable({ data }: { data: AdminFeedbackRow[] }) {
+export function ErrorReportsTable({ data }: { data: AdminErrorReportRow[] }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
   const [globalFilter, setGlobalFilter] = useState("");
 
@@ -117,7 +125,7 @@ export function FeedbackTable({ data }: { data: AdminFeedbackRow[] }) {
     getFilteredRowModel: getFilteredRowModel(),
     globalFilterFn: (row, _columnId, filterValue) => {
       const needle = String(filterValue).toLowerCase();
-      const haystack = `${row.original.email ?? ""} ${row.original.model ?? ""} ${row.original.prompt_excerpt ?? ""}`.toLowerCase();
+      const haystack = `${row.original.email ?? ""} ${row.original.model ?? ""} ${row.original.error_message}`.toLowerCase();
       return haystack.includes(needle);
     },
   });
@@ -125,7 +133,7 @@ export function FeedbackTable({ data }: { data: AdminFeedbackRow[] }) {
   return (
     <div className="flex flex-col gap-3">
       <Input
-        placeholder="Search by email, model, or prompt…"
+        placeholder="Search by email, model, or error…"
         value={globalFilter}
         onChange={(e) => setGlobalFilter(e.target.value)}
         className="max-w-xs"
@@ -153,7 +161,7 @@ export function FeedbackTable({ data }: { data: AdminFeedbackRow[] }) {
             ) : (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-24 text-center text-muted-foreground">
-                  No feedback yet.
+                  No error reports yet.
                 </TableCell>
               </TableRow>
             )}

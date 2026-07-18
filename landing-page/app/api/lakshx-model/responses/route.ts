@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { after } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { cleanAzureError } from "../../../../lib/upstream-error";
 
 export const runtime = "nodejs";
 // Agentic turns can run long (multi-tool-call loops) — this is the ceiling
@@ -92,16 +93,27 @@ export async function POST(req: NextRequest) {
   body.store = false;
   delete body.previous_response_id;
 
+  // Deliberately NOT passing `signal: req.signal` here — see the identical
+  // comment in the sibling chat/completions/route.ts for the full reasoning.
+  // Short version: this signal fires the same way for an intentional Stop
+  // and an accidental disconnect, and wiring it through used to silently
+  // drop usage recording on either — Azure had already billed for those
+  // tokens regardless. Letting the call run to natural completion costs
+  // nothing extra and guarantees an authoritative final usage figure;
+  // `maxDuration` above remains the hard ceiling.
   const azureRes = await fetch(`${endpoint}/responses`, {
     method: "POST",
-    signal: req.signal,
     headers: { "content-type": "application/json", "api-key": apiKey },
     body: JSON.stringify(body),
   });
 
   if (!azureRes.ok || !azureRes.body) {
     const text = await azureRes.text().catch(() => "");
-    return Response.json({ error: `azure ${azureRes.status}: ${text.slice(0, 500)}` }, { status: azureRes.status || 502 });
+    // Full raw body stays server-side only (see cleanAzureError()'s doc
+    // comment for why the client-facing error is sanitized here rather than
+    // relying solely on the client's own HTML-body sniffing).
+    console.error(`lakshx-model (responses): azure ${azureRes.status}`, text.slice(0, 2000));
+    return Response.json({ error: cleanAzureError(azureRes.status, text) }, { status: azureRes.status || 502 });
   }
 
   // Tee: the client gets the raw bytes untouched (azure-responses.ts parses
