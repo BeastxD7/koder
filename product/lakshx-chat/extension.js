@@ -14,6 +14,7 @@ const { AcpClient } = require("./acp-client.js");
 const { buildCrashContext } = require("./crash-context.js");
 const prWalkthrough = require("./pr-walkthrough.js");
 const voice = require("./voice.js");
+const lakshxAuth = require("./lakshx-auth.js");
 
 // ---------- voice mode (docs/research/14-voice-mode.md) ----------
 //
@@ -102,8 +103,10 @@ const PROVIDERS_TEMPLATE = `{
   // LakshX BYOK — add API keys for any provider you use.
   // Model strings are "provider/model", e.g. "anthropic/claude-sonnet-5",
   // "openrouter/deepseek/deepseek-chat", "ollama/qwen3-coder".
-  "defaultModel": "anthropic/claude-sonnet-5",
+  "defaultModel": "lakshx/gpt-5-mini",
   "providers": {
+    // "lakshx" is managed automatically by "LakshX: Sign In" — don't edit its apiKey by hand, it's a rotating session token, not a real API key.
+    "lakshx":     { "apiKey": "" },
     "anthropic":  { "apiKey": "" },
     "openai":     { "apiKey": "" },
     "openrouter": { "apiKey": "" },
@@ -116,7 +119,10 @@ const PROVIDERS_TEMPLATE = `{
 `;
 
 // ---------- BYOK provider state (~/.lakshx/providers.json) ----------
-const PROVIDER_IDS = ["anthropic", "openai", "openrouter", "gemini", "deepseek", "groq", "xai"];
+// "lakshx" is the free hosted model (no user-supplied key — its "apiKey" is
+// a Supabase session token, kept fresh by scheduleLakshxRefresh() below) —
+// listed first since it's the default, zero-setup option on a fresh install.
+const PROVIDER_IDS = ["lakshx", "anthropic", "openai", "openrouter", "gemini", "deepseek", "groq", "xai"];
 
 function providersFile() {
   return path.join(os.homedir(), ".lakshx", "providers.json");
@@ -150,6 +156,60 @@ function saveProviderState(keys, defaultModel) {
   if (defaultModel) cfg.defaultModel = defaultModel.trim();
   fs.mkdirSync(path.dirname(providersFile()), { recursive: true });
   fs.writeFileSync(providersFile(), JSON.stringify(cfg, null, 2));
+}
+
+// ---------- LakshX hosted-model session (separate from manual BYOK keys —
+// this "apiKey" is a rotating Supabase access token, not a real API key) ----------
+function saveLakshxToken(accessToken) {
+  const cfg = readProvidersJson();
+  cfg.providers = cfg.providers ?? {};
+  cfg.providers.lakshx = { apiKey: accessToken };
+  fs.mkdirSync(path.dirname(providersFile()), { recursive: true });
+  fs.writeFileSync(providersFile(), JSON.stringify(cfg, null, 2));
+}
+
+function clearLakshxToken() {
+  const cfg = readProvidersJson();
+  if (cfg.providers?.lakshx) delete cfg.providers.lakshx;
+  fs.mkdirSync(path.dirname(providersFile()), { recursive: true });
+  fs.writeFileSync(providersFile(), JSON.stringify(cfg, null, 2));
+}
+
+/**
+ * Supabase access tokens expire in 1h with single-use ROTATING refresh
+ * tokens — a naive "store the refresh token once" implementation silently
+ * logs the user out the second time it's used, because the old one gets
+ * invalidated the moment a new one is issued. Every refresh here persists
+ * BOTH the new access token and the new rotated refresh token.
+ *
+ * Runs an immediate check on activation (covers "app was closed past the
+ * 1h expiry, last session's access token is stale") plus a 5-minute poll
+ * that only actually calls Supabase once within 10 minutes of expiry.
+ */
+function scheduleLakshxRefresh(context) {
+  async function tick() {
+    const refreshToken = await context.secrets.get("lakshx.refreshToken");
+    if (!refreshToken) return;
+    const expiresAt = Number((await context.secrets.get("lakshx.tokenExpiresAt")) ?? "0");
+    if (expiresAt && expiresAt - Date.now() > 10 * 60 * 1000) return;
+    try {
+      const session = await lakshxAuth.refreshSession(refreshToken);
+      saveLakshxToken(session.access_token);
+      await context.secrets.store("lakshx.refreshToken", session.refresh_token);
+      await context.secrets.store("lakshx.tokenExpiresAt", String(Date.now() + session.expires_in * 1000));
+    } catch {
+      // refresh token itself is dead (expired, or already-replayed after a
+      // crash mid-rotation) — clear everything so the UI honestly shows
+      // "logged out" instead of silently retrying against a dead token
+      // forever.
+      clearLakshxToken();
+      await context.secrets.delete("lakshx.refreshToken");
+      await context.secrets.delete("lakshx.tokenExpiresAt");
+    }
+  }
+  tick();
+  const interval = setInterval(tick, 5 * 60 * 1000);
+  context.subscriptions.push({ dispose: () => clearInterval(interval) });
 }
 
 // ---------- @-mention file search + attachment (chip) expansion ----------
@@ -2060,6 +2120,12 @@ class AgentViewProvider {
         this.post({ type: "providerStatus", provider: m.provider, ...result });
         break;
       }
+      case "lakshxLogin":
+        vscode.commands.executeCommand("lakshx.login");
+        break;
+      case "lakshxLogout":
+        vscode.commands.executeCommand("lakshx.logout");
+        break;
       case "openSettingsFile":
         vscode.commands.executeCommand("lakshx.openProviderSettings");
         break;
@@ -2363,6 +2429,49 @@ async function activate(context) {
     context.globalState.update("lakshx.chatDisabled.v1", true);
   }
 
+  // ---------- LakshX hosted-model login (magic-link via lakshx:// deep link) ----------
+  scheduleLakshxRefresh(context);
+
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri(uri) {
+        const parsed = lakshxAuth.parseAuthCallback(uri);
+        if (parsed.error) {
+          vscode.window.showErrorMessage(`LakshX sign-in failed: ${parsed.error}`);
+          return;
+        }
+        saveLakshxToken(parsed.access_token);
+        context.secrets.store("lakshx.refreshToken", parsed.refresh_token);
+        context.secrets.store("lakshx.tokenExpiresAt", String(Date.now() + parsed.expires_in * 1000));
+        vscode.window.showInformationMessage("Signed in to LakshX.");
+        provider.post({ type: "lakshxAuthChanged", providers: readProviderState() });
+        const readyState = readProviderState();
+        provider.post({
+          type: "ready",
+          models: { defaultModel: readyState.defaultModel, providers: PROVIDER_IDS.filter((id) => readyState.set[id]) },
+          voice: { modelDownloaded: voice.isModelDownloaded(), addonAvailable: voice.isAddonAvailable() },
+        });
+      },
+    }),
+  );
+
+  // First run, no providers configured at all: nudge toward the free,
+  // zero-setup LakshX login instead of leaving the user to find the
+  // settings gear on their own — the passive "no keys yet" chat notice in
+  // the "boot" handler is the fallback for anyone who dismisses this.
+  if (!context.globalState.get("lakshx.loginPrompted.v1")) {
+    context.globalState.update("lakshx.loginPrompted.v1", true);
+    const state = readProviderState();
+    const hasAnyProvider = PROVIDER_IDS.some((id) => state.set[id]);
+    if (!hasAnyProvider) {
+      vscode.window
+        .showInformationMessage("Sign in to LakshX to unlock the free built-in model — no API key needed.", "Sign In")
+        .then((choice) => {
+          if (choice === "Sign In") vscode.commands.executeCommand("lakshx.login");
+        });
+    }
+  }
+
   const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
   statusItem.text = "✦ LakshX";
   statusItem.tooltip = "Open LakshX Agent (⌘L)";
@@ -2470,6 +2579,22 @@ async function activate(context) {
     vscode.commands.registerCommand("lakshx.configureProviders", async () => {
       await vscode.commands.executeCommand("lakshx.chatView.focus");
       provider.post({ type: "showSettings", providers: readProviderState() });
+    }),
+    vscode.commands.registerCommand("lakshx.login", () => {
+      vscode.env.openExternal(vscode.Uri.parse("https://lakshx.in/login"));
+    }),
+    vscode.commands.registerCommand("lakshx.logout", async () => {
+      clearLakshxToken();
+      await context.secrets.delete("lakshx.refreshToken");
+      await context.secrets.delete("lakshx.tokenExpiresAt");
+      vscode.window.showInformationMessage("Signed out of LakshX.");
+      provider.post({ type: "lakshxAuthChanged", providers: readProviderState() });
+      const readyState = readProviderState();
+      provider.post({
+        type: "ready",
+        models: { defaultModel: readyState.defaultModel, providers: PROVIDER_IDS.filter((id) => readyState.set[id]) },
+        voice: { modelDownloaded: voice.isModelDownloaded(), addonAvailable: voice.isAddonAvailable() },
+      });
     }),
     vscode.commands.registerCommand("lakshx.openProviderSettings", async () => {
       const dir = path.join(os.homedir(), ".lakshx");

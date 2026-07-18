@@ -49,6 +49,13 @@ export const PRESETS: Record<string, { kind: "anthropic" | "openai" | "azure"; b
   // ~/.lakshx/providers.json for a different resource). `model` must be set
   // to the Foundry *deployment name*, e.g. "azure/gpt-4o-mini-deploy".
   azure:      { kind: "azure", baseUrl: "https://lakshx-ide-global-resource.openai.azure.com/openai/v1", envKey: "AZURE_OPENAI_API_KEY" },
+  // Free hosted model, no BYOK key — plain "openai" kind (the proxy speaks
+  // the same chat/completions wire shape as everything else on this
+  // adapter). "apiKey" here is a Supabase session token managed by
+  // product/lakshx-chat's login flow (extension.js's saveLakshxToken/
+  // scheduleLakshxRefresh), not a real API key — envKey is a fallback for
+  // advanced/headless use only.
+  lakshx:     { kind: "openai", baseUrl: "https://lakshx.in/api/lakshx-model", envKey: "LAKSHX_ACCESS_TOKEN" },
 };
 
 export function loadConfig(): LakshXConfig {

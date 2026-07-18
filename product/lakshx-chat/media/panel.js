@@ -2157,6 +2157,7 @@ const settingsPanel = document.getElementById("settingsPanel");
 const settingsBody = document.getElementById("settingsBody");
 
 const PROVIDERS = {
+  lakshx: { label: "LakshX (free, no key needed)", managed: true, models: ["gpt-5-mini"] },
   anthropic: { label: "Anthropic (Claude)", keyUrl: "console.anthropic.com", models: ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5", "claude-fable-5"] },
   openrouter: { label: "OpenRouter", keyUrl: "openrouter.ai/keys", models: ["anthropic/claude-sonnet-5", "openai/gpt-5.5", "google/gemini-3-pro", "deepseek/deepseek-chat", "qwen/qwen3-coder"] },
   gemini: { label: "Google Gemini", keyUrl: "aistudio.google.com/apikey", models: ["gemini-3-pro", "gemini-3-flash", "gemini-3.1-flash-lite"] },
@@ -2184,10 +2185,17 @@ function renderSettings() {
         .map(([id, pv]) => `<option value="${id}" ${id === providerId ? "selected" : ""}>${pv.label}${settingsState.set?.[id] ? " — key saved" : ""}</option>`)
         .join("")}</select>
     </div>
-    <div class="field">
+    ${
+      p.managed
+        ? `<div class="field">
+      <label>Account ${isSet ? '<span class="pill">signed in</span>' : '<span class="muted">sign in to use the free model</span>'}</label>
+      <button type="button" id="lakshxAuthBtn">${isSet ? "Sign Out" : "Sign In"}</button>
+    </div>`
+        : `<div class="field">
       <label>API key ${isSet ? '<span class="pill">saved</span>' : `<span class="muted">get one at ${p.keyUrl}</span>`}</label>
       <input type="password" id="keyInput" placeholder="${isSet ? "leave blank to keep current key" : "paste API key"}">
-    </div>
+    </div>`
+    }
     <div class="field">
       <label>Model ${liveModels[providerId] ? `<span class="pill">${liveModels[providerId].length} live</span>` : ""}</label>
       <select id="modelSelect" class="big">
@@ -2214,7 +2222,15 @@ function renderSettings() {
     settingsState.explainLanguage = e.target.value; // survives the next renderSettings() re-render (e.g. on provider change)
     vscode.postMessage({ type: "setExplainLanguage", value: e.target.value });
   });
-  if (isSet && !liveModels[providerId]) {
+  if (p.managed) {
+    document.getElementById("lakshxAuthBtn").addEventListener("click", () => {
+      vscode.postMessage({ type: isSet ? "lakshxLogout" : "lakshxLogin" });
+    });
+  }
+  // "lakshx/validate" probes a live GET /models endpoint the managed proxy
+  // doesn't implement (it only speaks POST chat/completions) — not
+  // meaningful for a login-token session anyway, so skip it here.
+  if (isSet && !liveModels[providerId] && !p.managed) {
     document.getElementById("provStatus").textContent = "checking key, fetching models…";
     vscode.postMessage({ type: "validateProvider", provider: providerId });
   }
@@ -2229,7 +2245,9 @@ document.getElementById("settingsClose").addEventListener("click", () => (settin
 document.getElementById("settingsFile").addEventListener("click", () => vscode.postMessage({ type: "openSettingsFile" }));
 document.getElementById("settingsSave").addEventListener("click", () => {
   const providerId = document.getElementById("providerSelect").value;
-  const key = document.getElementById("keyInput").value.trim();
+  // no keyInput field for the managed "lakshx" provider — its "key" is the
+  // login session, set via the Sign In button instead.
+  const key = document.getElementById("keyInput")?.value?.trim() ?? "";
   const modelSel = document.getElementById("modelSelect").value;
   const model = modelSel === "__custom__" ? document.getElementById("customModel").value.trim() : modelSel;
   const keys = {};
@@ -2380,6 +2398,14 @@ window.addEventListener("message", (e) => {
       maybeAttachFeedback();
       break;
     case "showSettings": showSettings(m.providers); break;
+    // Fired after a login/logout round-trip completes — refresh the
+    // settings panel's signed-in state WITHOUT forcibly popping it open if
+    // the user isn't looking at it (unlike "showSettings", which always
+    // un-hides the panel).
+    case "lakshxAuthChanged":
+      settingsState = m.providers;
+      if (!settingsPanel.hidden) renderSettings();
+      break;
     case "providerModels":
       liveModels[m.provider] = m.models;
       if (!settingsPanel.hidden) renderSettings();
