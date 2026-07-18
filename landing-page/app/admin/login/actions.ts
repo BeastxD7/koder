@@ -1,8 +1,24 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { createClient } from "../../../lib/supabase/server";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * skipBrowserRedirect is required for server-side signInWithOAuth calls —
+ * there's no browser here to redirect; the server does it itself via
+ * next/navigation's redirect() once it has the consent URL.
+ */
+export async function signInWithGoogle() {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: "https://lakshx.in/auth/callback?next=/admin", skipBrowserRedirect: true },
+  });
+  if (error || !data?.url) throw new Error("failed to start Google sign-in");
+  redirect(data.url);
+}
 
 export type MagicLinkState = { status: "idle" } | { status: "error"; message: string } | { status: "sent"; email: string };
 
