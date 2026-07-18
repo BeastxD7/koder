@@ -50,7 +50,7 @@ export interface DownloadTarget {
 /** Bump the value for a platform every time a new file is uploaded to its
  * (stable) blob path — see the cache-busting note above. */
 const BLOB_VERSION: Record<Exclude<DownloadKey, "macIntel">, string> = {
-  macArm: "2026-07-17",
+  macArm: "2026-07-19",
   windows: "2026-07-17",
   linux: "2026-07-16",
 };
