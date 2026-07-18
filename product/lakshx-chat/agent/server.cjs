@@ -19241,6 +19241,59 @@ function streamMaxMs() {
   const v = Number(process.env.LAKSHX_STREAM_MAX_MS);
   return Number.isFinite(v) && v > 0 ? v : 10 * 6e4;
 }
+function httpErrorMessage(baseUrl, status, rawBody) {
+  const trimmed = rawBody.trim();
+  if (/^<!doctype html|^<html[\s>]/i.test(trimmed)) {
+    return `${baseUrl} returned an unexpected server error (HTTP ${status}). Try again in a moment \u2014 if it keeps happening, use the Report button to let us know.`;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    const msg = typeof parsed?.error === "string" ? parsed.error : typeof parsed?.error?.message === "string" ? parsed.error.message : void 0;
+    if (msg) return `${baseUrl} ${status}: ${msg.slice(0, 400)}`;
+  } catch {
+  }
+  return `${baseUrl} ${status}: ${trimmed.slice(0, 400)}`;
+}
+var RETRYABLE_STATUSES = /* @__PURE__ */ new Set([429, 502, 503, 504]);
+var RETRY_BACKOFF_MS = [250, 750, 1500];
+var MAX_BACKOFF_MS = 2e3;
+function abortableSleep(ms, signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve6, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve6();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+function retryDelayMs(res, attemptNumber) {
+  const retryAfter = res.headers.get("retry-after");
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs)) return Math.max(0, Math.min(secs * 1e3, MAX_BACKOFF_MS));
+    const dateMs = Date.parse(retryAfter);
+    if (!Number.isNaN(dateMs)) return Math.max(0, Math.min(dateMs - Date.now(), MAX_BACKOFF_MS));
+  }
+  return Math.min(RETRY_BACKOFF_MS[Math.min(attemptNumber - 1, RETRY_BACKOFF_MS.length - 1)], MAX_BACKOFF_MS);
+}
+async function fetchWithRetry(fn, opts) {
+  const maxAttempts = opts?.maxAttempts ?? 3;
+  const signal = opts?.signal;
+  let res;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    res = await fn();
+    if (res.ok || !RETRYABLE_STATUSES.has(res.status) || attempt === maxAttempts) return res;
+    const waitMs = retryDelayMs(res, attempt);
+    console.error(`[fetchWithRetry] attempt ${attempt}/${maxAttempts} got HTTP ${res.status} \u2014 retrying in ${waitMs}ms`);
+    await abortableSleep(waitMs, signal);
+  }
+  return res;
+}
 async function* sseLines(body, idleMs = streamIdleMs(), maxMs = streamMaxMs()) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -19294,30 +19347,33 @@ var AnthropicAdapter = class {
   }
   cfg;
   async runTurn(req) {
-    const res = await fetch(`${this.cfg.baseUrl}/v1/messages`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": this.cfg.apiKey,
-        "anthropic-version": "2023-06-01",
-        ...this.cfg.headers
-      },
-      body: JSON.stringify({
-        model: req.model,
-        max_tokens: req.maxTokens ?? 8192,
-        system: req.system,
-        messages: req.messages.map((m) => toWire(m, isVisionCapableModel(req.model))),
-        tools: req.tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          input_schema: t.input_schema
-        })),
-        stream: true
-      })
-    });
+    const res = await fetchWithRetry(
+      () => fetch(`${this.cfg.baseUrl}/v1/messages`, {
+        method: "POST",
+        signal: req.signal,
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": this.cfg.apiKey,
+          "anthropic-version": "2023-06-01",
+          ...this.cfg.headers
+        },
+        body: JSON.stringify({
+          model: req.model,
+          max_tokens: req.maxTokens ?? 8192,
+          system: req.system,
+          messages: req.messages.map((m) => toWire(m, isVisionCapableModel(req.model))),
+          tools: req.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.input_schema
+          })),
+          stream: true
+        })
+      }),
+      { signal: req.signal }
+    );
     if (!res.ok) {
-      throw new Error(`anthropic ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      throw new Error(httpErrorMessage("anthropic", res.status, await res.text()));
     }
     let text = "";
     const toolCalls = [];
@@ -19398,42 +19454,45 @@ var AzureResponsesAdapter = class {
   }
   cfg;
   async runTurn(req) {
-    const res = await fetch(`${this.cfg.baseUrl}/responses`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.cfg.apiKey}`,
-        ...this.cfg.headers
-      },
-      body: JSON.stringify({
-        model: req.model,
-        // Responses API's system-prompt equivalent — a top-level field,
-        // never an `input` item (unlike Chat Completions' `role:"system"`
-        // message).
-        instructions: req.system,
-        input: toWire2(req.messages, isVisionCapableModel(req.model)),
-        // Flat tool shape — NOT nested under a `function` key like Chat
-        // Completions (openai-compat.ts's `{type:"function", function:{...}}`).
-        tools: req.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.input_schema })),
-        // Responses API's token cap field — verified distinct from Chat
-        // Completions' `max_tokens`/`max_completion_tokens`
-        // (openai-compat.ts's `maxTokensParamName`).
-        max_output_tokens: req.maxTokens ?? 8192,
-        // "low": this is the free/hosted, budget-capped path ($800 global
-        // ceiling, $20/user cap — landing-page's check_budget/record_usage),
-        // and an agentic coding loop pays this cost on EVERY tool-calling
-        // round-trip, not once per conversation — favor latency/cost over
-        // reasoning depth. Not verified against the (now-deleted) disposable
-        // test route that first proved reasoning-summary streaming; revisit
-        // if response quality suffers in practice.
-        reasoning: { effort: "low", summary: "auto" },
-        store: false,
-        stream: true
-      })
-    });
+    const res = await fetchWithRetry(
+      () => fetch(`${this.cfg.baseUrl}/responses`, {
+        method: "POST",
+        signal: req.signal,
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.cfg.apiKey}`,
+          ...this.cfg.headers
+        },
+        body: JSON.stringify({
+          model: req.model,
+          // Responses API's system-prompt equivalent — a top-level field,
+          // never an `input` item (unlike Chat Completions' `role:"system"`
+          // message).
+          instructions: req.system,
+          input: toWire2(req.messages, isVisionCapableModel(req.model)),
+          // Flat tool shape — NOT nested under a `function` key like Chat
+          // Completions (openai-compat.ts's `{type:"function", function:{...}}`).
+          tools: req.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.input_schema })),
+          // Responses API's token cap field — verified distinct from Chat
+          // Completions' `max_tokens`/`max_completion_tokens`
+          // (openai-compat.ts's `maxTokensParamName`).
+          max_output_tokens: req.maxTokens ?? 8192,
+          // "low": this is the free/hosted, budget-capped path ($800 global
+          // ceiling, $20/user cap — landing-page's check_budget/record_usage),
+          // and an agentic coding loop pays this cost on EVERY tool-calling
+          // round-trip, not once per conversation — favor latency/cost over
+          // reasoning depth. Not verified against the (now-deleted) disposable
+          // test route that first proved reasoning-summary streaming; revisit
+          // if response quality suffers in practice.
+          reasoning: { effort: "low", summary: "auto" },
+          store: false,
+          stream: true
+        })
+      }),
+      { signal: req.signal }
+    );
     if (!res.ok) {
-      throw new Error(`${this.cfg.baseUrl} ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, await res.text()));
     }
     let text = "";
     let finish = "end_turn";
@@ -19556,30 +19615,33 @@ var OpenAICompatAdapter = class {
   cfg;
   async runTurn(req) {
     const authHeader = this.cfg.kind === "azure" ? { "api-key": this.cfg.apiKey ?? "" } : { authorization: `Bearer ${this.cfg.apiKey}` };
-    const res = await fetch(`${this.cfg.baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: req.signal,
-      headers: {
-        "content-type": "application/json",
-        ...authHeader,
-        ...this.cfg.headers
-      },
-      body: JSON.stringify({
-        model: req.model,
-        [maxTokensParamName(req.model)]: req.maxTokens ?? 8192,
-        messages: [{ role: "system", content: req.system }, ...toWire3(req.messages, isVisionCapableModel(req.model))],
-        tools: req.tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.input_schema }
-        })),
-        stream: true,
-        // without this the usage-bearing final chunk is never sent, and we
-        // silently fall back to character-based token estimates
-        stream_options: { include_usage: true }
-      })
-    });
+    const res = await fetchWithRetry(
+      () => fetch(`${this.cfg.baseUrl}/chat/completions`, {
+        method: "POST",
+        signal: req.signal,
+        headers: {
+          "content-type": "application/json",
+          ...authHeader,
+          ...this.cfg.headers
+        },
+        body: JSON.stringify({
+          model: req.model,
+          [maxTokensParamName(req.model)]: req.maxTokens ?? 8192,
+          messages: [{ role: "system", content: req.system }, ...toWire3(req.messages, isVisionCapableModel(req.model))],
+          tools: req.tools.map((t) => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.input_schema }
+          })),
+          stream: true,
+          // without this the usage-bearing final chunk is never sent, and we
+          // silently fall back to character-based token estimates
+          stream_options: { include_usage: true }
+        })
+      }),
+      { signal: req.signal }
+    );
     if (!res.ok) {
-      throw new Error(`${this.cfg.baseUrl} ${res.status}: ${(await res.text()).slice(0, 400)}`);
+      throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, await res.text()));
     }
     let text = "";
     let finish;

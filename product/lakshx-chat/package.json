@@ -182,6 +182,11 @@
           "default": true,
           "description": "Show the mic (push-to-talk dictation) button in the chat composer. The button renders regardless of this fork's Electron build — on a stock/unpatched build it fails gracefully with a clear message instead of transcribing, since microphone access in the webview requires LakshX's own patched Electron (docs/research/14-voice-mode.md)."
         },
+        "lakshx.voice.pushToTalkKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional keyboard shortcut that toggles voice dictation on/off while the LakshX panel has focus (press once to start recording, press again to stop) — an alternative to holding the mic button with the mouse. Set from the panel's settings sheet (recommended, captures your keypress directly) rather than typed here by hand. Must include a modifier (Ctrl/Alt/Cmd) or be a function key (F1-F24) so it can never collide with normal typing in the composer. Empty means no hotkey is bound."
+        },
         "lakshx.explainLanguage": {
           "type": "string",
           "enum": ["english", "hinglish", "tanglish", "benglish"],

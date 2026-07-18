@@ -6,7 +6,6 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const cp = require("child_process");
-const { CHANGELOG } = require("./changelog.js");
 const diagnostics = require("./diagnostics.js");
 const { discoverCommands, expandCommandBody } = require("./commands.js");
 const { EXPLAIN_LANGUAGES, normalizeExplainLanguage } = require("./explain-language.js");
@@ -32,6 +31,22 @@ function pcmFromMessage(raw) {
   if (ArrayBuffer.isView(raw)) return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
   if (Array.isArray(raw)) return Float32Array.from(raw);
   throw new Error("unrecognized audio payload shape");
+}
+
+/**
+ * Push-to-talk hotkey validation — descriptors look like "Control+Space" or
+ * a bare "F13" (see media/panel.js's describeKeyEvent, which builds these
+ * from KeyboardEvent.code so they're stable across keyboard layouts).
+ * Re-validated server-side (not just in the capture UI) since this setting
+ * is also directly editable via settings.json: a bare printable key (e.g.
+ * "Space" alone) would fire on every normal keystroke in the composer, so
+ * anything without Ctrl/Alt/Meta must be a function key instead.
+ */
+function isSafePushToTalkKey(descriptor) {
+  if (!descriptor) return true; // empty = unbound, always fine
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(descriptor)) return true;
+  const parts = descriptor.split("+");
+  return parts.length > 1 && parts.slice(0, -1).some((p) => p === "Control" || p === "Alt" || p === "Meta");
 }
 
 // ---------- runtime discovery ----------
@@ -483,22 +498,6 @@ function chatsDir() {
   return dir;
 }
 
-// ---------- "What's new" changelog (see changelog.js) ----------
-// Newest-first, stable within a date (Array#sort is stable) so the curated
-// order in changelog.js — most user-visible entry first per date — survives.
-function sortedChangelog() {
-  return [...CHANGELOG].sort((a, b) => b.date.localeCompare(a.date));
-}
-
-// "Have there been entries shipped after the user last opened the panel?"
-// Empty-string lastSeen (never opened) sorts before every real date, so a
-// first-time user correctly sees the badge.
-function whatsNewHasUnseen(context) {
-  const lastSeen = context.globalState.get("lakshx.whatsNew.lastSeenDate", "");
-  const newest = sortedChangelog()[0]?.date ?? "";
-  return newest > lastSeen;
-}
-
 // ---------- local feedback log (~/.lakshx/feedback/<yyyy-mm>.jsonl) ----------
 // Local write here is unconditional and always happens, regardless of sign-in
 // state or model — it is the reliable on-disk copy. Cloud sync is a
@@ -548,6 +547,30 @@ function uploadFeedbackEvent(entry) {
       expected: entry.expected,
       wentWrong: entry.wentWrong,
     }),
+  }).catch(() => {});
+}
+
+/**
+ * Cloud mirror of an agent runtime crash (spawn failure or unexpected exit)
+ * or a turn timeout — see ensureAgent()'s onError/onExit handlers below and
+ * sendPrompt()'s catch block for the two call sites. Unlike
+ * uploadFeedbackEvent, this is NOT gated on `entry.model` — a runtime crash
+ * or timeout isn't tied to which model the user happened to be talking to,
+ * it's the local agent process/pipe itself, so the only gate is "are we
+ * signed in at all" (same rotating Supabase access token as every other
+ * lakshx.in call). Fire-and-forget, best-effort: a failure here must never
+ * surface to the user or affect the existing local system-message
+ * notification, which already happened by the time this is called. `detail`
+ * is a short reason string (truncated server-side to 500 chars) — never a
+ * full log dump.
+ */
+function uploadAgentIncident(incidentType, detail) {
+  const token = readProvidersJson().providers?.lakshx?.apiKey;
+  if (!token) return;
+  fetch("https://lakshx.in/api/agent-incident", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ incidentType, detail }),
   }).catch(() => {});
 }
 
@@ -981,11 +1004,13 @@ class AgentViewProvider {
       onError: (err) => {
         this.log.appendLine(`SPAWN ERROR: ${err.message}`);
         this.post({ type: "system", text: `agent failed to start: ${err.message}` });
+        uploadAgentIncident("crash", `agent failed to start: ${err.message}`);
         this.acp = null;
       },
       onExit: (code) => {
         this.log.appendLine(`agent exited (${code})`);
         this.post({ type: "system", text: `agent exited (${code}) — will restart on next message` });
+        uploadAgentIncident("crash", `agent exited (${code})`);
         this.acp = null;
         this.sessionId = null;
       },
@@ -1593,8 +1618,19 @@ class AgentViewProvider {
         });
         this.post({ type: "turnEnd", stopReason: res.stopReason });
       } catch (err) {
-        this.post({ type: "system", text: `error: ${err.message}` });
+        this.post({ type: "system", text: `error: ${err.message}`, isError: true });
         this.post({ type: "turnEnd", stopReason: "error" });
+        // Only the specific "wedged process" timeout from AcpClient.request()
+        // (see acp-client.js's PROMPT_REQUEST_TIMEOUT_MS watchdog) counts as
+        // a 'timeout' incident here — this catch fires for every
+        // session/prompt rejection, and a generic provider/runtime error
+        // isn't a crash or a timeout, so it's intentionally not logged as
+        // either. Matched on the timeout error's own message text (see
+        // acp-client.js's `request "${method}" timed out after ...`) since
+        // that's the only signal distinguishing it from other rejections.
+        if (err.message?.includes("timed out after")) {
+          uploadAgentIncident("timeout", err.message);
+        }
         // Best-effort: whatever made session/prompt reject client-side —
         // including AcpClient.request()'s own timeout above — the runtime
         // may still be churning away on this turn with nobody listening
@@ -1896,16 +1932,6 @@ class AgentViewProvider {
       case "history":
         this.view?.webview.postMessage({ type: "historyList", chats: this.listChats() });
         break;
-      case "whatsNew": {
-        const entries = sortedChangelog();
-        this.view?.webview.postMessage({ type: "whatsNewList", entries });
-        // Clear the badge: mark everything up to the newest shipped entry as
-        // seen (not "today") so a later addUnseen check compares dates the
-        // same way whatsNewHasUnseen() does above.
-        const newest = entries[0]?.date ?? "";
-        await this.context.globalState.update("lakshx.whatsNew.lastSeenDate", newest);
-        break;
-      }
       case "loadChat": {
         try {
           const j = JSON.parse(fs.readFileSync(path.join(chatsDir(), `${m.id}.json`), "utf8"));
@@ -2143,6 +2169,19 @@ class AgentViewProvider {
         await this.pushExplainLanguage();
         break;
       }
+      case "setPushToTalkKey": {
+        const key = typeof m.key === "string" ? m.key : "";
+        if (key && !isSafePushToTalkKey(key)) {
+          this.post({
+            type: "system",
+            text: "That key isn't safe to use as a push-to-talk hotkey — it needs a modifier (Ctrl/Alt/Cmd) or must be a function key (F1–F24), so it can never collide with normal typing.",
+          });
+          break;
+        }
+        await vscode.workspace.getConfiguration("lakshx").update("voice.pushToTalkKey", key, vscode.ConfigurationTarget.Global);
+        this.post({ type: "pushToTalkKeySaved", key });
+        break;
+      }
       case "saveProviders": {
         saveProviderState(m.keys, m.defaultModel);
         if (!this.acp) await this.ensureAgent();
@@ -2181,6 +2220,44 @@ class AgentViewProvider {
         const token = readProvidersJson().providers?.lakshx?.apiKey;
         const usage = token ? await lakshxAuth.getMyUsage(token) : null;
         this.post({ type: "lakshxUsageResult", usage });
+        break;
+      }
+      case "reportError": {
+        // Scoped to the hosted lakshx model + signed-in users only, matching
+        // uploadFeedbackEvent's privacy scoping — a BYOK user's own prompts/
+        // responses (bundled into the full diagnostic report below) should
+        // never leave their machine just because they happen to also be
+        // signed in, and a BYOK error is usually the third-party provider's
+        // problem, not something this project's logs can help debug anyway.
+        const token = readProvidersJson().providers?.lakshx?.apiKey;
+        const isHosted = this.currentModel?.startsWith("lakshx/");
+        if (!token || !isHosted) {
+          this.post({
+            type: "reportErrorDone",
+            reportId: m.reportId,
+            ok: false,
+            reason: "Reporting needs you to be signed in and using the free LakshX model.",
+          });
+          break;
+        }
+        try {
+          // The server rejects bodies over 1MB outright (413) rather than
+          // truncating — pre-truncate here so a large session transcript
+          // never silently fails to report. DB-side left(...,50000) is a
+          // backstop, not the primary guard, so this cap is generous but
+          // still comfortably under the server's ceiling with JSON/header
+          // overhead accounted for.
+          const report = this.buildDiagnosticReport().slice(0, 200_000);
+          const res = await fetch("https://lakshx.in/api/error-report", {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+            body: JSON.stringify({ errorMessage: m.errorText, diagnosticReport: report, model: this.currentModel, mode: this.mode }),
+          });
+          this.post({ type: "reportErrorDone", reportId: m.reportId, ok: res.ok });
+        } catch (err) {
+          this.log.appendLine(`reportError failed: ${err.message}`);
+          this.post({ type: "reportErrorDone", reportId: m.reportId, ok: false, reason: "Could not send the report — check your connection." });
+        }
         break;
       }
       case "openSettingsFile":
@@ -2312,7 +2389,11 @@ class AgentViewProvider {
         this.post({
           type: "ready",
           models: { defaultModel: state.defaultModel, providers },
-          voice: { modelDownloaded: voice.isModelDownloaded(), addonAvailable: voice.isAddonAvailable() },
+          voice: {
+            modelDownloaded: voice.isModelDownloaded(),
+            addonAvailable: voice.isAddonAvailable(),
+            pushToTalkKey: vscode.workspace.getConfiguration("lakshx").get("voice.pushToTalkKey", ""),
+          },
         });
         // webview-ready is also when the slash-command popover gets its
         // initial command list (spec: scan on webview ready + on any
@@ -2406,13 +2487,6 @@ ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
     </div>
     <div class="settings-body" id="historyBody"></div>
   </div>
-  <div id="whatsNewPanel" hidden>
-    <div class="settings-head">
-      <span>What's new</span>
-      <button id="whatsNewClose" class="ghost" title="Close">&#10005;</button>
-    </div>
-    <div class="settings-body" id="whatsNewBody"></div>
-  </div>
   <div id="topbar">
     <select id="modeSelect" title="Agent mode">
       <option value="review" selected title="Read-only: research and produce a plan">Review</option>
@@ -2421,9 +2495,6 @@ ${hasMd ? `<link rel="stylesheet" href="${mdcss}">` : ""}
       <option value="royal" title="Full autonomy, full machine access — no floor, no restrictions. Logged and checkpointed, not blocked.">Royal</option>
     </select>
     <div class="spacer"></div>
-    <button id="whatsNewBtn" class="ghost${whatsNewHasUnseen(this.context) ? " unseen" : ""}" title="What's new" aria-label="What's new">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3z"/></svg>
-    </button>
     <button id="historyBtn" class="ghost" title="Chat history" aria-label="Chat history">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>
     </button>
@@ -2506,7 +2577,11 @@ async function activate(context) {
         provider.post({
           type: "ready",
           models: { defaultModel: readyState.defaultModel, providers: PROVIDER_IDS.filter((id) => readyState.set[id]) },
-          voice: { modelDownloaded: voice.isModelDownloaded(), addonAvailable: voice.isAddonAvailable() },
+          voice: {
+            modelDownloaded: voice.isModelDownloaded(),
+            addonAvailable: voice.isAddonAvailable(),
+            pushToTalkKey: vscode.workspace.getConfiguration("lakshx").get("voice.pushToTalkKey", ""),
+          },
         });
       },
     }),

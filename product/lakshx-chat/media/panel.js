@@ -106,6 +106,30 @@ function addMsg(cls, text) {
   return el;
 }
 
+// ---------- error reporting ----------
+// Keyed by a locally-minted id (not DOM element identity) so a
+// "reportErrorDone" reply can find its button even if several reports are
+// somehow in flight at once — realistic usage is one at a time, but this
+// doesn't assume it.
+let reportSeq = 0;
+const pendingReportButtons = new Map();
+
+function addErrorMsg(text) {
+  const el = addMsg("system error", text);
+  const btn = document.createElement("button");
+  btn.className = "report-error-btn";
+  btn.textContent = "Report";
+  const reportId = ++reportSeq;
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    pendingReportButtons.set(reportId, btn);
+    vscode.postMessage({ type: "reportError", errorText: text, reportId });
+  });
+  el.appendChild(btn);
+  scrollBottom();
+}
+
 let renderTimer = null;
 function streamText(text) {
   clearEmpty();
@@ -1286,7 +1310,6 @@ function endVoiceTranscribing() {
 // getUserMedia — never record-then-tell-you-it-was-pointless afterwards.
 // See docs/research/14-voice-mode.md.
 const MIC_TITLES = {
-  idle: "Hold to dictate (push-to-talk)",
   recording: "Recording — release to transcribe",
   transcribing: "Transcribing…",
   "needs-setup": "Click to set up voice input (one-time ~142MB download)",
@@ -1296,13 +1319,56 @@ const MIC_TITLES = {
 let voiceStatus = "needs-setup"; // "needs-setup" | "unavailable" | "ready" — set for real by applyVoiceCapability()
 let settingUp = false;
 
+// ---------- push-to-talk hotkey (in-panel only — see setPushToTalkKey/
+// pushToTalkKeySaved in extension.js for the settings-persistence half) ----------
+// Descriptor format: modifiers (in Control/Alt/Meta order) + KeyboardEvent.code,
+// e.g. "Control+Space" or a bare "F13" — built from `.code` rather than `.key`
+// so the binding is stable across keyboard layouts.
+let pushToTalkKey = ""; // "" = unbound; kept in sync by applyVoiceCapability() and the "pushToTalkKeySaved" reply
+
+function describeKeyEvent(e) {
+  const mods = [];
+  if (e.ctrlKey) mods.push("Control");
+  if (e.altKey) mods.push("Alt");
+  if (e.metaKey) mods.push("Meta");
+  // Shift deliberately excluded as a standalone "safe" modifier — Shift+letter
+  // still produces a printable character (a capital letter), so it can't
+  // safely coexist with normal typing either.
+  return [...mods, e.code].join("+");
+}
+
+/** Mirrors extension.js's isSafePushToTalkKey — re-checked here too so the capture UI gives instant feedback instead of a round trip. */
+function isSafePushToTalkKey(descriptor) {
+  if (!descriptor) return true;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(descriptor)) return true;
+  const parts = descriptor.split("+");
+  return parts.length > 1 && parts.slice(0, -1).some((p) => p === "Control" || p === "Alt" || p === "Meta");
+}
+
+function formatKeyForDisplay(descriptor) {
+  if (!descriptor) return "";
+  const isMac = navigator.platform?.toLowerCase().includes("mac");
+  return descriptor
+    .replace(/Control/g, "Ctrl")
+    .replace(/Meta/g, isMac ? "Cmd" : "Win")
+    .replace(/Key([A-Z])/g, "$1")
+    .replace(/Digit([0-9])/g, "$1")
+    .replace(/\+/g, " + ");
+}
+
+function micIdleTitle() {
+  return pushToTalkKey
+    ? `Hold to dictate — or press ${formatKeyForDisplay(pushToTalkKey)} to toggle`
+    : "Hold to dictate (push-to-talk)";
+}
+
 function setMicState(state) {
   // state: "idle" | "recording" | "transcribing" | "needs-setup" | "setting-up" | "unavailable"
   if (!micBtn) return;
   micBtn.classList.remove("recording", "transcribing", "needs-setup", "setting-up", "unavailable");
   if (state !== "idle") micBtn.classList.add(state);
   micBtn.disabled = state === "transcribing" || state === "setting-up";
-  const title = MIC_TITLES[state] || MIC_TITLES.idle;
+  const title = state === "idle" ? micIdleTitle() : MIC_TITLES[state] || micIdleTitle();
   micBtn.title = title;
   micBtn.setAttribute("aria-label", title);
 }
@@ -1310,6 +1376,7 @@ function setMicState(state) {
 /** Applies the host's boot-time (or post-setup) capability check to the mic button's resting state. */
 function applyVoiceCapability(v) {
   if (!micBtn || !v) return;
+  pushToTalkKey = v.pushToTalkKey ?? "";
   voiceStatus = !v.addonAvailable ? "unavailable" : !v.modelDownloaded ? "needs-setup" : "ready";
   setMicState(voiceStatus === "ready" ? "idle" : voiceStatus);
 }
@@ -1319,6 +1386,37 @@ function startSetup() {
   settingUp = true;
   setMicState("setting-up");
   vscode.postMessage({ type: "setupVoice" });
+}
+
+/** Settings-panel "Set"/"Change" button: arms a one-shot capture listener for the next real key combo. */
+function startCapturingPushToTalkKey() {
+  const btn = document.getElementById("pttSetBtn");
+  const label = document.getElementById("pttKeyLabel");
+  if (!btn || !label) return;
+  const prevLabelText = label.textContent;
+  btn.disabled = true;
+  label.textContent = "Press a key…";
+
+  function cleanup() {
+    document.removeEventListener("keydown", onKeydown, true);
+    btn.disabled = false;
+  }
+  function onKeydown(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") { cleanup(); label.textContent = prevLabelText; return; }
+    if (["Control", "Alt", "Meta", "Shift"].includes(e.key)) return; // wait for a real combo, not just the modifier itself
+    const descriptor = describeKeyEvent(e);
+    cleanup();
+    if (!isSafePushToTalkKey(descriptor)) {
+      label.textContent = "Needs Ctrl/Alt/Cmd or a function key — try again";
+      return;
+    }
+    vscode.postMessage({ type: "setPushToTalkKey", key: descriptor });
+  }
+  // Capture phase so this always wins regardless of what else might handle
+  // keydown in the panel while we're actively listening for the new binding.
+  document.addEventListener("keydown", onKeydown, true);
 }
 
 if (micBtn) {
@@ -1409,6 +1507,20 @@ if (micBtn) {
   micBtn.addEventListener("touchend", stopRecording);
   micBtn.addEventListener("mouseleave", () => { if (recording) stopRecording(); });
   window.addEventListener("blur", () => { if (recording) stopRecording(); });
+
+  // Push-to-talk hotkey — TOGGLE, not hold: a keyboard "release" is far less
+  // reliable to catch than a mouseup (focus can shift, keyup can be eaten by
+  // an intervening command), so press-to-start/press-again-to-stop sidesteps
+  // that entirely. In-panel scope only — this listens on this webview's own
+  // document, so it fires only while the LakshX panel itself has focus, not
+  // from an editor tab or anywhere else in the window.
+  document.addEventListener("keydown", (e) => {
+    if (e.repeat || !pushToTalkKey) return; // e.repeat: ignore key-held auto-repeat, this is a toggle
+    if (describeKeyEvent(e) !== pushToTalkKey) return;
+    e.preventDefault();
+    if (recording) stopRecording();
+    else onMicPress();
+  });
 }
 
 // ---------- diagnostics (full session report -> clipboard) ----------
@@ -2067,43 +2179,6 @@ function showHistory(chats) {
   historyPanel.hidden = false;
 }
 
-// ---------- what's new ----------
-const whatsNewBtn = document.getElementById("whatsNewBtn");
-const whatsNewPanel = document.getElementById("whatsNewPanel");
-const whatsNewBody = document.getElementById("whatsNewBody");
-whatsNewBtn.addEventListener("click", () => {
-  vscode.postMessage({ type: "whatsNew" });
-});
-document.getElementById("whatsNewClose").addEventListener("click", () => (whatsNewPanel.hidden = true));
-
-function showWhatsNew(entries) {
-  // opening the panel means the extension has already recorded these as
-  // seen (extension.js's "whatsNew" handler) — clear the badge to match
-  whatsNewBtn.classList.remove("unseen");
-  whatsNewBody.innerHTML = entries.length ? "" : `<div class="hint">Nothing new yet.</div>`;
-  let lastDate = null;
-  for (const entry of entries) {
-    if (entry.date !== lastDate) {
-      const heading = document.createElement("div");
-      heading.className = "wn-date";
-      heading.textContent = new Date(`${entry.date}T00:00:00`).toLocaleDateString(undefined, {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      });
-      whatsNewBody.appendChild(heading);
-      lastDate = entry.date;
-    }
-    const item = document.createElement("div");
-    item.className = "wn-item";
-    item.innerHTML = `<div class="wn-title"></div><div class="wn-desc"></div>`;
-    item.querySelector(".wn-title").textContent = entry.title;
-    item.querySelector(".wn-desc").textContent = entry.description;
-    whatsNewBody.appendChild(item);
-  }
-  whatsNewPanel.hidden = false;
-}
-
 // ---------- replay (webview rebuilds when hidden) ----------
 function applyEvent(m, replaying) {
   switch (m.type) {
@@ -2120,7 +2195,7 @@ function applyEvent(m, replaying) {
       break;
     }
     case "toolImage": applyToolImage(m); break;
-    case "system": addMsg("system", m.text); break;
+    case "system": m.isError ? addErrorMsg(m.text) : addMsg("system", m.text); break;
     case "modeChanged":
       setModeUI(m.mode);
       if (m.auto) addMsg("system", `Plan complete — switched to ${m.mode} mode.`);
@@ -2228,12 +2303,31 @@ function renderSettings() {
         .join("")}</select>
       <div class="muted">Errors, plans, and diffs get explained in this code-mixed register — code, commands, and file paths always stay in English.</div>
     </div>
+    ${
+      micBtn
+        ? `<div class="field">
+      <label>Push-to-talk hotkey</label>
+      <div class="ptt-row">
+        <span id="pttKeyLabel" class="pill">${pushToTalkKey ? escapeHtml(formatKeyForDisplay(pushToTalkKey)) : "Not set"}</span>
+        <button type="button" id="pttSetBtn">${pushToTalkKey ? "Change" : "Set"}</button>
+        ${pushToTalkKey ? `<button type="button" id="pttClearBtn" class="ghost">Clear</button>` : ""}
+      </div>
+      <div class="muted">Toggles dictation on/off while this panel has focus — press once to start, again to stop. Only works while LakshX itself is focused, not from an editor tab.</div>
+    </div>`
+        : ""
+    }
   `;
   document.getElementById("providerSelect").addEventListener("change", renderSettings);
   document.getElementById("explainLanguageSelect").addEventListener("change", (e) => {
     settingsState.explainLanguage = e.target.value; // survives the next renderSettings() re-render (e.g. on provider change)
     vscode.postMessage({ type: "setExplainLanguage", value: e.target.value });
   });
+  if (micBtn) {
+    document.getElementById("pttSetBtn").addEventListener("click", startCapturingPushToTalkKey);
+    document.getElementById("pttClearBtn")?.addEventListener("click", () => {
+      vscode.postMessage({ type: "setPushToTalkKey", key: "" });
+    });
+  }
   if (p.managed) {
     document.getElementById("lakshxAuthBtn").addEventListener("click", () => {
       vscode.postMessage({ type: isSet ? "lakshxLogout" : "lakshxLogin" });
@@ -2443,10 +2537,27 @@ window.addEventListener("message", (e) => {
       el.textContent = `Used $${spent.toFixed(2)} of $${cap.toFixed(2)} this cycle`;
       break;
     }
+    case "reportErrorDone": {
+      const btn = pendingReportButtons.get(m.reportId);
+      if (!btn) break;
+      pendingReportButtons.delete(m.reportId);
+      if (m.ok) {
+        btn.textContent = "Reported ✓";
+      } else {
+        btn.textContent = m.reason ?? "Failed to send — retry?";
+        btn.disabled = false;
+      }
+      break;
+    }
+    case "pushToTalkKeySaved": {
+      pushToTalkKey = m.key;
+      setMicState(voiceStatus === "ready" ? "idle" : voiceStatus); // refresh the tooltip
+      if (!settingsPanel.hidden) renderSettings();
+      break;
+    }
     case "historyList": showHistory(m.chats); break;
-    case "whatsNewList": showWhatsNew(m.entries); break;
     case "planReady": showPlanBar(m.path); break;
-    case "system": addMsg("system", m.text); break;
+    case "system": m.isError ? addErrorMsg(m.text) : addMsg("system", m.text); break;
     case "addAttachment": addAttachment(m.attachment); break;
     // Voice mode (docs/research/14-voice-mode.md): insert-don't-send — text
     // lands at the caret for the user to review/edit, never auto-submitted.

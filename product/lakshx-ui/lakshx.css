@@ -131,9 +131,30 @@
 .monaco-editor .suggest-widget .monaco-list .monaco-list-row {
   border-radius: 4px;
 }
-.monaco-workbench .monaco-editor .find-widget {
-  transform: translateY(4px);
-}
+/* NOTE: do NOT add a static `transform` rule scoped to plain `.find-widget`
+   here (there used to be one — `transform: translateY(4px)` — removed as
+   the root-cause fix for "the find widget's close button doesn't work").
+   Upstream's own findWidget.css uses `transform` on this exact element to
+   drive open/close, toggled purely by adding/removing a `.visible` class:
+     - closed: `.monaco-editor .find-widget` → translateY(calc(-100% - 10px))
+       (2 classes, specificity (0,2,0)) — slides the widget up out of view.
+     - open:   `.monaco-editor .find-widget.visible` → translateY(0)
+       (3 classes, specificity (0,3,0)).
+   The removed rule, `.monaco-workbench .monaco-editor .find-widget`, is
+   ALSO 3 classes — (0,3,0) — so on CLOSE it beat the closed-state rule by
+   specificity alone (3 > 2), no cascade/source-order tie-break needed: the
+   pinned `translateY(4px)` simply outranks translateY(-110%). `_hide()`
+   still removes the `visible` class and flips `aria-hidden` on click, but
+   the widget's on-screen position never changed, so clicking Close looked
+   like it did nothing. (On OPEN, this rule tied the `.visible` rule on
+   specificity and won only via source order — cosmetic, a 4px vs 0px
+   offset nobody would notice; that part was never the bug.) The find
+   widget is created lazily on first invocation (see
+   FindController._createFindWidget in findController.ts), so this defect
+   was invisible until Cmd+F was pressed at least once, then reproduced on
+   every close after that. If a decorative offset is wanted again, animate
+   it via the `lakshx-fade-in` keyframes already applied to `.find-widget`
+   below (opacity only) instead of touching `transform` on this element. */
 
 /* ---------- notifications: floating cards ---------- */
 .monaco-workbench > .notifications-toasts .notification-toast {
