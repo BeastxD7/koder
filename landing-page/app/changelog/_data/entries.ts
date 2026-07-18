@@ -28,6 +28,15 @@ export interface ChangelogEntry {
  * for display, this array's own order doesn't matter).
  */
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+  { date: "2026-07-19", hash: "3184875", category: "Agent", text: "Automatic retry with backoff for transient provider errors (429/502/503/504) — a single Azure/Anthropic blip no longer fails the whole turn" },
+  { date: "2026-07-19", hash: "5b58fb1", category: "UI", text: "Configurable push-to-talk hotkey for voice dictation (toggle-based, set from the settings panel)" },
+  { date: "2026-07-19", hash: "5b58fb1", category: "UI", text: "Error messages now show a Report button that sends full diagnostics for support" },
+  { date: "2026-07-19", hash: "5b58fb1", category: "UI", text: "Fix: the editor's Cmd+F find widget's close button was visually stuck open (CSS specificity regression)" },
+  { date: "2026-07-19", hash: "5b58fb1", category: "UI", text: "Remove the in-IDE \"What's New\" panel — this page is now the one place for release notes" },
+  { date: "2026-07-19", hash: "2adbda2", category: "Security", text: "Fix a real cost-leak: usage went unrecorded if a request was interrupted mid-stream, even though Azure had already billed for it" },
+  { date: "2026-07-19", hash: "2adbda2", category: "Databases", text: "New admin-visible telemetry: audit events, budget-cap hits, login events, agent crash/timeout incidents, and user error reports" },
+  { date: "2026-07-19", hash: "2adbda2", category: "UI", text: "New admin detail pages: per-feedback, per-user, and error-report views" },
+  { date: "2026-07-19", hash: "2adbda2", category: "Security", text: "Fix Google sign-in leaving the browser tab stuck on a blank loading state after a successful login" },
   { date: "2026-07-14", hash: "9ccd209", category: "UI", text: "Initial commit: plan, research, thin-fork repo skeleton" },
   { date: "2026-07-14", hash: "aba55ed", category: "Build/Distribution", text: "Phase 0: build pipeline (fetch/prepare/dev), Koder+Open VSX overlay, ACP spike passing" },
   { date: "2026-07-14", hash: "87f3b47", category: "UI", text: "Add perf budgets + Typometer baseline protocol" },
@@ -249,4 +258,6 @@ export const DATE_BLURBS: Record<string, string> = {
     "This cycle's feature sprint — multi-engine database tools, the interactive browser tool, native distribution builds.",
   "2026-07-17":
     "The biggest single day yet: background subagents and the full Royal Mode 2.0 phase machine, a round of real security work (secret scanning, SAST-lite, escaping fixes, dependency-vuln hints), the first ten items of the IDE feature roadmap (tab prediction, testing gutter, command bar, terminal blocks, structural search, semantic search, crash explanation, merge-conflict resolution, curated extensions, guided tour), voice mode, Hinglish explain, a PR walkthrough generator, this changelog itself, and the cloud/SaaS pivot research — followed by a real hardening pass once the app was actually rebuilt and used: a webview-wide CSP regression, the Data tab's MongoDB browsing being completely broken, the grep tool's bundled ripgrep silently failing on every call, Windows-only dropdown theming, and a first cross-machine Windows build getting fixed end to end — and closing with a refreshed download link for both platforms, verified against the exact bytes just built.",
+  "2026-07-19":
+    "Reliability and trust: automatic retry for transient provider errors, a real fix for a usage-tracking cost-leak on interrupted requests, and admin-visible telemetry for audit events, crash/timeout incidents, and user-submitted error reports with full diagnostics. Plus a configurable push-to-talk hotkey, a fixed find-widget close button, and the in-IDE What's New panel retired in favor of this page.",
 };
