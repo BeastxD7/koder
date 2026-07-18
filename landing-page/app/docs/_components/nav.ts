@@ -26,13 +26,14 @@ export const DOCS_NAV: DocGroup[] = [
     pages: [
       { title: "Overview", href: "/docs", blurb: "What LakshX is and how the docs are organized." },
       { title: "Installation", href: "/docs/installation", blurb: "Download and run LakshX on macOS, Windows, or Linux." },
+      { title: "Sign In & Models", href: "/docs/sign-in", blurb: "The free hosted model, or bring your own provider key." },
     ],
   },
   {
     label: "Chat & Agent",
     pages: [
       { title: "The Chat Panel", href: "/docs/chat", blurb: "Talk to the agent, attach files, @-mention, and steer a run." },
-      { title: "Feedback & What's New", href: "/docs/feedback", blurb: "Thumbs, retry, the diagnostic report, and the changelog panel." },
+      { title: "Feedback & Diagnostics", href: "/docs/feedback", blurb: "Thumbs, retry, the error Report button, and the diagnostic report." },
     ],
   },
   {
@@ -81,6 +82,12 @@ export const DOCS_NAV: DocGroup[] = [
     ],
   },
   {
+    label: "Voice",
+    pages: [
+      { title: "Voice Mode", href: "/docs/voice", blurb: "Offline push-to-talk dictation straight into the composer." },
+    ],
+  },
+  {
     label: "Remote Access",
     pages: [
       { title: "Remote Access", href: "/docs/remote-access", blurb: "Pair your phone by QR and drive the agent from anywhere." },
@@ -90,12 +97,6 @@ export const DOCS_NAV: DocGroup[] = [
     label: "Building from Source",
     pages: [
       { title: "Building from Source", href: "/docs/building", blurb: "Produce native installers with the OS-Build scripts." },
-    ],
-  },
-  {
-    label: "Coming Soon",
-    pages: [
-      { title: "Voice Mode", href: "/docs/voice", blurb: "Offline push-to-talk dictation.", badge: "Design locked" },
     ],
   },
 ];

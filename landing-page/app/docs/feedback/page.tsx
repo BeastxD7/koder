@@ -6,23 +6,23 @@ import Callout from "../_components/Callout";
 import CodeBlock from "../_components/CodeBlock";
 
 export const metadata: Metadata = {
-  title: "Feedback & What's New",
-  description: "Thumbs, retry, the diagnostic report, and the changelog panel in the LakshX chat.",
+  title: "Feedback & Diagnostics",
+  description: "Thumbs, retry, the error Report button, and the full diagnostic report in the LakshX chat.",
 };
 
 export default function FeedbackPage() {
   return (
     <DocArticle>
-      <DocHeader eyebrow="Chat & Agent" title="Feedback & What's New">
+      <DocHeader eyebrow="Chat & Agent" title="Feedback & Diagnostics">
         A handful of small tools in the chat make each answer better and help you report problems: rate a
-        response, retry it, copy a full diagnostic report, and see what changed in the latest build.
+        response, retry it, report an error, or copy a full diagnostic report.
       </DocHeader>
 
       <AccessRow
         items={[
           { label: "Per answer", value: "thumbs · retry" },
-          { label: "Diagnostics", value: "/report" },
-          { label: "Changelog", value: "What's new (★)" },
+          { label: "Per error", value: "Report button" },
+          { label: "Full session", value: "/report" },
         ]}
       />
 
@@ -35,22 +35,29 @@ export default function FeedbackPage() {
       </ul>
       <p>Your feedback log is reachable via <strong>LakshX: Open Feedback Log</strong>.</p>
 
+      <h2>Report a specific error</h2>
+      <p>
+        When something goes wrong mid-run, the error message that appears in the chat carries its own{" "}
+        <strong>Report</strong> button. Click it and LakshX sends that error plus a full diagnostic report
+        straight to the project — no copy-paste required.
+      </p>
+      <Callout variant="note" title="Only for the free hosted model, signed in">
+        Sending a report needs you to be <Link href="/docs/sign-in">signed in</Link> and on the free{" "}
+        <strong>LakshX</strong> model. If either isn&rsquo;t true, clicking Report tells you so instead of
+        sending anything — a BYOK error is between you and your own provider, and a signed-out error has
+        nowhere safe to go.
+      </Callout>
+
       <h2>Diagnostic session report</h2>
       <p>
-        Hit a bug worth reporting? Click the diagnostics icon in the chat topbar — &ldquo;Copy full
-        diagnostic session report to clipboard&rdquo; — or run the slash command:
+        Want to hand over a whole session, not just one error? Click the diagnostics icon in the chat topbar
+        — &ldquo;Copy full diagnostic session report to clipboard&rdquo; — or run the slash command:
       </p>
       <CodeBlock lang="bash" title="composer">{`/report`}</CodeBlock>
       <p>
         LakshX assembles the whole session transcript and copies it to your clipboard, ready to paste into a
-        bug report. It shows the character count on success so you know it worked.
-      </p>
-
-      <h2>What&rsquo;s New</h2>
-      <p>
-        The star button in the chat topbar opens the <strong>What&rsquo;s New</strong>{" "}
-        panel — a curated changelog drawn from the project&rsquo;s own history. It shows an indicator when there are updates
-        you haven&rsquo;t seen yet, so you can catch up on new features after an update.
+        bug report. It shows the character count on success so you know it worked. Unlike the Report button,
+        this one works for anyone, on any model — it just leaves the sending to you.
       </p>
 
       <Callout variant="tip" title="Reporting a problem?">

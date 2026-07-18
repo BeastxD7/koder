@@ -25,16 +25,18 @@ export default function DocsIndexPage() {
 
       <h2>Start here</h2>
       <p>
-        New to LakshX? <Link href="/docs/installation">Install it</Link> for your platform, then open the{" "}
+        New to LakshX? <Link href="/docs/installation">Install it</Link> for your platform, then{" "}
+        <Link href="/docs/sign-in">sign in or add a model</Link> and open the{" "}
         <Link href="/docs/chat">chat panel</Link>{" "}
         and say what you want built. Before you let the agent
         loose, it&rsquo;s worth understanding the <Link href="/docs/modes">safety modes</Link> — they decide
         how much the agent can do without asking.
       </p>
 
-      <Callout variant="note" title="Bring your own model">
-        LakshX runs on your machine and talks to the model provider you configure. Nothing about your code
-        leaves your machine except what you explicitly send to your chosen model.
+      <Callout variant="note" title="Free hosted model, or bring your own">
+        LakshX runs on your machine. Sign in with Google for the free hosted model — no key needed — or{" "}
+        <Link href="/docs/sign-in">configure your own provider key</Link>. Either way, nothing about your
+        code leaves your machine except what you explicitly send to the model you&rsquo;ve chosen.
       </Callout>
 
       <h2>Explore the features</h2>

@@ -59,6 +59,7 @@ export default function InstallationPage() {
 
       <h2>Next steps</h2>
       <ul>
+        <li><Link href="/docs/sign-in">Sign in for the free model</Link>, or add your own provider key.</li>
         <li>Open the <Link href="/docs/chat">chat panel</Link> and describe what you want.</li>
         <li>Learn the <Link href="/docs/modes">safety modes</Link> before granting autonomy.</li>
         <li>Try <Link href="/docs/slash-commands">slash commands</Link> to steer the agent quickly.</li>

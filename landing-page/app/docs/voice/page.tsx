@@ -5,45 +5,68 @@ import Callout from "../_components/Callout";
 
 export const metadata: Metadata = {
   title: "Voice Mode",
-  description: "Offline push-to-talk dictation into the composer — designed, not yet shipped.",
+  description: "Offline push-to-talk dictation into the composer, with a configurable toggle hotkey.",
 };
 
 export default function VoicePage() {
   return (
     <DocArticle>
-      <DocHeader eyebrow="Coming Soon" title="Voice Mode">
-        Push-to-talk dictation straight into the composer, offline and free. The design is locked; this page
-        describes what it will do. It is <strong>not shipped yet</strong>.
+      <DocHeader eyebrow="Voice" title="Voice Mode">
+        Dictate straight into the composer instead of typing. Hold the mic button to talk, or bind a toggle
+        hotkey and use it hands-free — transcription runs entirely on your machine.
       </DocHeader>
 
-      <AccessRow items={[{ label: "Status", value: "design locked" }, { label: "Shipped?", value: "not yet" }]} />
+      <AccessRow
+        items={[
+          { label: "Where", value: "mic icon in the composer" },
+          { label: "Hold", value: "press and hold" },
+          { label: "Or", value: "toggle hotkey (set in Settings)" },
+        ]}
+      />
 
-      <Callout variant="warning" title="Not available in the current build">
-        Voice mode is a designed feature that hasn&rsquo;t been built into a shipping release. It&rsquo;s
-        documented here for transparency about the roadmap — you won&rsquo;t find a mic button in the app
-        today.
-      </Callout>
-
-      <h2>The plan</h2>
-      <ul>
-        <li><strong>Hold to talk</strong> — press and hold a mic button next to Send; release to transcribe. Your words are inserted at the caret for you to review, never auto-sent.</li>
-        <li><strong>Fully offline</strong> — transcription runs locally via a Whisper model, downloaded on first use and cached under <code>.lakshx/</code>. Audio never leaves your machine.</li>
-        <li><strong>Free, no signup</strong> — no cloud STT, no API key, no per-use cost.</li>
-        <li><strong>Tuned for code</strong> — recognition is biased toward code and technical terms, so identifiers and library names come through cleanly.</li>
-        <li><strong>One stack on every OS</strong> — the same engine on macOS, Windows, and Linux, rather than three inconsistent native ones (Linux has no built-in STT at all).</li>
-      </ul>
-
-      <h2>Why it&rsquo;s gated</h2>
+      <h2>Hold to talk</h2>
       <p>
-        Microphone capture is blocked in stock editor webviews. Because LakshX is a fork it <em>can</em>{" "}
-        unblock it, but that requires patching and rebuilding the underlying Electron shell and verifying
-        the permission actually propagates. Rather than ship something unverified, voice is held behind that
-        spike — hence &ldquo;design locked&rdquo; rather than &ldquo;available.&rdquo;
+        Press and hold the mic button next to <strong>Send</strong>, speak, then release. LakshX transcribes
+        what you said and inserts it at the caret in the composer — it never sends automatically, so
+        you always get to review or edit the text first.
       </p>
 
-      <Callout variant="note" title="Privacy is the headline">
-        When it lands, the selling point is that dictation is entirely local: the audio is transcribed on
-        your machine and thrown away — nothing is uploaded.
+      <h2>Push-to-talk hotkey</h2>
+      <p>
+        Prefer not to hold your mouse down? Open the AI Providers panel and set a{" "}
+        <strong>Push-to-talk hotkey</strong> under the voice section. Unlike the mic button, the hotkey is a{" "}
+        <strong>toggle</strong>: press it once to start recording, press it again to stop — a bare
+        key-release is too unreliable to catch consistently, so a toggle sidesteps that. It only fires while
+        the LakshX panel itself has focus, not from an editor tab.
+      </p>
+      <ul>
+        <li>Any function key (<code>F1</code>–<code>F24</code>) works on its own.</li>
+        <li>
+          Anything else needs a modifier — <code>Ctrl</code>, <code>Alt</code>, or <code>Cmd</code>/
+          <code>Win</code> — so the binding can never collide with normal typing.
+        </li>
+      </ul>
+
+      <h2>Fully local, first-use download</h2>
+      <p>
+        Transcription runs on your machine via a bundled Whisper model (<code>base.en</code>) — no
+        cloud speech API, no account, no per-use cost. The first time you use it, LakshX downloads the model
+        (about 142MB) into <code>~/.lakshx/models</code> and caches it there; every recording after that is
+        transcribed offline. Recognition is seeded with a prompt biased toward code and developer vocabulary,
+        so identifiers, library names, and commands come through more cleanly than a general-purpose
+        dictation engine.
+      </p>
+
+      <Callout variant="note" title="If the mic button says it can&rsquo;t get access">
+        Microphone capture needs the underlying Electron shell patched to allow it — LakshX ships that
+        patch, but on a build where it hasn&rsquo;t taken (or where your OS denies mic permission), the mic
+        button fails gracefully with a clear message instead of silently doing nothing. Check your OS privacy
+        settings first; if it&rsquo;s still blocked after that, it&rsquo;s the former.
+      </Callout>
+
+      <Callout variant="tip" title="Voice can be turned off">
+        The mic button is on by default. If you&rsquo;d rather not see it, set{" "}
+        <code>lakshx.voice.enabled</code> to <code>false</code> in your VS Code settings.
       </Callout>
     </DocArticle>
   );
