@@ -73,19 +73,26 @@ function renderRich(raw) {
   return s;
 }
 
-function showEmpty() {
+function showEmpty(noProviders) {
+  const cta = noProviders
+    ? `<button id="ctaLogin" class="cta">Sign in (free, no API key)</button>
+       <button id="ctaProviders" class="cta-secondary">Add your own key</button>`
+    : `<button id="ctaProviders" class="cta">Config Model</button>`;
   messagesEl.innerHTML = `<div class="empty">
     <svg class="mark" width="34" height="34" viewBox="0 0 24 24"><path d="M12 2 L13.8 8.6 L20 5.5 L15.4 10.8 L22 12 L15.4 13.2 L20 18.5 L13.8 15.4 L12 22 L10.2 15.4 L4 18.5 L8.6 13.2 L2 12 L8.6 10.8 L4 5.5 L10.2 8.6 Z" fill="currentColor"/></svg>
     <div class="title">LakshX Agent</div>
     <div class="hint">Review plans first. Approve executes with your OK. Auto runs free.</div>
-    <button id="ctaProviders" class="cta">Config Model</button>
+    ${cta}
     <div class="hint"><kbd>Enter</kbd> send &middot; <kbd>Shift+Enter</kbd> newline</div>
   </div>`;
+  document.getElementById("ctaLogin")?.addEventListener("click", () =>
+    vscode.postMessage({ type: "lakshxLogin" }),
+  );
   document.getElementById("ctaProviders")?.addEventListener("click", () =>
     vscode.postMessage({ type: "openSettings" }),
   );
 }
-showEmpty();
+showEmpty(false);
 const clearEmpty = () => messagesEl.querySelector(".empty")?.remove();
 const scrollBottom = () => { messagesEl.scrollTop = messagesEl.scrollHeight; };
 
@@ -2159,7 +2166,10 @@ const settingsBody = document.getElementById("settingsBody");
 const PROVIDERS = {
   lakshx: { label: "LakshX (free, no key needed)", managed: true, models: ["gpt-5-mini"] },
   anthropic: { label: "Anthropic (Claude)", keyUrl: "console.anthropic.com", models: ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5", "claude-fable-5"] },
-  openrouter: { label: "OpenRouter", keyUrl: "openrouter.ai/keys", models: ["anthropic/claude-sonnet-5", "openai/gpt-5.5", "google/gemini-3-pro", "deepseek/deepseek-chat", "qwen/qwen3-coder"] },
+  // OpenRouter routes to hundreds of models across every provider — no
+  // `models` list here at all (the model field below is always a plain
+  // text input with autocomplete suggestions from whichever list exists).
+  openrouter: { label: "OpenRouter", keyUrl: "openrouter.ai/keys" },
   gemini: { label: "Google Gemini", keyUrl: "aistudio.google.com/apikey", models: ["gemini-3-pro", "gemini-3-flash", "gemini-3.1-flash-lite"] },
   openai: { label: "OpenAI", keyUrl: "platform.openai.com/api-keys", models: ["gpt-5.5", "gpt-5.6"] },
   deepseek: { label: "DeepSeek", keyUrl: "platform.deepseek.com", models: ["deepseek-chat", "deepseek-reasoner"] },
@@ -2190,6 +2200,7 @@ function renderSettings() {
         ? `<div class="field">
       <label>Account ${isSet ? '<span class="pill">signed in</span>' : '<span class="muted">sign in to use the free model</span>'}</label>
       <button type="button" id="lakshxAuthBtn">${isSet ? "Sign Out" : "Sign In"}</button>
+      ${isSet ? `<div id="lakshxUsage" class="muted">Loading usage&hellip;</div>` : ""}
     </div>`
         : `<div class="field">
       <label>API key ${isSet ? '<span class="pill">saved</span>' : `<span class="muted">get one at ${p.keyUrl}</span>`}</label>
@@ -2198,11 +2209,15 @@ function renderSettings() {
     }
     <div class="field">
       <label>Model ${liveModels[providerId] ? `<span class="pill">${liveModels[providerId].length} live</span>` : ""}</label>
-      <select id="modelSelect" class="big">
-        ${(liveModels[providerId] ?? p.models).map((m) => `<option value="${escapeHtml(m)}" ${`${providerId}/${m}` === currentDefault ? "selected" : ""}>${escapeHtml(m)}</option>`).join("")}
-        <option value="__custom__">custom&hellip;</option>
-      </select>
-      <input id="customModel" placeholder="model id" hidden>
+      <input
+        id="modelSelect"
+        list="modelSuggestions"
+        placeholder="model id${(liveModels[providerId] ?? p.models ?? [])[0] ? `, e.g. ${(liveModels[providerId] ?? p.models ?? [])[0]}` : ""}"
+        value="${escapeHtml(currentDefault.startsWith(`${providerId}/`) ? currentDefault.slice(providerId.length + 1) : "")}"
+      >
+      <datalist id="modelSuggestions">
+        ${(liveModels[providerId] ?? p.models ?? []).map((m) => `<option value="${escapeHtml(m)}">`).join("")}
+      </datalist>
     </div>
     <label class="check"><input type="checkbox" id="makeDefault" checked> Use as default model</label>
     <div id="provStatus" class="muted"></div>
@@ -2215,9 +2230,6 @@ function renderSettings() {
     </div>
   `;
   document.getElementById("providerSelect").addEventListener("change", renderSettings);
-  document.getElementById("modelSelect").addEventListener("change", (e) => {
-    document.getElementById("customModel").hidden = e.target.value !== "__custom__";
-  });
   document.getElementById("explainLanguageSelect").addEventListener("change", (e) => {
     settingsState.explainLanguage = e.target.value; // survives the next renderSettings() re-render (e.g. on provider change)
     vscode.postMessage({ type: "setExplainLanguage", value: e.target.value });
@@ -2226,6 +2238,7 @@ function renderSettings() {
     document.getElementById("lakshxAuthBtn").addEventListener("click", () => {
       vscode.postMessage({ type: isSet ? "lakshxLogout" : "lakshxLogin" });
     });
+    if (isSet) vscode.postMessage({ type: "getLakshxUsage" });
   }
   // "lakshx/validate" probes a live GET /models endpoint the managed proxy
   // doesn't implement (it only speaks POST chat/completions) — not
@@ -2248,8 +2261,7 @@ document.getElementById("settingsSave").addEventListener("click", () => {
   // no keyInput field for the managed "lakshx" provider — its "key" is the
   // login session, set via the Sign In button instead.
   const key = document.getElementById("keyInput")?.value?.trim() ?? "";
-  const modelSel = document.getElementById("modelSelect").value;
-  const model = modelSel === "__custom__" ? document.getElementById("customModel").value.trim() : modelSel;
+  const model = document.getElementById("modelSelect").value.trim();
   const keys = {};
   if (key) keys[providerId] = key;
   const defaultModel = document.getElementById("makeDefault").checked && model ? `${providerId}/${model}` : "";
@@ -2284,8 +2296,8 @@ window.addEventListener("message", (e) => {
         if (o === selected) opt.selected = true;
         modelEl.appendChild(opt);
       }
-      if (m.models.providers.length === 0) {
-        addMsg("system", "No API keys yet — use the composer menu to add one.");
+      if (m.models.providers.length === 0 && messagesEl.querySelector(".empty")) {
+        showEmpty(true);
       }
       break;
     }
@@ -2417,6 +2429,18 @@ window.addEventListener("message", (e) => {
       }
       const el = document.getElementById("provStatus");
       if (el) el.textContent = m.ok ? `Key valid — ${m.models?.length ?? 0} models` : `Invalid: ${m.error}`;
+      break;
+    }
+    case "lakshxUsageResult": {
+      const el = document.getElementById("lakshxUsage");
+      if (!el) break; // settings panel may have been closed/switched before this arrived
+      if (!m.usage) {
+        el.textContent = "";
+        break;
+      }
+      const spent = Number(m.usage.spent_usd ?? 0);
+      const cap = Number(m.usage.credit_limit_usd ?? 0);
+      el.textContent = `Used $${spent.toFixed(2)} of $${cap.toFixed(2)} this cycle`;
       break;
     }
     case "historyList": showHistory(m.chats); break;

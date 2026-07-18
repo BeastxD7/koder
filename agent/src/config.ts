@@ -10,8 +10,25 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export interface ProviderConfig {
-  /** "azure" = Azure OpenAI/AI Foundry's v1 API surface: same chat/completions wire shape as "openai", but `api-key` auth instead of `Authorization: Bearer`, and `model` must be the Foundry deployment name, not the base model name. */
-  kind: "anthropic" | "openai" | "azure";
+  /**
+   * "azure" = Azure OpenAI/AI Foundry's v1 API surface: same chat/completions
+   * wire shape as "openai", but `api-key` auth instead of `Authorization:
+   * Bearer`, and `model` must be the Foundry deployment name, not the base
+   * model name.
+   *
+   * "azure-responses" = Azure's newer Responses API (`POST {baseUrl}/responses`)
+   * — a completely different wire shape (input items, flat tool defs,
+   * function_call/function_call_output items instead of tool_calls/role:"tool"
+   * messages), routed to providers/azure-responses.ts's `AzureResponsesAdapter`.
+   * Used ONLY by the hosted `lakshx` preset below, talking to
+   * product/lakshx-chat's own proxy (not a real Azure key — see `PRESETS.lakshx`'s
+   * doc comment) via `Authorization: Bearer`. The BYOK "azure" kind above stays
+   * on Chat Completions — two Azure code paths is an intentional tradeoff,
+   * not a bug: Chat Completions structurally hides gpt-5-mini's reasoning
+   * tokens from the response, which is exactly what this kind exists to fix
+   * for the one path (lakshx) that needs it.
+   */
+  kind: "anthropic" | "openai" | "azure" | "azure-responses";
   baseUrl: string;
   apiKey?: string;
   /** extra headers, e.g. OpenRouter attribution */
@@ -33,7 +50,7 @@ export interface LakshXConfig {
 }
 
 /** Built-in presets: id → wire kind, base URL, API-key env var. */
-export const PRESETS: Record<string, { kind: "anthropic" | "openai" | "azure"; baseUrl: string; envKey: string }> = {
+export const PRESETS: Record<string, { kind: "anthropic" | "openai" | "azure" | "azure-responses"; baseUrl: string; envKey: string }> = {
   anthropic:  { kind: "anthropic", baseUrl: "https://api.anthropic.com", envKey: "ANTHROPIC_API_KEY" },
   openai:     { kind: "openai", baseUrl: "https://api.openai.com/v1", envKey: "OPENAI_API_KEY" },
   openrouter: { kind: "openai", baseUrl: "https://openrouter.ai/api/v1", envKey: "OPENROUTER_API_KEY" },
@@ -49,13 +66,14 @@ export const PRESETS: Record<string, { kind: "anthropic" | "openai" | "azure"; b
   // ~/.lakshx/providers.json for a different resource). `model` must be set
   // to the Foundry *deployment name*, e.g. "azure/gpt-4o-mini-deploy".
   azure:      { kind: "azure", baseUrl: "https://lakshx-ide-global-resource.openai.azure.com/openai/v1", envKey: "AZURE_OPENAI_API_KEY" },
-  // Free hosted model, no BYOK key — plain "openai" kind (the proxy speaks
-  // the same chat/completions wire shape as everything else on this
-  // adapter). "apiKey" here is a Supabase session token managed by
-  // product/lakshx-chat's login flow (extension.js's saveLakshxToken/
-  // scheduleLakshxRefresh), not a real API key — envKey is a fallback for
-  // advanced/headless use only.
-  lakshx:     { kind: "openai", baseUrl: "https://lakshx.in/api/lakshx-model", envKey: "LAKSHX_ACCESS_TOKEN" },
+  // Free hosted model, no BYOK key — "azure-responses" kind (the proxy
+  // speaks Azure's Responses API wire shape — providers/azure-responses.ts —
+  // so gpt-5-mini's reasoning-summary stream reaches the IDE; Chat
+  // Completions structurally hides it). "apiKey" here is a Supabase session
+  // token managed by product/lakshx-chat's login flow (extension.js's
+  // saveLakshxToken/scheduleLakshxRefresh), not a real API key — envKey is a
+  // fallback for advanced/headless use only.
+  lakshx:     { kind: "azure-responses", baseUrl: "https://lakshx.in/api/lakshx-model", envKey: "LAKSHX_ACCESS_TOKEN" },
 };
 
 export function loadConfig(): LakshXConfig {

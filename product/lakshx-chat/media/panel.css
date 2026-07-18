@@ -104,7 +104,7 @@ html, body {
    (that's composited against the sidebar behind it; the open option list
    renders on its own opaque OS-level surface, so a translucent color has
    nothing meaningful to blend with). */
-#modeSelect option, #model option {
+#modeSelect option, #model option, .field select.big option {
   background: var(--bg);
   color: var(--fg);
 }
@@ -1255,6 +1255,15 @@ label.check input { accent-color: var(--accent); }
   color: #fff;
 }
 .empty .cta:hover { background: #8f73ff; }
+.empty .cta-secondary {
+  background: none;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin-top: -6px;
+}
+.empty .cta-secondary:hover { color: var(--fg); }
 .empty kbd {
   background: rgba(255, 255, 255, 0.08);
   border-radius: 4px;

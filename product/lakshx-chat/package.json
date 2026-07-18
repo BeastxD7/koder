@@ -129,6 +129,36 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "lakshxGettingStarted",
+        "title": "Get Started with LakshX",
+        "description": "Set up your AI provider and open the agent for the first time.",
+        "steps": [
+          {
+            "id": "signIn",
+            "title": "Sign in for the free model",
+            "description": "Sign in to unlock LakshX's free built-in model — no API key needed.\n[Sign In](command:lakshx.login)",
+            "media": { "markdown": "walkthrough/sign-in.md" },
+            "completionEvents": ["onCommand:lakshx.login"]
+          },
+          {
+            "id": "openAgent",
+            "title": "Open the agent",
+            "description": "Open the agent panel and ask it anything about your code.\n[Open Agent](command:lakshx.openAgent)",
+            "media": { "markdown": "walkthrough/open-agent.md" },
+            "completionEvents": ["onCommand:lakshx.openAgent"]
+          },
+          {
+            "id": "byok",
+            "title": "Or bring your own key",
+            "description": "Prefer your own Anthropic, OpenAI, Azure, or OpenRouter key? Configure it any time.\n[Configure Providers](command:lakshx.configureProviders)",
+            "media": { "markdown": "walkthrough/byok.md" },
+            "completionEvents": ["onCommand:lakshx.configureProviders"]
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "LakshX Agent",
       "properties": {

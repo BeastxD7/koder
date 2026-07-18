@@ -34,9 +34,17 @@ function formatUsd(n: number | null | undefined) {
 
 function EditCapDialog({ row }: { row: AdminUserRow }) {
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setError(null); // clear any stale error from a prior attempt when reopening
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" className="size-7">
           <Pencil className="size-3.5" />
@@ -49,8 +57,16 @@ function EditCapDialog({ row }: { row: AdminUserRow }) {
         </DialogHeader>
         <form
           action={async (formData) => {
-            await updateUserCredit(formData);
-            setOpen(false);
+            setSaving(true);
+            setError(null);
+            try {
+              await updateUserCredit(formData);
+              setOpen(false);
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "failed to save — try again");
+            } finally {
+              setSaving(false);
+            }
           }}
           className="flex flex-col gap-4"
         >
@@ -59,8 +75,11 @@ function EditCapDialog({ row }: { row: AdminUserRow }) {
             <label className="text-sm text-muted-foreground">Cap ($)</label>
             <Input type="number" step="0.01" min="0" name="creditLimit" defaultValue={row.credit_limit_usd ?? 20} autoFocus />
           </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
-            <Button type="submit">Save</Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

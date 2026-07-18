@@ -27,8 +27,11 @@ export default async function AdminOverviewPage() {
   ]);
 
   const pctUsed = budget ? Math.min(100, (Number(budget.spent_usd) / Number(budget.ceiling_usd)) * 100) : 0;
-  const totalRequests = (users ?? []).reduce((sum, u) => sum + (u.total_tokens_in > 0 || u.total_tokens_out > 0 ? 1 : 0), 0);
-  const activeUsers = (users ?? []).filter((u) => Number(u.total_cost_usd) > 0).length;
+  // Two distinct, non-interchangeable metrics — named for exactly what they
+  // count (a prior version named these "totalRequests"/"activeUsers", which
+  // didn't match either what they measured or which card displayed them):
+  const usersWithTokenActivity = (users ?? []).reduce((sum, u) => sum + (u.total_tokens_in > 0 || u.total_tokens_out > 0 ? 1 : 0), 0);
+  const usersWithBilledCost = (users ?? []).filter((u) => Number(u.total_cost_usd) > 0).length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -70,7 +73,7 @@ export default async function AdminOverviewPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-foreground">{users?.length ?? 0}</div>
-            <p className="text-xs text-muted-foreground">{activeUsers} with usage</p>
+            <p className="text-xs text-muted-foreground">{usersWithBilledCost} with usage</p>
           </CardContent>
         </Card>
         <Card className="bg-card">
@@ -79,7 +82,7 @@ export default async function AdminOverviewPage() {
             <Activity className="size-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{totalRequests}</div>
+            <div className="text-2xl font-bold text-foreground">{usersWithTokenActivity}</div>
             <p className="text-xs text-muted-foreground">have sent at least one request</p>
           </CardContent>
         </Card>

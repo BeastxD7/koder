@@ -5,7 +5,7 @@
  * and system prompt are 100% ours.
  */
 import { randomUUID } from "node:crypto";
-import { logRoyalAudit, summarizeInput, summarizeText } from "./audit.js";
+import { logRoyalAudit, postAuditMetadata, summarizeInput, summarizeText } from "./audit.js";
 import { checkpointBaseline, checkpointBeforeMutation, commitAfterTool, filesChangedSinceCommit, undoPaths } from "./checkpoint.js";
 import { envBlock, loadRules, scrubSecrets } from "./context.js";
 import { loadConfig, resolveModel } from "./config.js";
@@ -35,6 +35,7 @@ import {
   type PhaseVerificationResult,
 } from "./phases.js";
 import { AnthropicAdapter } from "./providers/anthropic.js";
+import { AzureResponsesAdapter } from "./providers/azure-responses.js";
 import { OpenAICompatAdapter } from "./providers/openai-compat.js";
 import type { ChatAdapter, ChatMessage, ContentBlock, ToolResultPart } from "./providers/types.js";
 import { capToolImageBase64 } from "./tool-image-cap.js";
@@ -399,8 +400,10 @@ export function systemPrompt(cwd: string, mode: AgentMode, explainLanguage: Expl
   return [stable, rules, env].filter(Boolean).join("\n\n");
 }
 
-function makeAdapter(providerKind: "anthropic" | "openai" | "azure", providerCfg: any): ChatAdapter {
-  return providerKind === "anthropic" ? new AnthropicAdapter(providerCfg) : new OpenAICompatAdapter(providerCfg);
+function makeAdapter(providerKind: "anthropic" | "openai" | "azure" | "azure-responses", providerCfg: any): ChatAdapter {
+  if (providerKind === "anthropic") return new AnthropicAdapter(providerCfg);
+  if (providerKind === "azure-responses") return new AzureResponsesAdapter(providerCfg);
+  return new OpenAICompatAdapter(providerCfg);
 }
 
 export function toolTitle(name: string, input: any): string {
@@ -1126,6 +1129,8 @@ async function runRoyalPhaseTurn(
   signal: AbortSignal | undefined,
   depth: number,
   acpSessionId: string | undefined,
+  /** See `runPrompt`'s doc comment above — threaded through to every `runPromptLoop` call below so the audit-metadata POST reaches the actual `logRoyalAudit()` call sites. */
+  hostedAudit?: { token: string; baseUrl: string },
 ): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   session.phase = initialPhaseState();
   cb.onPhaseState?.(snapshotPhaseState(session.phase));
@@ -1168,6 +1173,7 @@ async function runRoyalPhaseTurn(
       signal,
       depth,
       acpSessionId,
+      hostedAudit,
     );
   };
 
@@ -1198,6 +1204,7 @@ async function runRoyalPhaseTurn(
     signal,
     depth,
     acpSessionId,
+    hostedAudit,
   );
   if (stop !== "end_turn") return stop;
 
@@ -1259,6 +1266,7 @@ async function runRoyalPhaseTurn(
         signal,
         depth,
         acpSessionId,
+        hostedAudit,
       );
       if (stop !== "end_turn") return stop;
       if (task.status === "in_progress") {
@@ -1298,6 +1306,7 @@ async function runRoyalPhaseTurn(
         signal,
         depth,
         acpSessionId,
+        hostedAudit,
       );
       if (stop !== "end_turn") return stop;
       verification = await runVerify();
@@ -1398,6 +1407,15 @@ export async function runPrompt(
   const { provider, model } = resolveModel(cfg, session.model);
   const adapter = makeAdapter(provider.kind, provider);
 
+  // Metadata-only cloud audit mirror (see audit.ts's postAuditMetadata) —
+  // gated on the ACTIVE PROVIDER'S IDENTITY (kind === "azure-responses", the
+  // hosted `lakshx` preset), never merely "has an apiKey": every provider has
+  // one, and for a BYOK provider (anthropic/openai/azure/...) `apiKey` is
+  // that provider's real secret key, which must never be sent anywhere but
+  // that provider's own API. Only the hosted preset's `apiKey` is actually a
+  // Supabase session token meant for our own /api/audit endpoint.
+  const hostedAudit = provider.kind === "azure-responses" && provider.apiKey ? { token: provider.apiKey, baseUrl: provider.baseUrl } : undefined;
+
   // `dispatch_subtasks` is `dangerous: false` (tools.ts) and IS offered in
   // review mode — parallel read-only research ("look into these 3 unrelated
   // files at once") is exactly what review mode should be good at, not
@@ -1449,9 +1467,9 @@ export async function runPrompt(
     // dispatch lookups, which never appear in their `allowedTools` above, so
     // their system prompt, tool schema, and dispatch behavior are unchanged.
     if (session.mode === "royal" && depth === 0) {
-      return await runRoyalPhaseTurn(session, userText, cb, promptId, trace, model, adapter, signal, depth, sessionId);
+      return await runRoyalPhaseTurn(session, userText, cb, promptId, trace, model, adapter, signal, depth, sessionId, hostedAudit);
     }
-    return await runPromptLoop(session, userText, cb, promptId, trace, model, adapter, allowedTools, signal, depth, sessionId);
+    return await runPromptLoop(session, userText, cb, promptId, trace, model, adapter, allowedTools, signal, depth, sessionId, hostedAudit);
   } finally {
     trace.end();
     void tracer.flush();
@@ -1471,6 +1489,8 @@ async function runPromptLoop(
   depth: number,
   /** The ACP session id (server.ts) — required to key background tasks in the registry; undefined for subtask children and test callers that don't thread it. */
   acpSessionId?: string,
+  /** See `runPrompt`'s doc comment above — set only when the active provider is the hosted `lakshx` preset; used solely to fire the metadata-only cloud audit POST alongside each local `logRoyalAudit()` call below. */
+  hostedAudit?: { token: string; baseUrl: string },
 ): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   // Mid-conversation mode-switch reinforcement (anchoring counter): the
   // system prompt already reflects the live mode every iteration, but the
@@ -1931,6 +1951,9 @@ async function runPromptLoop(
             decision: "blocked",
             reason: denyMsg,
           });
+          if (hostedAudit) {
+            postAuditMetadata(hostedAudit.token, hostedAudit.baseUrl, { toolName: tc.name, allowed: false, isError: true });
+          }
         }
         continue;
       }
@@ -1961,6 +1984,7 @@ async function runPromptLoop(
       // site for the success/repeat-stop/error paths below.
       const auditRun = (outputSummary: string, isError: boolean) => {
         if (!isRoyal) return;
+        const durationMs = Date.now() - startedAt;
         logRoyalAudit({
           tool: tc.name,
           input: summarizeInput(tc.input ?? {}),
@@ -1969,8 +1993,11 @@ async function runPromptLoop(
           checkpointSha,
           outputSummary: summarizeText(outputSummary),
           isError,
-          durationMs: Date.now() - startedAt,
+          durationMs,
         });
+        if (hostedAudit) {
+          postAuditMetadata(hostedAudit.token, hostedAudit.baseUrl, { toolName: tc.name, allowed: true, isError, durationMs });
+        }
       };
 
       try {

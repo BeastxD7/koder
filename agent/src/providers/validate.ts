@@ -46,6 +46,11 @@ export async function probeProvider(providerId: string, overrideKey?: string): P
       .slice(0, 200);
     return { ok: true, models };
   } catch (err: any) {
-    return { ok: false, error: err?.name === "TimeoutError" ? "timed out reaching provider" : String(err?.message ?? err) };
+    // Network-level failures (DNS, connection refused, TLS, malformed URL)
+    // otherwise surface raw Node/undici error text (e.g. "fetch failed:
+    // getaddrinfo ENOTFOUND ...") straight into the settings UI — normalize
+    // to one friendly message instead, matching the HTTP-status branch above.
+    const friendly = err?.name === "TimeoutError" ? "timed out reaching provider" : "could not reach provider — check the base URL and your network connection";
+    return { ok: false, error: friendly };
   }
 }

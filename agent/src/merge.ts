@@ -21,6 +21,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { loadConfig, resolveModel } from "./config.js";
 import { AnthropicAdapter } from "./providers/anthropic.js";
+import { AzureResponsesAdapter } from "./providers/azure-responses.js";
 import { OpenAICompatAdapter } from "./providers/openai-compat.js";
 import type { ChatAdapter } from "./providers/types.js";
 import { clip } from "./tools.js";
@@ -272,7 +273,10 @@ function buildAdapter(): { adapter: ChatAdapter; model: string } {
   // just this one. A future version could accept an explicit override.
   const cfg = loadConfig();
   const { provider, model } = resolveModel(cfg);
-  const adapter: ChatAdapter = provider.kind === "anthropic" ? new AnthropicAdapter(provider) : new OpenAICompatAdapter(provider);
+  const adapter: ChatAdapter =
+    provider.kind === "anthropic" ? new AnthropicAdapter(provider)
+    : provider.kind === "azure-responses" ? new AzureResponsesAdapter(provider)
+    : new OpenAICompatAdapter(provider);
   return { adapter, model };
 }
 

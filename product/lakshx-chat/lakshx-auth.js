@@ -52,4 +52,27 @@ async function refreshSession(refreshToken) {
   return { access_token: data.access_token, refresh_token: data.refresh_token, expires_in: data.expires_in ?? 3600 };
 }
 
-module.exports = { parseAuthCallback, refreshSession };
+/**
+ * Self-service usage/cap lookup — calls the `get_my_usage()` Postgres
+ * function directly via Supabase's REST RPC endpoint (no landing-page route
+ * needed: RLS + the function's own `security definer` + `auth.uid()` scoping
+ * already guarantee a user can only ever see their own figures, never the
+ * global company-wide budget). Returns null on any failure — this is a
+ * best-effort display, never worth surfacing an error for.
+ */
+async function getMyUsage(accessToken) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_my_usage`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: SUPABASE_ANON_KEY, authorization: `Bearer ${accessToken}` },
+      body: "{}",
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return rows?.[0] ?? null; // { spent_usd, credit_limit_usd, tokens_in, tokens_out }
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { parseAuthCallback, refreshSession, getMyUsage };

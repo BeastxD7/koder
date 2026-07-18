@@ -500,11 +500,12 @@ function whatsNewHasUnseen(context) {
 }
 
 // ---------- local feedback log (~/.lakshx/feedback/<yyyy-mm>.jsonl) ----------
-// Intentionally 100% local: no network calls, no telemetry, no cloud sync of
-// any kind. This is the entire mechanism — nothing here phones home, and
-// nothing here is a stub or hook for a future sync feature. If cloud sync is
-// ever built, it will be a separate, explicit feature, not an extension of
-// this file.
+// Local write here is unconditional and always happens, regardless of sign-in
+// state or model — it is the reliable on-disk copy. Cloud sync is a
+// deliberately separate, explicit path (uploadFeedbackEvent, below) rather
+// than an extension of this function, and only ever fires for the hosted
+// "lakshx" model — a BYOK user's own-key prompts/responses are never
+// uploaded just because they also happen to be signed in.
 function feedbackDir() {
   const dir = path.join(os.homedir(), ".lakshx", "feedback");
   fs.mkdirSync(dir, { recursive: true });
@@ -514,6 +515,40 @@ function feedbackDir() {
 function feedbackFile(date = new Date()) {
   const ym = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
   return path.join(feedbackDir(), `${ym}.jsonl`);
+}
+
+/**
+ * Cloud mirror of a feedback entry — POSTs to the same backend that hosts
+ * the free "lakshx" model, authenticated with the same rotating Supabase
+ * access token used for chat requests (saveLakshxToken/scheduleLakshxRefresh
+ * above). Scoped to the hosted model only (see the comment on feedbackDir):
+ * gate on entry.model rather than "is the user signed in at all", since a
+ * signed-in user can still be chatting through their own BYOK key in the
+ * same session. Best-effort and fire-and-forget — a network failure here
+ * must never surface to the user or affect the local JSONL write, which
+ * already succeeded by the time this is called.
+ */
+function uploadFeedbackEvent(entry) {
+  if (!entry.model?.startsWith("lakshx/")) return;
+  const token = readProvidersJson().providers?.lakshx?.apiKey;
+  if (!token) return;
+  fetch("https://lakshx.in/api/feedback", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      rating: entry.rating,
+      model: entry.model,
+      mode: entry.mode,
+      chatId: entry.chatId,
+      sessionId: entry.sessionId,
+      userPromptText: entry.userPromptText,
+      assistantResponseText: entry.assistantResponseText,
+      toolCalls: entry.toolCalls,
+      comment: entry.comment,
+      expected: entry.expected,
+      wentWrong: entry.wentWrong,
+    }),
+  }).catch(() => {});
 }
 
 // ---------- Royal mode informed-consent gate (per workspace, not per session) ----------
@@ -835,6 +870,21 @@ class AgentViewProvider {
     view.webview.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri] };
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((m) => this.onWebviewMessage(m));
+
+    // First time the agent panel is actually shown (not just extension
+    // activation — activation can fire before any panel is visible, which
+    // would make a nudge here feel context-less): open the walkthrough
+    // instead of a one-shot toast, since a dismissed toast is gone for good
+    // while the walkthrough stays reachable later from the Command Palette
+    // ("Welcome: Open Walkthrough...") or Help > Get Started.
+    if (!this.context.globalState.get("lakshx.loginPrompted.v1")) {
+      this.context.globalState.update("lakshx.loginPrompted.v1", true);
+      const state = readProviderState();
+      const hasAnyProvider = PROVIDER_IDS.some((id) => state.set[id]);
+      if (!hasAnyProvider) {
+        vscode.commands.executeCommand("workbench.action.openWalkthrough", "lakshx.lakshx-chat#lakshxGettingStarted", false);
+      }
+    }
   }
 
   post(msg) {
@@ -1916,13 +1966,14 @@ class AgentViewProvider {
       case "feedback": {
         // thumbs up/down submitted from the review form under a message.
         const ctx = this.turnContext();
-        this.logFeedback({
+        const entry = this.logFeedback({
           rating: m.rating, // "up" | "down"
           comment: m.comment,
           expected: m.expected,
           wentWrong: m.wentWrong,
           ...ctx,
         });
+        uploadFeedbackEvent(entry);
         break;
       }
       case "retryMessage": {
@@ -1932,7 +1983,7 @@ class AgentViewProvider {
         // a new attempt after it — a real "regenerate that rewinds history"
         // is a separate, larger feature (docs/research/07, P0.6).
         const ctx = this.turnContext();
-        this.logFeedback({ rating: "retry", ...ctx });
+        uploadFeedbackEvent(this.logFeedback({ rating: "retry", ...ctx }));
         if (ctx.userPromptText) {
           await this.sendPrompt(ctx.userPromptText);
         } else {
@@ -2126,6 +2177,12 @@ class AgentViewProvider {
       case "lakshxLogout":
         vscode.commands.executeCommand("lakshx.logout");
         break;
+      case "getLakshxUsage": {
+        const token = readProvidersJson().providers?.lakshx?.apiKey;
+        const usage = token ? await lakshxAuth.getMyUsage(token) : null;
+        this.post({ type: "lakshxUsageResult", usage });
+        break;
+      }
       case "openSettingsFile":
         vscode.commands.executeCommand("lakshx.openProviderSettings");
         break;
@@ -2455,26 +2512,9 @@ async function activate(context) {
     }),
   );
 
-  // First run, no providers configured at all: nudge toward the free,
-  // zero-setup LakshX login instead of leaving the user to find the
-  // settings gear on their own — the passive "no keys yet" chat notice in
-  // the "boot" handler is the fallback for anyone who dismisses this.
-  if (!context.globalState.get("lakshx.loginPrompted.v1")) {
-    context.globalState.update("lakshx.loginPrompted.v1", true);
-    const state = readProviderState();
-    const hasAnyProvider = PROVIDER_IDS.some((id) => state.set[id]);
-    if (!hasAnyProvider) {
-      vscode.window
-        .showInformationMessage("Sign in to LakshX to unlock the free built-in model — no API key needed.", "Sign In")
-        .then((choice) => {
-          if (choice === "Sign In") vscode.commands.executeCommand("lakshx.login");
-        });
-    }
-  }
-
   const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 1000);
   statusItem.text = "✦ LakshX";
-  statusItem.tooltip = "Open LakshX Agent (⌘L)";
+  statusItem.tooltip = `Open LakshX Agent (${isWin ? "Ctrl+L" : "⌘L"})`;
   statusItem.command = "lakshx.openAgent";
   statusItem.show();
 

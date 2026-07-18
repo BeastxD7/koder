@@ -9,7 +9,9 @@ export const maxDuration = 300;
 
 // Azure OpenAI, gpt-5-mini, Global Standard, USD per 1M tokens. Update this
 // if the deployment's model/SKU ever changes — cost accounting is only as
-// correct as this constant.
+// correct as this constant. Kept identical to (and duplicated from) the
+// sibling chat/completions/route.ts — same model, same deployment, same
+// price, just a different Azure API surface.
 const PRICE_PER_1M = { input: 0.125, output: 1.0 };
 
 function supabaseAdmin(): SupabaseClient {
@@ -19,11 +21,22 @@ function supabaseAdmin(): SupabaseClient {
 }
 
 /**
- * The hosted, no-BYOK "LakshX" model: the client sends a Supabase login
- * token (not an Azure key — that's the separate `azure` BYOK provider kind
- * in agent/src/config.ts), this proxy holds the real Azure credential and
- * enforces the per-user/global budget from supabase/schema.sql before ever
- * calling Azure. Required env vars:
+ * The hosted, no-BYOK "LakshX" model — Responses API surface. Sibling to
+ * ../chat/completions/route.ts (kept in place, untouched, so already-installed
+ * IDE builds that still speak Chat Completions keep working): the client
+ * sends a Supabase login token (not an Azure key — that's the separate
+ * `azure` BYOK provider kind in agent/src/config.ts, which stays on Chat
+ * Completions), this proxy holds the real Azure credential and enforces the
+ * per-user/global budget from supabase/schema.sql before ever calling Azure.
+ *
+ * Why a second route instead of translating in here: agent/src/providers/
+ * azure-responses.ts already speaks this wire shape natively (the neutral →
+ * Responses translation happens exactly once, client-side) — this route is a
+ * plain auth+budget+forward+meter shim, structurally identical to
+ * ../chat/completions/route.ts, just pointed at `/responses` and reading the
+ * differently-shaped usage payload.
+ *
+ * Required env vars (same four as the sibling route):
  *   AZURE_OPENAI_ENDPOINT     e.g. https://lakshx-ide-global-resource.openai.azure.com/openai/v1
  *   AZURE_OPENAI_API_KEY      Foundry/Azure OpenAI resource key
  *   AZURE_OPENAI_DEPLOYMENT   the Foundry deployment name, e.g. "gpt-5-mini"
@@ -62,21 +75,24 @@ export async function POST(req: NextRequest) {
     // has already gone out either.
     after(async () => {
       const { error } = await supabase.rpc("record_budget_cap_hit", { p_user_id: userId, p_reason: reason });
-      if (error) console.error("lakshx-model: record_budget_cap_hit failed", error);
+      if (error) console.error("lakshx-model (responses): record_budget_cap_hit failed", error);
     });
     return Response.json({ error: reason }, { status: 429 });
   }
 
   const body = await req.json();
-  // client sends "model" per the OpenAI-compat wire shape (see
-  // agent/src/providers/openai-compat.ts); Azure's model field must be the
+  // client sends "model" per the Responses wire shape (see
+  // agent/src/providers/azure-responses.ts); Azure's model field must be the
   // deployment name, not whatever the client asked for.
   body.model = deployment;
-  // usage-bearing final SSE chunk is required to know what to bill — force
-  // it on regardless of what the client sent.
-  body.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
+  // Stateless replay only — the client already sends the full conversation
+  // as `input` on every turn (azure-responses.ts's `toWire`); never let a
+  // client request server-side state retention or `previous_response_id`
+  // chaining through this proxy.
+  body.store = false;
+  delete body.previous_response_id;
 
-  const azureRes = await fetch(`${endpoint}/chat/completions`, {
+  const azureRes = await fetch(`${endpoint}/responses`, {
     method: "POST",
     signal: req.signal,
     headers: { "content-type": "application/json", "api-key": apiKey },
@@ -88,10 +104,10 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: `azure ${azureRes.status}: ${text.slice(0, 500)}` }, { status: azureRes.status || 502 });
   }
 
-  // Tee: the client gets the raw bytes untouched (same SSE shape every
-  // other OpenAI-compatible provider already produces, so no client-side
-  // parsing changes needed); the second reader scans the same stream for
-  // the final usage chunk so cost can be recorded once it's actually known.
+  // Tee: the client gets the raw bytes untouched (azure-responses.ts parses
+  // this exact SSE shape); the second reader scans the same stream for the
+  // `response.completed` event's usage so cost can be recorded once it's
+  // actually known.
   const [clientStream, meterStream] = azureRes.body.tee();
 
   // `after()` keeps the function alive for this work even though the
@@ -109,7 +125,7 @@ async function recordUsageWhenDone(stream: ReadableStream<Uint8Array>, supabase:
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
+  let usage: { input_tokens: number; output_tokens: number } | undefined;
 
   try {
     while (true) {
@@ -125,30 +141,40 @@ async function recordUsageWhenDone(stream: ReadableStream<Uint8Array>, supabase:
         if (data === "[DONE]") continue;
         try {
           const ev = JSON.parse(data);
-          if (ev.usage) usage = ev.usage;
+          // The Responses API's usage payload lives at `response.completed`'s
+          // nested `response.usage` — NOT a top-level `ev.usage` like Chat
+          // Completions' final SSE chunk (the sibling route's shape).
+          if (ev.type === "response.completed" && ev.response?.usage) usage = ev.response.usage;
         } catch {
           // partial/non-JSON chunk — ignore, more data may complete it later
         }
       }
     }
   } catch (err) {
-    console.error("lakshx-model: metering stream read failed", err);
+    console.error("lakshx-model (responses): metering stream read failed", err);
     return;
   }
 
   if (!usage) {
-    console.error("lakshx-model: no usage chunk in stream — nothing recorded");
+    console.error("lakshx-model (responses): no response.completed usage in stream — nothing recorded");
     return;
   }
 
+  // `output_tokens` already INCLUDES reasoning tokens as a subset (same
+  // convention as Chat Completions' `completion_tokens` /
+  // `completion_tokens_details.reasoning_tokens` — confirmed against
+  // OpenAI/Azure docs and community reports: reasoning tokens are billed AS
+  // output tokens, not on top of them). Deliberately do NOT add
+  // `usage.output_tokens_details.reasoning_tokens` here — that would
+  // double-bill every request, not fix under-billing.
   const costUsd =
-    (usage.prompt_tokens / 1_000_000) * PRICE_PER_1M.input + (usage.completion_tokens / 1_000_000) * PRICE_PER_1M.output;
+    (usage.input_tokens / 1_000_000) * PRICE_PER_1M.input + (usage.output_tokens / 1_000_000) * PRICE_PER_1M.output;
 
   const { error } = await supabase.rpc("record_usage", {
     p_user_id: userId,
-    p_tokens_in: usage.prompt_tokens,
-    p_tokens_out: usage.completion_tokens,
+    p_tokens_in: usage.input_tokens,
+    p_tokens_out: usage.output_tokens,
     p_cost_usd: costUsd,
   });
-  if (error) console.error("lakshx-model: record_usage failed", error);
+  if (error) console.error("lakshx-model (responses): record_usage failed", error);
 }

@@ -74,3 +74,37 @@ export function logRoyalAudit(entry: Omit<RoyalAuditEntry, "ts">): RoyalAuditEnt
   }
   return full;
 }
+
+/**
+ * Metadata-only mirror of a `logRoyalAudit()` entry, sent to the hosted
+ * `lakshx` provider's `/api/audit` endpoint (landing-page/app/api/audit/
+ * route.ts) — separate from, and never in place of, the local JSONL write
+ * above. Deliberately narrow: ONLY tool name, allowed/error/duration. Never
+ * the scrubbed `input`, `cwd`, `reason`, `outputSummary`, or `checkpointSha`
+ * — none of that leaves the machine. This function has no access to those
+ * fields even if a caller wanted it to; it takes its own separate, smaller
+ * parameter shape.
+ *
+ * Fire-and-forget and best-effort by design: called (unawaited) right next
+ * to `logRoyalAudit()` at each call site, never blocking or slowing the tool
+ * call it's reporting on, and never throwing into the caller.
+ */
+export function postAuditMetadata(
+  hostedToken: string,
+  auditBaseUrl: string,
+  meta: { toolName: string; allowed: boolean; isError: boolean; durationMs?: number },
+): void {
+  const url = auditBaseUrl.replace(/\/api\/lakshx-model\/?$/, "/api/audit");
+  fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${hostedToken}` },
+    body: JSON.stringify({
+      toolName: meta.toolName,
+      allowed: meta.allowed,
+      isError: meta.isError,
+      durationMs: meta.durationMs,
+    }),
+  }).catch(() => {
+    // best-effort — never throw, never surface to the tool-call path
+  });
+}
