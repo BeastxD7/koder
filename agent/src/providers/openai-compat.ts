@@ -83,11 +83,13 @@ export class OpenAICompatAdapter implements ChatAdapter {
       // branch below and the turn ends as an empty, no-explanation
       // end_turn (spinner clears, no answer, no error surfaced)
       if (ev.error) throw new Error(`${this.cfg.baseUrl} stream error: ${JSON.stringify(ev.error).slice(0, 400)}`);
+      // Checked unconditionally, not only when `choices` is empty — most
+      // providers send usage on its own no-choice trailer chunk, but
+      // Codestral (confirmed live) attaches it to the LAST content-bearing
+      // chunk instead, alongside a real `choice`/`finish_reason`.
+      if (ev.usage) usage = { inputTokens: ev.usage.prompt_tokens, outputTokens: ev.usage.completion_tokens };
       const choice = ev.choices?.[0];
-      if (!choice) {
-        if (ev.usage) usage = { inputTokens: ev.usage.prompt_tokens, outputTokens: ev.usage.completion_tokens };
-        continue;
-      }
+      if (!choice) continue;
       const delta = choice.delta ?? {};
       if (typeof delta.content === "string" && delta.content) {
         text += delta.content;
