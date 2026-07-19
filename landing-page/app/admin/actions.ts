@@ -3,12 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "../../lib/supabase/server";
 import { isAdminEmail, supabaseAdmin } from "../../lib/supabase/admin";
+import { dodoClient, PRO_PRODUCT_ID } from "../../lib/dodo";
 
 /**
- * Defense in depth: middleware.ts already gates /admin/*, but this re-checks
- * the caller's own identity independently before touching the service-role
- * client — a Server Action can in principle be invoked directly, not only
- * via the page that renders its form, so it must not assume middleware ran.
+ * Defense in depth: proxy.ts already gates /admin/*, but this re-checks the
+ * caller's own identity independently before touching the service-role
+ * client (or, for the promo-code actions below, the Dodo API key) — a
+ * Server Action can in principle be invoked directly, not only via the page
+ * that renders its form, so it must not assume proxy.ts ran.
  */
 async function assertAdmin() {
   const supabase = await createClient();
@@ -41,4 +43,45 @@ export async function updateGlobalCeiling(formData: FormData) {
   if (error) throw new Error(error.message);
 
   revalidatePath("/admin", "layout");
+}
+
+/**
+ * Promo codes live entirely in Dodo (its Discounts API — percentage-only,
+ * basis points), not in our own Supabase schema — there's nothing to
+ * duplicate/keep in sync here, this just calls through with an admin check
+ * in front. `restricted_to: [PRO_PRODUCT_ID]` scopes every code created
+ * here to the one real product that exists (LakshX Pro) so a code can
+ * never accidentally apply somewhere else if more products are added later.
+ */
+export async function createPromoCode(formData: FormData) {
+  await assertAdmin();
+
+  const code = String(formData.get("code") ?? "").trim().toUpperCase() || undefined;
+  const percentOff = Number(formData.get("percentOff"));
+  if (!Number.isFinite(percentOff) || percentOff <= 0 || percentOff > 100) {
+    throw new Error("percent off must be between 1 and 100");
+  }
+  const expiresAtRaw = String(formData.get("expiresAt") ?? "").trim();
+  const usageLimitRaw = String(formData.get("usageLimit") ?? "").trim();
+
+  await dodoClient().discounts.create({
+    type: "percentage",
+    amount: Math.round(percentOff * 100), // basis points: 20% -> 2000
+    code,
+    expires_at: expiresAtRaw ? new Date(expiresAtRaw).toISOString() : null,
+    usage_limit: usageLimitRaw ? Number(usageLimitRaw) : null,
+    restricted_to: [PRO_PRODUCT_ID],
+  });
+
+  revalidatePath("/admin/promo-codes");
+}
+
+export async function deletePromoCode(formData: FormData) {
+  await assertAdmin();
+  const discountId = String(formData.get("discountId") ?? "");
+  if (!discountId) throw new Error("missing discount id");
+
+  await dodoClient().discounts.delete(discountId);
+
+  revalidatePath("/admin/promo-codes");
 }
