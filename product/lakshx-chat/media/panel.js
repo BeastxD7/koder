@@ -405,8 +405,9 @@ function applyMergeConflictSummary(el, m) {
 //    logic, so the marginal cost of keeping both is low.
 // Neither surface is ever shown with zero files — a card/bar with nothing
 // to undo is worse than no card/bar at all.
-const checkpointCards = new Map(); // promptId -> { el, files: Set<string> }
+const checkpointCards = new Map(); // promptId -> { el, files: Set<string>, accepted: Set<string> }
 const sessionFiles = new Map(); // path -> { promptId } — latest-wins
+const sessionAccepted = new Set(); // path — mirrors a card's `accepted` set for the session-wide bar (doc 11 §7 extension, see applyFileAccepted)
 
 function applyCheckpoint(m) {
   if (!m.files?.length) return; // never render a zero-file card (loop.ts already guarantees this, guarded again here)
@@ -415,7 +416,7 @@ function applyCheckpoint(m) {
     const el = document.createElement("div");
     el.className = "checkpoint";
     messagesEl.appendChild(el);
-    card = { el, files: new Set() };
+    card = { el, files: new Set(), accepted: new Set() };
     checkpointCards.set(m.promptId, card);
   }
   for (const f of m.files) {
@@ -432,7 +433,7 @@ function applyRevert(paths) {
   if (!paths?.length) return;
   for (const [promptId, card] of [...checkpointCards.entries()]) {
     let changed = false;
-    for (const p of paths) changed = card.files.delete(p) || changed;
+    for (const p of paths) { changed = card.files.delete(p) || changed; card.accepted.delete(p); }
     if (!changed) continue;
     if (card.files.size === 0) {
       card.el.remove();
@@ -442,27 +443,77 @@ function applyRevert(paths) {
     }
   }
   let sessionChanged = false;
-  for (const p of paths) sessionChanged = sessionFiles.delete(p) || sessionChanged;
+  for (const p of paths) { sessionChanged = sessionFiles.delete(p) || sessionChanged; sessionAccepted.delete(p); }
   if (sessionChanged) renderCheckpointBar();
+}
+
+/**
+ * Per-file "Accept" (docs/research/11 §7 extension — Antigravity-style
+ * per-file decision, requested explicitly rather than only the existing
+ * per-PROMPT rewind row's Accept). Purely visual/non-blocking, exactly like
+ * the rewind row's Accept: it never reverts anything, just marks the file
+ * as reviewed/kept so its row stops looking "pending." A later Reject on
+ * the SAME file still works — accepting is not a lock. Persisted as a
+ * REPLAYABLE "fileAccepted" event (extension.js) the same way "rewindAccepted"
+ * already is, so a reload keeps the dismissal.
+ */
+function applyFileAccepted(m) {
+  const card = checkpointCards.get(m.promptId);
+  if (card && card.files.has(m.path)) {
+    card.accepted.add(m.path);
+    renderCheckpointCard(m.promptId, card);
+  }
+  if (sessionFiles.get(m.path)?.promptId === m.promptId) {
+    sessionAccepted.add(m.path);
+    renderCheckpointBar();
+  }
 }
 
 function openCheckpointFile(promptId, path) {
   vscode.postMessage({ type: "openCheckpointFile", promptId, path });
 }
 
+function requestAcceptFile(promptId, path) {
+  applyFileAccepted({ promptId, path }); // optimistic — extension.js echoes "fileAccepted" for persistence/replay
+  vscode.postMessage({ type: "acceptFile", promptId, path });
+}
+
 function renderCheckpointCard(promptId, card) {
   const files = [...card.files];
   const n = files.length;
+  const pending = files.filter((f) => !card.accepted.has(f)).length;
   card.el.innerHTML = `
     <div class="cp-head">Files changed (${n})</div>
-    <div class="cp-files">${files.map(() => `<div class="cp-file"><span class="cp-path" role="button" tabindex="0" title="Open diff"></span><button class="cp-file-undo" title="Undo this file">Undo</button></div>`).join("")}</div>
-    <button class="cp-undo-all">Undo all ${n} file${n === 1 ? "" : "s"}</button>
+    <div class="cp-files">${files
+      .map(
+        (f) => `<div class="cp-file${card.accepted.has(f) ? " cp-file-kept" : ""}">
+          <span class="cp-path" role="button" tabindex="0" title="Open diff"></span>
+          <span class="cp-file-actions">
+            <span class="cp-kept-label" hidden>&#10003; Kept</span>
+            <button class="cp-file-accept" title="Keep this file's changes">&#10003; Accept</button>
+            <button class="cp-file-reject" title="Revert this file's changes">Reject</button>
+          </span>
+        </div>`,
+      )
+      .join("")}</div>
+    ${pending > 0 ? `<button class="cp-accept-all">Accept all ${pending} pending</button>` : ""}
+    <button class="cp-undo-all">Reject all ${n} file${n === 1 ? "" : "s"}</button>
     <div class="cp-confirm" hidden></div>`;
   [...card.el.querySelectorAll(".cp-file")].forEach((el, i) => {
+    const f = files[i];
     const p = el.querySelector(".cp-path");
-    p.textContent = files[i];
-    p.addEventListener("click", () => openCheckpointFile(promptId, files[i]));
-    el.querySelector(".cp-file-undo").addEventListener("click", () => requestUndoFile(promptId, files[i]));
+    p.textContent = f;
+    p.addEventListener("click", () => openCheckpointFile(promptId, f));
+    if (card.accepted.has(f)) {
+      el.querySelector(".cp-kept-label").hidden = false;
+      el.querySelector(".cp-file-accept").hidden = true;
+    } else {
+      el.querySelector(".cp-file-accept").addEventListener("click", () => requestAcceptFile(promptId, f));
+    }
+    el.querySelector(".cp-file-reject").addEventListener("click", () => requestUndoFile(promptId, f));
+  });
+  card.el.querySelector(".cp-accept-all")?.addEventListener("click", () => {
+    for (const f of files) if (!card.accepted.has(f)) requestAcceptFile(promptId, f);
   });
   card.el.querySelector(".cp-undo-all").addEventListener("click", () => requestUndoPrompt(promptId));
 }
@@ -880,15 +931,37 @@ function renderCheckpointBar() {
     return;
   }
   const entries = [...sessionFiles.entries()];
+  const pending = entries.filter(([f]) => !sessionAccepted.has(f)).length;
   cpbarBody.innerHTML = `
-    <div class="cpbar-files">${entries.map(() => `<div class="cpbar-file"><span class="cpbar-path" role="button" tabindex="0" title="Open diff"></span><button class="cpbar-file-undo" title="Undo this file">Undo</button></div>`).join("")}</div>
-    <button class="cpbar-undo-all">Undo all ${n} file${n === 1 ? "" : "s"}</button>`;
+    <div class="cpbar-files">${entries
+      .map(
+        ([f]) => `<div class="cpbar-file${sessionAccepted.has(f) ? " cpbar-file-kept" : ""}">
+          <span class="cpbar-path" role="button" tabindex="0" title="Open diff"></span>
+          <span class="cpbar-file-actions">
+            <span class="cpbar-kept-label" hidden>&#10003; Kept</span>
+            <button class="cpbar-file-accept" title="Keep this file's changes">&#10003; Accept</button>
+            <button class="cpbar-file-undo" title="Revert this file's changes">Reject</button>
+          </span>
+        </div>`,
+      )
+      .join("")}</div>
+    ${pending > 0 ? `<button class="cpbar-accept-all">Accept all ${pending} pending</button>` : ""}
+    <button class="cpbar-undo-all">Reject all ${n} file${n === 1 ? "" : "s"}</button>`;
   [...cpbarBody.querySelectorAll(".cpbar-file")].forEach((el, i) => {
     const [filePath, info] = entries[i];
     const p = el.querySelector(".cpbar-path");
     p.textContent = filePath;
     p.addEventListener("click", () => openCheckpointFile(info.promptId, filePath));
+    if (sessionAccepted.has(filePath)) {
+      el.querySelector(".cpbar-kept-label").hidden = false;
+      el.querySelector(".cpbar-file-accept").hidden = true;
+    } else {
+      el.querySelector(".cpbar-file-accept").addEventListener("click", () => requestAcceptFile(info.promptId, filePath));
+    }
     el.querySelector(".cpbar-file-undo").addEventListener("click", () => requestUndoFile(info.promptId, filePath));
+  });
+  cpbarBody.querySelector(".cpbar-accept-all")?.addEventListener("click", () => {
+    for (const [filePath, info] of entries) if (!sessionAccepted.has(filePath)) requestAcceptFile(info.promptId, filePath);
   });
   cpbarBody.querySelector(".cpbar-undo-all").addEventListener("click", () => {
     for (const [filePath, info] of entries) requestUndoFile(info.promptId, filePath);
@@ -2230,6 +2303,7 @@ function applyEvent(m, replaying) {
     case "checkpoint": applyCheckpoint(m); break;
     case "checkpointReverted": applyRevert(m.paths); break;
     case "rewindAccepted": dismissRewindRow(m.promptId); break;
+    case "fileAccepted": applyFileAccepted(m); break;
     case "subagentsStart": applySubagentsStart(m); break;
     case "subagentActivity": applySubagentActivity(m); break;
     case "subagentsEnd": applySubagentsEnd(m); break;
@@ -2451,6 +2525,7 @@ window.addEventListener("message", (e) => {
       trayExpanded = false;
       renderTray(); // hides the tray before replay repopulates it; a "tasksReconcile" may follow separately
       sessionFiles.clear();
+      sessionAccepted.clear();
       resetRewindRows();
       cpbarExpanded = false;
       renderCheckpointBar(); // hides the bar before replay repopulates it
@@ -2492,6 +2567,7 @@ window.addEventListener("message", (e) => {
     case "checkpoint": applyEvent(m, false); break;
     case "checkpointReverted": applyEvent(m, false); break;
     case "rewindAccepted": applyEvent(m, false); break;
+    case "fileAccepted": applyEvent(m, false); break;
     case "rewindConflict": handleRewindConflict(m); break;
     case "subagentsStart": applyEvent(m, false); break;
     case "subagentActivity": applyEvent(m, false); break;
@@ -2644,6 +2720,7 @@ window.addEventListener("message", (e) => {
       trayExpanded = false;
       renderTray();
       sessionFiles.clear();
+      sessionAccepted.clear();
       resetRewindRows();
       cpbarExpanded = false;
       renderCheckpointBar();

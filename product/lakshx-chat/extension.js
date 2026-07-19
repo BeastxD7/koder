@@ -512,13 +512,17 @@ async function gatherWorkspaceFilesForScan() {
 // "rewindAccepted" persists the purely-visual Accept dismissal of a user
 // message's rewind row (conversation-rewind feature) so a reload keeps the
 // row dismissed — replayed the same event-sourced way "checkpointReverted" is.
+// "fileAccepted" is the per-FILE twin of "rewindAccepted" (doc 11 §7
+// extension): a purely-visual "keep this one file's change" dismissal on a
+// checkpoint card's per-file row, same non-blocking semantics, same
+// event-sourced replay treatment.
 // "taskStart"/"taskActivity"/"taskDone"/"taskSteered" are the background-
 // subtask (Royal Mode 2.0) equivalents of "subagentsStart"/"subagentActivity"/
 // "subagentsEnd" above — replayed the same way so the running-agents tray
 // (panel.js) rebuilds on reload, then gets reconciled against the live
 // registry via a "tasksReconcile" round-trip (NOT itself replayable — see
 // the "replayRequest" handler below).
-const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "rewindAccepted", "subagentsStart", "subagentActivity", "subagentsEnd", "taskStart", "taskActivity", "taskDone", "taskSteered", "phaseState"]);
+const REPLAYABLE = new Set(["user", "chunk", "thought", "tool", "toolUpdate", "toolImage", "system", "modeChanged", "turnEnd", "checkpoint", "checkpointReverted", "rewindAccepted", "fileAccepted", "subagentsStart", "subagentActivity", "subagentsEnd", "taskStart", "taskActivity", "taskDone", "taskSteered", "phaseState"]);
 
 function chatsDir() {
   const dir = path.join(os.homedir(), ".lakshx", "chats");
@@ -2179,6 +2183,13 @@ class AgentViewProvider {
         // rewind row, persisted as a REPLAYABLE event so a reload keeps it
         // dismissed.
         if (m.promptId) this.post({ type: "rewindAccepted", promptId: m.promptId });
+        break;
+      case "acceptFile":
+        // Per-file twin of "acceptTurn" above (doc 11 §7 extension): same
+        // purely-visual, non-blocking "keep this" — never touches the file
+        // on disk, never gates anything. Persisted as a REPLAYABLE event so
+        // a reload keeps this one file's row dismissed too.
+        if (m.promptId && m.path) this.post({ type: "fileAccepted", promptId: m.promptId, path: m.path });
         break;
       case "openCheckpointFile":
         this.openCheckpointDiff(m.promptId, m.path);

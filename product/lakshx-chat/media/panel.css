@@ -363,7 +363,9 @@ html, body {
   cursor: pointer;
 }
 .checkpoint .cp-file .cp-path:hover { color: var(--fg); text-decoration: underline; }
-.checkpoint .cp-file-undo {
+.checkpoint .cp-file-actions { flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
+.checkpoint .cp-file-accept,
+.checkpoint .cp-file-reject {
   flex-shrink: 0;
   background: transparent;
   color: var(--muted);
@@ -372,7 +374,25 @@ html, body {
   border: 1px solid var(--hairline);
   border-radius: 6px;
 }
-.checkpoint .cp-file-undo:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
+.checkpoint .cp-file-accept:hover { background: rgba(120, 220, 150, 0.14); color: var(--fg); }
+.checkpoint .cp-file-reject:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
+/* Accepted is a soft, reversible "kept" state (docs/research/11 §7
+   extension) — dim the row and swap the Accept button for a static label,
+   but Reject stays live so the file can still be reverted later. */
+.checkpoint .cp-file.cp-file-kept { opacity: 0.55; }
+.checkpoint .cp-kept-label {
+  flex-shrink: 0;
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+.checkpoint .cp-accept-all {
+  margin-top: 6px;
+  margin-right: 6px;
+  background: rgba(120, 220, 150, 0.12);
+  color: var(--fg);
+}
+.checkpoint .cp-accept-all:hover { background: rgba(120, 220, 150, 0.2); }
 .checkpoint .cp-undo-all {
   margin-top: 6px;
   background: rgba(255, 255, 255, 0.08);
@@ -619,6 +639,8 @@ html, body {
   cursor: pointer;
 }
 .cpbar-file .cpbar-path:hover { color: var(--fg); text-decoration: underline; }
+.cpbar-file-actions { flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
+.cpbar-file-accept,
 .cpbar-file-undo {
   flex-shrink: 0;
   background: transparent;
@@ -628,7 +650,23 @@ html, body {
   border: 1px solid var(--hairline);
   border-radius: 6px;
 }
+.cpbar-file-accept:hover { background: rgba(120, 220, 150, 0.14); color: var(--fg); }
 .cpbar-file-undo:hover { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
+/* Same soft/reversible "kept" treatment as the per-turn card's .cp-file-kept. */
+.cpbar-file.cpbar-file-kept { opacity: 0.55; }
+.cpbar-kept-label {
+  flex-shrink: 0;
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+.cpbar-accept-all {
+  margin-top: 8px;
+  margin-right: 6px;
+  background: rgba(120, 220, 150, 0.12);
+  color: var(--fg);
+}
+.cpbar-accept-all:hover { background: rgba(120, 220, 150, 0.2); }
 .cpbar-undo-all {
   margin-top: 8px;
   background: rgba(255, 255, 255, 0.08);
