@@ -25,3 +25,16 @@ export const CHAT_COMPLETIONS_MODELS = new Set([
 ]);
 
 export const DEFAULT_MODEL = "gpt-5-mini";
+
+/**
+ * Models whose Azure deployment rejects the standard OpenAI
+ * `stream_options: {include_usage: true}` request field outright (422
+ * "extra_forbidden" — confirmed live against codestral-2501 on 2026-07-19,
+ * not a guess). These models return `usage` on their final chunk anyway
+ * without needing the flag, so the fix is just "don't send it," not "find
+ * another way to get usage" — the proxy's existing generic `if (ev.usage)`
+ * scan already picks it up regardless of which chunk carries it. Add to
+ * this set as more incompatibilities are found; don't assume every
+ * third-party model here behaves like OpenAI's own by default.
+ */
+export const MODELS_REJECTING_STREAM_OPTIONS = new Set(["codestral-2501"]);

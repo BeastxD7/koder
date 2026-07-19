@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cleanAzureError } from "../../../../../lib/upstream-error";
 import { computeCostUsd } from "../../../../../lib/model-pricing";
-import { CHAT_COMPLETIONS_MODELS, DEFAULT_MODEL } from "../../../../../lib/hosted-models";
+import { CHAT_COMPLETIONS_MODELS, DEFAULT_MODEL, MODELS_REJECTING_STREAM_OPTIONS } from "../../../../../lib/hosted-models";
 
 export const runtime = "nodejs";
 // Agentic turns can run long (multi-tool-call loops) — this is the ceiling
@@ -78,8 +78,15 @@ export async function POST(req: NextRequest) {
   const deployment = CHAT_COMPLETIONS_MODELS.has(requestedModel) ? requestedModel : defaultDeployment;
   body.model = deployment;
   // usage-bearing final SSE chunk is required to know what to bill — force
-  // it on regardless of what the client sent.
-  body.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
+  // it on regardless of what the client sent, EXCEPT for models that reject
+  // this field outright (confirmed live for codestral-2501: 422
+  // "extra_forbidden" — see MODELS_REJECTING_STREAM_OPTIONS's doc comment).
+  // Those models include `usage` on their final chunk anyway without being
+  // asked, so recordUsageWhenDone()'s generic `if (ev.usage)` scan below
+  // still finds it with no further change needed.
+  if (!MODELS_REJECTING_STREAM_OPTIONS.has(deployment)) {
+    body.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
+  }
 
   // Deliberately NOT passing `signal: req.signal` here. Next.js ties that
   // signal to the incoming connection from the agent process — it fires
