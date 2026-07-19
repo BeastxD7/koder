@@ -43,6 +43,22 @@ type AdminUserUsageRow = {
   last_used_at: string | null;
 };
 
+// One raw usage_ledger row for this user. `model` is nullable — rows written
+// before the `model` column existed (see supabase/schema.sql's `alter table
+// ... add column if not exists model`) predate per-model tracking entirely
+// and are labeled "unknown" wherever displayed below, rather than hidden or
+// defaulted to a guessed model name.
+type UsageLedgerRow = {
+  id: number;
+  model: string | null;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  created_at: string;
+};
+
+const RECENT_ACTIVITY_LIMIT = 200;
+
 function formatUsd(n: number | null | undefined) {
   return `$${Number(n ?? 0).toFixed(4)}`;
 }
@@ -82,6 +98,39 @@ function toDailySpend(rows: { cost_usd: number; created_at: string }[]) {
     .map(([day, v]) => ({ day, ...v }));
 }
 
+// Groups the same already-user-scoped usage_ledger rows by model, for the
+// "Usage by model" card. Aggregated in JS rather than a `group by user_id,
+// model` SQL view for the same reason toDailySpend() above is: it's a small,
+// already-fetched array, and this keeps everything on this page following
+// one pattern instead of mixing view-backed and JS-aggregated breakdowns.
+// Rows written before the `model` column existed are grouped under
+// "unknown" rather than dropped, so old spend is still accounted for in the
+// totals.
+function toModelUsage(rows: UsageLedgerRow[]) {
+  const byModel = new Map<string, { requests: number; tokensIn: number; tokensOut: number; cost: number }>();
+  for (const row of rows) {
+    const key = row.model ?? "unknown";
+    const entry = byModel.get(key) ?? { requests: 0, tokensIn: 0, tokensOut: 0, cost: 0 };
+    entry.requests += 1;
+    entry.tokensIn += Number(row.tokens_in ?? 0);
+    entry.tokensOut += Number(row.tokens_out ?? 0);
+    entry.cost += Number(row.cost_usd);
+    byModel.set(key, entry);
+  }
+  return Array.from(byModel.entries())
+    .map(([model, v]) => ({ model, ...v }))
+    .sort((a, b) => b.cost - a.cost);
+}
+
+// Most-recent-first slice of the same rows, capped at `limit`, for the
+// "Recent activity log" raw table — same cap pattern the audit/feedback/
+// error-report tables on this page already use (.limit(...) on their own
+// queries). created_at is an ISO 8601 string, so a plain string compare
+// sorts chronologically without parsing Dates.
+function toRecentActivity(rows: UsageLedgerRow[], limit: number) {
+  return [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, limit);
+}
+
 export default async function AdminUserDetailPage({ params }: { params: Promise<{ userId: string }> }) {
   const { userId } = await params;
   const admin = supabaseAdmin();
@@ -104,7 +153,11 @@ export default async function AdminUserDetailPage({ params }: { params: Promise<
   ] = await Promise.all([
     admin.auth.admin.getUserById(userId),
     admin.from("admin_user_usage").select("*").eq("user_id", userId).maybeSingle(),
-    admin.from("usage_ledger").select("cost_usd, created_at").eq("user_id", userId).order("created_at", { ascending: true }),
+    admin
+      .from("usage_ledger")
+      .select("id, model, tokens_in, tokens_out, cost_usd, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: true }),
     admin.from("admin_feedback_recent").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(200),
     admin
       .from("audit_events")
@@ -127,7 +180,10 @@ export default async function AdminUserDetailPage({ params }: { params: Promise<
   if (!authUser?.email) notFound();
 
   const usage = usageRow as AdminUserUsageRow | null;
-  const dailySpend = toDailySpend((ledgerRows ?? []) as { cost_usd: number; created_at: string }[]);
+  const usageLedger = (ledgerRows ?? []) as UsageLedgerRow[];
+  const dailySpend = toDailySpend(usageLedger);
+  const modelUsage = toModelUsage(usageLedger);
+  const recentActivity = toRecentActivity(usageLedger, RECENT_ACTIVITY_LIMIT);
 
   return (
     <div className="flex flex-col gap-6">
@@ -157,6 +213,84 @@ export default async function AdminUserDetailPage({ params }: { params: Promise<
       {dailySpend.length > 0 && (
         <SpendChart data={dailySpend} />
       )}
+
+      <Card className="bg-card">
+        <CardHeader>
+          <CardTitle>Usage by model</CardTitle>
+          <CardDescription>Requests, tokens, and spend for this user, broken down by hosted model. Rows predating per-model tracking are grouped as "unknown".</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {modelUsage.length > 0 ? (
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Requests</TableHead>
+                    <TableHead>Tokens in</TableHead>
+                    <TableHead>Tokens out</TableHead>
+                    <TableHead>Cost</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {modelUsage.map((row) => (
+                    <TableRow key={row.model}>
+                      <TableCell className="font-medium">{row.model}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.requests}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.tokensIn}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.tokensOut}</TableCell>
+                      <TableCell className="text-foreground">{formatUsd(row.cost)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No usage recorded for this user yet.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="bg-card">
+        <CardHeader>
+          <CardTitle>Recent activity log</CardTitle>
+          <CardDescription>
+            {recentActivity.length > 0
+              ? `Last ${recentActivity.length} of ${usageLedger.length} raw usage_ledger request${usageLedger.length === 1 ? "" : "s"} for this user, most recent first.`
+              : "Raw per-request usage_ledger rows for this user, most recent first."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {recentActivity.length > 0 ? (
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Tokens in</TableHead>
+                    <TableHead>Tokens out</TableHead>
+                    <TableHead>Cost</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {recentActivity.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="whitespace-nowrap text-muted-foreground">{new Date(row.created_at).toLocaleString()}</TableCell>
+                      <TableCell className="font-medium">{row.model ?? "unknown"}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.tokens_in}</TableCell>
+                      <TableCell className="text-muted-foreground">{row.tokens_out}</TableCell>
+                      <TableCell className="text-foreground">{formatUsd(row.cost_usd)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No usage recorded for this user yet.</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="bg-card">
         <CardHeader>
