@@ -86,6 +86,18 @@ export default function Hero() {
           </motion.div>
         </motion.div>
       </div>
+
+      <div className="relative flex flex-wrap items-center justify-center gap-x-5 gap-y-2 pb-1 text-xs text-white/50">
+        <Link href="/terms" className="underline decoration-white/20 transition hover:text-white/80 hover:decoration-white/50">
+          Terms of Service
+        </Link>
+        <Link href="/privacy" className="underline decoration-white/20 transition hover:text-white/80 hover:decoration-white/50">
+          Privacy Policy
+        </Link>
+        <Link href="/refund-policy" className="underline decoration-white/20 transition hover:text-white/80 hover:decoration-white/50">
+          Refund Policy
+        </Link>
+      </div>
     </div>
   );
 }

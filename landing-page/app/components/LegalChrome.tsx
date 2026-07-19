@@ -11,9 +11,9 @@ import Logo from "./Logo";
  * bar, and `.docs-scope`/`.docs-prose` reading column, but with no sidebar,
  * TOC, or mobile drawer: these are single, short, linear documents, not a
  * multi-page nav tree, so that machinery would be pure ceremony here. The
- * three legal pages cross-link each other in the small footer below, since
- * there is no site-wide footer component yet to hang these links off of
- * (see the routes' page.tsx files for the rest of the note on that).
+ * three legal pages cross-link each other in the small footer below — same
+ * link set/style as the one at the bottom of the homepage hero
+ * (Hero.tsx), just restyled for this page's lighter background.
  */
 export default function LegalChrome({ children }: { children: ReactNode }) {
   return (
