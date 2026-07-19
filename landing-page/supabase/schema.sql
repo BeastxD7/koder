@@ -706,3 +706,166 @@ order by i.created_at desc;
 
 revoke all on public.admin_agent_incidents_recent from public, anon, authenticated;
 grant select on public.admin_agent_incidents_recent to service_role;
+
+-- -----------------------------------------------------------------------------
+-- 7. Dodo Payments subscriptions: LakshX Pro ($15/mo, product pdt_0NjVgn2Le
+-- GJ7YL6KvcG2T in test mode) is the first paid tier. This table is the
+-- durable link between a Supabase user and their Dodo subscription state —
+-- populated ONLY by the /api/webhooks/dodo route (via
+-- upsert_subscription_from_webhook() below, service-role key), never
+-- writable by anon/authenticated (a user forging their own row would grant
+-- themselves Pro for free). `plan`/`status` drive check_budget()'s cap
+-- logic below: Free stays the existing LIFETIME $20 cap unchanged; Pro gets
+-- a separate, resetting MONTHLY cap tied to current_period_start/end (the
+-- subscription's actual billing cycle, from Dodo's previous_billing_date/
+-- next_billing_date — not a calendar-month approximation).
+-- -----------------------------------------------------------------------------
+create table if not exists public.user_subscription (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  dodo_customer_id text,
+  dodo_subscription_id text,
+  plan text not null default 'free' check (plan in ('free', 'pro')),
+  -- Mirrors Dodo's SubscriptionStatus enum exactly (pending/active/on_hold/
+  -- cancelled/failed/expired) so webhook payloads map straight across
+  -- without translation.
+  status text not null default 'active' check (status in ('pending', 'active', 'on_hold', 'cancelled', 'failed', 'expired')),
+  current_period_start timestamptz,
+  current_period_end timestamptz,
+  updated_at timestamptz not null default now()
+);
+create index if not exists user_subscription_dodo_subscription_id_idx on public.user_subscription(dodo_subscription_id);
+
+alter table public.user_subscription enable row level security;
+create policy "users read own subscription" on public.user_subscription
+  for select using (auth.uid() = user_id);
+-- no insert/update/delete policy for anon/authenticated -> default deny.
+-- writes happen exclusively via upsert_subscription_from_webhook() below.
+
+-- Called by /api/webhooks/dodo on subscription.active/renewed/on_hold/
+-- cancelled/failed/expired events, after that route independently verifies
+-- the Standard Webhooks signature. Upsert (not insert-only) because the
+-- SAME user_id gets repeated events over the subscription's lifetime
+-- (renewed every billing cycle, on_hold on a failed charge, etc).
+create or replace function public.upsert_subscription_from_webhook(
+  p_user_id uuid,
+  p_dodo_customer_id text,
+  p_dodo_subscription_id text,
+  p_plan text,
+  p_status text,
+  p_current_period_start timestamptz,
+  p_current_period_end timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into user_subscription (
+    user_id, dodo_customer_id, dodo_subscription_id, plan, status,
+    current_period_start, current_period_end, updated_at
+  ) values (
+    p_user_id, p_dodo_customer_id, p_dodo_subscription_id, p_plan, p_status,
+    p_current_period_start, p_current_period_end, now()
+  )
+  on conflict (user_id) do update set
+    dodo_customer_id = excluded.dodo_customer_id,
+    dodo_subscription_id = excluded.dodo_subscription_id,
+    plan = excluded.plan,
+    status = excluded.status,
+    current_period_start = excluded.current_period_start,
+    current_period_end = excluded.current_period_end,
+    updated_at = now();
+end;
+$$;
+
+revoke all on function public.upsert_subscription_from_webhook(uuid, text, text, text, text, timestamptz, timestamptz) from public, anon, authenticated;
+grant execute on function public.upsert_subscription_from_webhook(uuid, text, text, text, text, timestamptz, timestamptz) to service_role;
+
+-- Admin dashboard convenience view — every subscriber with their email
+-- joined in, same shape/pattern as admin_error_reports_recent above.
+create or replace view public.admin_subscriptions_recent as
+select
+  s.user_id,
+  u.email,
+  s.dodo_customer_id,
+  s.dodo_subscription_id,
+  s.plan,
+  s.status,
+  s.current_period_start,
+  s.current_period_end,
+  s.updated_at
+from user_subscription s
+left join auth.users u on u.id = s.user_id
+order by s.updated_at desc;
+
+revoke all on public.admin_subscriptions_recent from public, anon, authenticated;
+grant select on public.admin_subscriptions_recent to service_role;
+
+-- Replaces the Free-only check_budget() from section 1 above with a
+-- plan-aware version. SAME signature (p_user_id uuid, p_default_limit
+-- numeric) as before, so `create or replace` is safe here — no `drop
+-- function` needed (only a changed ARGUMENT LIST requires that, per the
+-- record_usage()/record_auth_event() precedents earlier in this file).
+--
+-- Free-tier behavior is BYTE-FOR-BYTE unchanged (lifetime cap against
+-- user_budget.credit_limit_usd) for anyone with no user_subscription row,
+-- or a non-('pro','active') row (on_hold/cancelled/failed/expired all fall
+-- back to Free behavior — fail closed, not open, on any billing hiccup).
+create or replace function public.check_budget(p_user_id uuid, p_default_limit numeric default 20.00)
+returns table(allowed boolean, reason text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  user_limit numeric;
+  user_spent numeric;
+  global_spent numeric;
+  global_ceiling numeric;
+  sub_plan text;
+  sub_status text;
+  period_start timestamptz;
+  -- $10/mo internal cost cap on the $15/mo Pro plan — see the business-model
+  -- note this was derived from: ~$1.30 Dodo fee leaves ~$13.70 net, a $10
+  -- cap leaves a ~$3.70/user/mo margin floor even at full utilization.
+  pro_monthly_cap_usd constant numeric := 10.00;
+begin
+  insert into user_budget (user_id, credit_limit_usd) values (p_user_id, p_default_limit)
+    on conflict (user_id) do nothing;
+
+  select credit_limit_usd into user_limit from user_budget where user_id = p_user_id for update;
+
+  select spent_usd, ceiling_usd into global_spent, global_ceiling from global_budget where id = true;
+  if global_spent >= global_ceiling then
+    return query select false, 'global_ceiling_reached';
+    return;
+  end if;
+
+  select plan, status, current_period_start into sub_plan, sub_status, period_start
+    from user_subscription where user_id = p_user_id;
+
+  if sub_plan = 'pro' and sub_status = 'active' then
+    select coalesce(sum(cost_usd), 0) into user_spent
+      from usage_ledger
+      where user_id = p_user_id
+        -- period_start should always be set for an active Pro row (the
+        -- webhook always supplies it), but fall back to a 30-day lookback
+        -- rather than an unbounded sum if it's ever null, so a data gap
+        -- degrades to "roughly monthly" instead of "lifetime" for a Pro user.
+        and created_at >= coalesce(period_start, now() - interval '30 days');
+    if user_spent >= pro_monthly_cap_usd then
+      return query select false, 'pro_monthly_cap_reached';
+    else
+      return query select true, null::text;
+    end if;
+  else
+    select coalesce(sum(cost_usd), 0) into user_spent from usage_ledger where user_id = p_user_id;
+    if user_spent >= user_limit then
+      return query select false, 'user_cap_reached';
+    else
+      return query select true, null::text;
+    end if;
+  end if;
+end;
+$$;
