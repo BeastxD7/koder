@@ -1,6 +1,6 @@
 /**
- * LakshX wordmark: keeps the original Koder app-icon mark (the purple
- * "spark" glyph — same gradient purple/violet used across the koder-chat
+ * LakshX wordmark: keeps the original app-icon mark (the purple
+ * "spark" glyph — same gradient purple/violet used across the lakshx-chat
  * panel UI, and the same accent family this page now uses) inlined next to
  * the "LakshX" name in the heading font. The dedicated LakshX brand mark
  * didn't read well recolored for this page, so the spark glyph carries the

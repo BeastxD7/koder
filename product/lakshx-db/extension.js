@@ -407,7 +407,7 @@ async function forgetCredentials(context) {
 function activate(context) {
   // Status bar entry point — this extension had NO visible UI entry point
   // before (command palette only), which is exactly the discoverability gap
-  // a real user hit. Priority 998, right after koder-chat's "✦ LakshX"
+  // a real user hit. Priority 998, right after lakshx-chat's "✦ LakshX"
   // (1000) and "$(radio-tower) Remote: ..." (999) items, so it lands
   // immediately beside them in the same right-aligned group rather than
   // floating off on its own.

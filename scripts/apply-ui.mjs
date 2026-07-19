@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Applies the Koder UI layer to the upstream tree:
+ * Applies the LakshX UI layer to the upstream tree:
  *  1. copies product/lakshx-ui into upstream/extensions/lakshx-ui (built-in ext)
  *  2. injects product/lakshx-ui/lakshx.css inline into the workbench HTML files
  *     (src/ so future compiles keep it, out/ so it's live without a rebuild)
@@ -24,7 +24,7 @@ for (const ext of ["lakshx-ui", "lakshx-chat", "lakshx-graph", "lakshx-db", "lak
   console.log(`${ext} extension → extensions/${ext}`);
 }
 
-// 1b. de-VSCode: the bundled Copilot chat extension must not exist in Koder
+// 1b. de-VSCode: the bundled Copilot chat extension must not exist in LakshX
 rmSync(join(upstream, "extensions", "copilot"), { recursive: true, force: true });
 console.log("removed extensions/copilot");
 
@@ -127,7 +127,7 @@ for (const rel of htmlFiles) {
   console.log(`css injected → ${rel}`);
 }
 
-// 2b. replace the VS Code letterpress watermark with the Koder spark
+// 2b. replace the VS Code letterpress watermark with the LakshX spark
 const lpSrcDir = join(root, "product", "lakshx-ui");
 const lpTargets = [
   "src/vs/workbench/browser/parts/editor/media",
@@ -148,7 +148,7 @@ for (const dir of lpTargets) {
   console.log(`letterpress → ${dir}`);
 }
 
-// 3. build-system tweak: Koder ships no copilot extension — the packaging
+// 3. build-system tweak: LakshX ships no copilot extension — the packaging
 // pipeline's ripgrep-shim step must skip instead of throwing.
 const copilotBuild = join(upstream, "build", "lib", "copilot.ts");
 if (existsSync(copilotBuild)) {
@@ -158,7 +158,7 @@ if (existsSync(copilotBuild)) {
   // dirs.ts/gulpfile.vscode.ts — cheap insurance to normalize unconditionally).
   let src = readFileSync(copilotBuild, "utf8").replace(/\r\n/g, "\n");
   const throwLine = "throw new Error(`[prepareBuiltInCopilotRipgrepShim] Copilot SDK directory not found at ${copilotSdkBase}`);";
-  const skipLine = "console.log(`[koder] copilot extension not bundled — skipping ripgrep shim`); return;";
+  const skipLine = "console.log(`[lakshx] copilot extension not bundled — skipping ripgrep shim`); return;";
   if (src.includes(throwLine)) {
     src = src.replace(throwLine, skipLine);
     writeFileSync(copilotBuild, src);
@@ -235,11 +235,11 @@ const gulpfileVscode = join(upstream, "build", "gulpfile.vscode.ts");
 // Inno Setup script) already handles their ABSENCE gracefully — its own
 // comment says "No-op when FileExplorerContextMenuCLSID is not defined
 // (e.g. OSS builds)" — but only if the definition is never set in the first
-// place; Koder's product.overrides.json sets "quality": "stable" for other
+// place; LakshX's product.overrides.json sets "quality": "stable" for other
 // reasons (branding/update-channel semantics elsewhere), which would
 // otherwise wrongly opt into this Microsoft-only branch and make Inno Setup
 // fail looking for a source file that was never built. Gate the branch
-// behind a new, Koder-specific opt-in flag (win32AppxPackagingEnabled) that
+// behind a new, LakshX-specific opt-in flag (win32AppxPackagingEnabled) that
 // product.overrides.json never sets, instead of touching "quality" itself.
 const gulpfileWin32 = join(upstream, "build", "gulpfile.vscode.win32.ts");
 {
@@ -249,10 +249,10 @@ const gulpfileWin32 = join(upstream, "build", "gulpfile.vscode.win32.ts");
   let src = readFileSync(gulpfileWin32, "utf8").replace(/\r\n/g, "\n");
   const before = "\t\tif (quality === 'stable' || quality === 'insider') {";
   const after =
-    "\t\t// Koder: Microsoft's Windows Store (AppX) packaging pipeline isn't built\n" +
+    "\t\t// LakshX: Microsoft's Windows Store (AppX) packaging pipeline isn't built\n" +
     "\t\t// by this fork — gated behind an explicit opt-in product.json flag that\n" +
     "\t\t// is never set here, rather than the quality check upstream uses (which\n" +
-    "\t\t// Koder sets to 'stable' for unrelated reasons). See scripts/apply-ui.mjs.\n" +
+    "\t\t// LakshX sets to 'stable' for unrelated reasons). See scripts/apply-ui.mjs.\n" +
     "\t\tif ((product as { win32AppxPackagingEnabled?: boolean }).win32AppxPackagingEnabled === true) {";
   if (!src.includes(before)) {
     console.error(

@@ -14,7 +14,7 @@ export const contentType = "image/jpeg";
 // /public and inlined as a base64 data URI — ImageResponse (Satori) can't
 // reliably fetch relative URLs, and doesn't support gradient/clip-text
 // fills, so the headline here is solid white instead of the page's
-// gradient treatment. The logo mark is the same inline Koder spark-glyph
+// gradient treatment. The logo mark is the same inline spark-glyph
 // SVG used by <Logo> (not a raster asset), so it stays in sync with the
 // on-page logo automatically.
 export default async function OgImage() {

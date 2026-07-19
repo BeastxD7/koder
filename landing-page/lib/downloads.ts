@@ -1,11 +1,10 @@
 /**
- * Single source of truth for Koder download links.
+ * Single source of truth for LakshX download links.
  *
- * The Koder GitHub repo is private, so plain `github.com/.../releases/...`
- * download links will NOT work for anonymous visitors (private repos block
- * unauthenticated downloads of both source and release assets). Build
- * artifacts are hosted publicly on Vercel Blob (store `koder-downloads`)
- * instead, uploaded from the `Build Koder` GitHub Actions workflow's
+ * CI (`Build LakshX` GitHub Actions workflow) doesn't publish a GitHub
+ * Release, so there's no `github.com/.../releases/...` asset to link to.
+ * Build artifacts are hosted publicly on Vercel Blob (store
+ * `koder-downloads`) instead, uploaded manually from each CI run's build
  * artifacts.
  *
  * Every download button/link in this app MUST read from this object —
@@ -51,8 +50,8 @@ export interface DownloadTarget {
  * (stable) blob path — see the cache-busting note above. */
 const BLOB_VERSION: Record<Exclude<DownloadKey, "macIntel">, string> = {
   macArm: "2026-07-19",
-  windows: "2026-07-17",
-  linux: "2026-07-16",
+  windows: "2026-07-19",
+  linux: "2026-07-19",
 };
 
 const withVersion = (url: string, version: string) => `${url}?v=${version}`;
@@ -86,9 +85,12 @@ export const DOWNLOADS: Record<DownloadKey, DownloadTarget> = {
     url: withVersion("https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Windows-x64.exe", BLOB_VERSION.windows),
   },
   linux: {
-    label: "Linux",
+    label: "Linux (.deb)",
     shortLabel: "Linux",
-    url: withVersion("https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/Koder-Linux-x64.tar.gz", BLOB_VERSION.linux),
+    // A real .deb package (CI's vscode-linux-x64-prepare-deb/build-deb gulp
+    // tasks), not a tar.gz of loose files — same "download, double-click to
+    // install" experience as the Windows/macOS installers above.
+    url: withVersion("https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Linux-x64.deb", BLOB_VERSION.linux),
   },
 };
 

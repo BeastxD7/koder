@@ -773,8 +773,8 @@ async function runFullWorkspaceVulnScan() {
 
 function activate(context) {
   // Dependency-graph entry point — a persistent, always-visible affordance
-  // (no cursor/selection needed). Priority 996, right after koder-db's
-  // "$(database) DB" (998) in the same right-aligned cluster as koder-chat's
+  // (no cursor/selection needed). Priority 996, right after lakshx-db's
+  // "$(database) DB" (998) in the same right-aligned cluster as lakshx-chat's
   // "✦ LakshX" (1000) and "$(radio-tower) Remote: ..." (999) — see those
   // files for the same numbering convention. (997 was formerly this
   // extension's "Call Graph" status item, removed as non-functional; left

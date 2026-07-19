@@ -9,17 +9,17 @@ const upstream = join(root, "upstream");
 const assets = join(root, "assets");
 
 const installs = [
-  ["koder.icns", "resources/darwin/code.icns"],
-  ["koder.ico", "resources/win32/code.ico"],
-  ["koder-512.png", "resources/linux/code.png"],
+  ["lakshx.icns", "resources/darwin/code.icns"],
+  ["lakshx.ico", "resources/win32/code.ico"],
+  ["lakshx-512.png", "resources/linux/code.png"],
   // Web/remote-access surface (the QR-code remote-access feature serves this
   // over HTTP) — resources/server/favicon.ico, wired into <link rel="icon">
   // by src/vs/code/browser/workbench/workbench{,-dev}.html and copied into
   // the web/reh builds by build/gulpfile.vscode.web.ts +
-  // build/gulpfile.reh.ts. Reusing koder.ico is fine: it already carries a
+  // build/gulpfile.reh.ts. Reusing lakshx.ico is fine: it already carries a
   // 16x16/24x24 (down to smaller) size set, a superset of what a favicon
   // needs, and browsers pick the closest match from a multi-size .ico.
-  ["koder.ico", "resources/server/favicon.ico"],
+  ["lakshx.ico", "resources/server/favicon.ico"],
 ];
 for (const [asset, dest] of installs) {
   const src = join(assets, asset);
@@ -87,19 +87,19 @@ if (existsSync(win32AssetsDir) && existsSync(win32Dest)) {
 
 // live dev bundle on macOS, if present. The .app name derives from
 // product.nameLong (see upstream/build/lib/electron.ts's
-// `productAppName: product.nameLong`), not a fixed "Koder.app" — same
+// `productAppName: product.nameLong`), not a fixed "LakshX.app" — same
 // rebrand-staleness class as the "Archive (macOS)" step in
 // .github/workflows/build.yml. Not CI-reachable (this path only exists
 // after a local `dev.sh`/`scripts/code.sh` run, never created by the CI
 // pipeline), but glob for whatever .app actually landed instead of
 // hardcoding a name that will go stale on the next rebrand too.
 const electronDir = join(upstream, ".build/electron");
-if (existsSync(electronDir) && existsSync(join(assets, "koder.icns"))) {
+if (existsSync(electronDir) && existsSync(join(assets, "lakshx.icns"))) {
   const appDir = readdirSync(electronDir).find((f) => f.endsWith(".app"));
   const app = appDir ? join(electronDir, appDir, "Contents/Resources") : null;
   if (app && existsSync(app)) {
     for (const f of readdirSync(app).filter((f) => f.endsWith(".icns"))) {
-      copyFileSync(join(assets, "koder.icns"), join(app, f));
+      copyFileSync(join(assets, "lakshx.icns"), join(app, f));
     }
     console.log("icon: refreshed dev bundle");
   }

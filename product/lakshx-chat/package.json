@@ -25,7 +25,7 @@
         {
           "id": "lakshx",
           "title": "LakshX",
-          "icon": "media/koder.svg"
+          "icon": "media/lakshx.svg"
         }
       ]
     },
@@ -35,7 +35,7 @@
           "type": "webview",
           "id": "lakshx.chatView",
           "name": "Agent",
-          "icon": "media/koder.svg"
+          "icon": "media/lakshx.svg"
         }
       ]
     },
@@ -43,7 +43,7 @@
       {
         "command": "lakshx.openAgent",
         "title": "LakshX: Open Agent",
-        "icon": "media/koder.svg"
+        "icon": "media/lakshx.svg"
       },
       {
         "command": "lakshx.newChat",

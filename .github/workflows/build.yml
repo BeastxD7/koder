@@ -1,4 +1,4 @@
-name: Build Koder
+name: Build LakshX
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
         include:
           - os: macos-14
             target: darwin-arm64
-            artifact: Koder-macOS-arm64
+            artifact: LakshX-macOS-arm64
           # macos-13 (Intel, darwin-x64) dropped: Apple Silicon is the
           # dominant current Mac hardware, and the macos-13 runner label has
           # repeatedly sat "queued" for 30+ minutes without ever starting
@@ -45,10 +45,10 @@ jobs:
           # failure) rather than actually building.
           - os: windows-2022
             target: win32-x64
-            artifact: Koder-Windows-x64
+            artifact: LakshX-Windows-x64
           - os: ubuntu-latest
             target: linux-x64
-            artifact: Koder-Linux-x64
+            artifact: LakshX-Linux-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -79,7 +79,7 @@ jobs:
           npm ci
           npm run bundle
 
-      - name: Apply Koder overlay
+      - name: Apply LakshX overlay
         shell: bash
         run: ./scripts/prepare.sh
 
@@ -205,7 +205,7 @@ jobs:
       # installed by the "Install upstream dependencies" step above — no
       # extra tooling needed on the runner. Requires the win32*AppId GUIDs
       # in product/product.overrides.json and the AppX-packaging patch in
-      # scripts/apply-ui.mjs (Koder doesn't build Microsoft's separate
+      # scripts/apply-ui.mjs (LakshX doesn't build Microsoft's separate
       # Windows Store package, so that branch is opted out rather than
       # quality-gated — see that script's comment for why).
       #

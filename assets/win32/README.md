@@ -4,7 +4,7 @@
 100/125/150/175/200/225/250%) — the Windows installer wizard's page-side image
 and small corner icon, as referenced by `upstream/build/win32/code.iss`'s
 `WizardImageFile`/`WizardSmallImageFile`. These are a separate asset from
-`koder.ico` (which only covers the installer `.exe`'s own file icon) — without
+`lakshx.ico` (which only covers the installer `.exe`'s own file icon) — without
 them, Inno Setup silently falls back to Microsoft's stock VS Code wizard
 artwork, which is exactly the bug this fixes.
 
@@ -17,7 +17,7 @@ Regenerate if the logo changes:
 ```python
 from PIL import Image
 
-SRC = "assets/koder-512.png"
+SRC = "assets/lakshx-512.png"
 SCALES = [100, 125, 150, 175, 200, 225, 250]
 BIG_BASE, SMALL_BASE = (164, 314), (55, 55)  # width, height, at 100%
 
