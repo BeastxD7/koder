@@ -83,8 +83,14 @@ export async function POST(req: NextRequest) {
   // "extra_forbidden" — see MODELS_REJECTING_STREAM_OPTIONS's doc comment).
   // Those models include `usage` on their final chunk anyway without being
   // asked, so recordUsageWhenDone()'s generic `if (ev.usage)` scan below
-  // still finds it with no further change needed.
-  if (!MODELS_REJECTING_STREAM_OPTIONS.has(deployment)) {
+  // still finds it with no further change needed. Every openai-compat.ts
+  // client (agent/src/providers/openai-compat.ts) always sends
+  // stream_options itself regardless of provider — DELETE it here, not just
+  // skip re-adding it, or an already-client-set field sails straight
+  // through untouched.
+  if (MODELS_REJECTING_STREAM_OPTIONS.has(deployment)) {
+    delete body.stream_options;
+  } else {
     body.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
   }
 

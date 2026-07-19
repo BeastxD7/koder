@@ -42,10 +42,20 @@ export class OpenAICompatAdapter implements ChatAdapter {
             model: req.model,
             [maxTokensParamName(req.model)]: req.maxTokens ?? 8192,
             messages: [{ role: "system", content: req.system }, ...toWire(req.messages, isVisionCapableModel(req.model))],
-            tools: req.tools.map((t) => ({
-              type: "function",
-              function: { name: t.name, description: t.description, parameters: t.input_schema },
-            })),
+            // Omit entirely when empty, not `tools: []` — confirmed live
+            // against Azure's grok-4-1-fast-reasoning deployment: an empty
+            // array 400s outright ("request failed"), whereas omitting the
+            // field is accepted by every provider on this adapter (a
+            // zero-tools turn is rare but real, e.g. a review-mode turn
+            // with no tools currently offered).
+            ...(req.tools.length > 0
+              ? {
+                  tools: req.tools.map((t) => ({
+                    type: "function",
+                    function: { name: t.name, description: t.description, parameters: t.input_schema },
+                  })),
+                }
+              : {}),
             stream: true,
             // without this the usage-bearing final chunk is never sent, and we
             // silently fall back to character-based token estimates
