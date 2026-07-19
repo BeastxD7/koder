@@ -60,6 +60,15 @@ const isWin = process.platform === "win32";
 // action instead of a generic error/Report button.
 const SESSION_EXPIRED_SENTINEL = "__LAKSHX_SESSION_EXPIRED__:";
 
+// Twin of agent/src/providers/types.ts's BUDGET_CAP_SENTINEL — same
+// duplication story as SESSION_EXPIRED_SENTINEL above. Marks an error thrown
+// by the hosted-model adapter as "the free budget cap was hit" (either the
+// user's own $5 lifetime cap, or the global ceiling), so the catch block
+// below renders it as a plain actionable system message instead of a
+// generic error/Report-button case — this isn't a bug, it's an expected,
+// self-resolving (upgrade, BYOK, or wait) state.
+const BUDGET_CAP_SENTINEL = "__LAKSHX_BUDGET_CAP__:";
+
 /**
  * Locate the editor's own bundled ripgrep binary, so the agent's grep tool
  * works on machines with no system-wide `rg` install (which was the actual,
@@ -1669,6 +1678,18 @@ class AgentViewProvider {
             isError: true,
             isSessionExpired: true,
           });
+        } else if (err.message?.startsWith(BUDGET_CAP_SENTINEL)) {
+          // Not isError — an expected/actionable state, same reasoning as
+          // the session-expired case above, not a bug worth a Report button.
+          // `markdown: true` because the user_cap_reached message embeds a
+          // `[Upgrade →](https://lakshx.in/pricing)` link — panel.js's
+          // renderRich() (markdown.js) turns that into a clickable
+          // data-href element the same way agent messages already do.
+          this.post({
+            type: "system",
+            text: err.message.slice(BUDGET_CAP_SENTINEL.length),
+            markdown: true,
+          });
         } else {
           this.post({ type: "system", text: `error: ${err.message}`, isError: true });
         }
@@ -2751,6 +2772,14 @@ async function activate(context) {
     }),
     vscode.commands.registerCommand("lakshx.login", () => {
       vscode.env.openExternal(vscode.Uri.parse("https://lakshx.in/login"));
+    }),
+    // Proactive upgrade entry point (not just the reactive budget-cap-error
+    // message above) — command-palette-invokable minimum, same "just open
+    // the website, no in-IDE checkout" idiom as lakshx.login just above.
+    // Checkout itself (Dodo Payments) lives entirely on lakshx.in/pricing,
+    // already live-tested — nothing to build here beyond the link.
+    vscode.commands.registerCommand("lakshx.upgradeToPro", () => {
+      vscode.env.openExternal(vscode.Uri.parse("https://lakshx.in/pricing"));
     }),
     vscode.commands.registerCommand("lakshx.logout", async () => {
       clearLakshxToken();

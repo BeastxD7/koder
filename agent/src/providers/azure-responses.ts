@@ -37,7 +37,7 @@
  */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { fetchWithRetry, httpErrorMessage, SESSION_EXPIRED_SENTINEL, sseLines, toolResultText } from "./types.js";
+import { budgetCapMessage, fetchWithRetry, httpErrorMessage, SESSION_EXPIRED_SENTINEL, sseLines, toolResultText } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 export class AzureResponsesAdapter implements ChatAdapter {
@@ -93,6 +93,17 @@ export class AzureResponsesAdapter implements ChatAdapter {
       if (res.status === 401) {
         await res.text().catch(() => ""); // drain the body, nothing in it we need
         throw new Error(`${SESSION_EXPIRED_SENTINEL}Your LakshX session has expired — sign in again to keep using the free hosted model.`);
+      }
+      // No baseUrl/kind gate needed here (unlike openai-compat.ts's) — this
+      // whole adapter is ONLY ever wired to the hosted lakshx proxy (see this
+      // file's module doc), so every 429 it can see is already, by
+      // construction, our own check_budget() 429, never a third-party
+      // provider's rate-limit.
+      if (res.status === 429) {
+        const rawBody = await res.text().catch(() => "");
+        const friendly = budgetCapMessage(rawBody);
+        if (friendly) throw new Error(friendly);
+        throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, rawBody));
       }
       throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, await res.text()));
     }

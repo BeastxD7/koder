@@ -56,6 +56,10 @@
         "icon": "$(gear)"
       },
       {
+        "command": "lakshx.upgradeToPro",
+        "title": "LakshX: Upgrade to Pro"
+      },
+      {
         "command": "lakshx.openProviderSettings",
         "title": "LakshX: Edit Provider Config File (JSON)"
       },

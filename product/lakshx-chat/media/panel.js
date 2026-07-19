@@ -106,6 +106,22 @@ function addMsg(cls, text) {
   return el;
 }
 
+// Rich-markdown variant of addMsg — used for system messages that need a
+// clickable link (e.g. the budget-cap upgrade CTA, "[Upgrade →](...)").
+// addMsg's plain textContent can't render that, so this instead goes through
+// the same renderRich()/markdown.js pipeline agent messages already use;
+// the delegated data-href click handler further down is not scoped to any
+// particular msg class, so a link rendered here is already wired up.
+function addRichMsg(cls, text) {
+  clearEmpty();
+  const el = document.createElement("div");
+  el.className = `msg ${cls}`;
+  el.innerHTML = renderRich(text);
+  messagesEl.appendChild(el);
+  scrollBottom();
+  return el;
+}
+
 // ---------- error reporting ----------
 // Keyed by a locally-minted id (not DOM element identity) so a
 // "reportErrorDone" reply can find its button even if several reports are
@@ -2206,7 +2222,7 @@ function applyEvent(m, replaying) {
       break;
     }
     case "toolImage": applyToolImage(m); break;
-    case "system": m.isError ? addErrorMsg(m.text, m.isSessionExpired) : addMsg("system", m.text); break;
+    case "system": m.isError ? addErrorMsg(m.text, m.isSessionExpired) : m.markdown ? addRichMsg("system", m.text) : addMsg("system", m.text); break;
     case "modeChanged":
       setModeUI(m.mode);
       if (m.auto) addMsg("system", `Plan complete — switched to ${m.mode} mode.`);
@@ -2587,7 +2603,7 @@ window.addEventListener("message", (e) => {
     }
     case "historyList": showHistory(m.chats); break;
     case "planReady": showPlanBar(m.path); break;
-    case "system": m.isError ? addErrorMsg(m.text, m.isSessionExpired) : addMsg("system", m.text); break;
+    case "system": m.isError ? addErrorMsg(m.text, m.isSessionExpired) : m.markdown ? addRichMsg("system", m.text) : addMsg("system", m.text); break;
     case "addAttachment": addAttachment(m.attachment); break;
     // Voice mode (docs/research/14-voice-mode.md): insert-don't-send — text
     // lands at the caret for the user to review/edit, never auto-submitted.

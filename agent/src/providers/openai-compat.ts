@@ -5,7 +5,7 @@
  */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { fetchWithRetry, httpErrorMessage, sseLines, toolResultText } from "./types.js";
+import { budgetCapMessage, fetchWithRetry, httpErrorMessage, sseLines, toolResultText } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 // OpenAI's reasoning-model family (o1/o3/o4/gpt-5*) rejects `max_tokens`
@@ -18,6 +18,15 @@ function maxTokensParamName(model: string): "max_tokens" | "max_completion_token
   const bare = model.replace(/^.*\//, ""); // strip any "provider/" prefix
   return /^(o[1-9]|gpt-5)/i.test(bare) ? "max_completion_tokens" : "max_tokens";
 }
+
+// This one adapter serves both third-party providers (OpenAI, OpenRouter,
+// Groq, ...) AND the hosted lakshx proxy (loop.ts's RESPONSES_API_ONLY_MODELS
+// routing rewrites the lakshx preset's `kind` from "azure-responses" to
+// "openai" for non-reasoning models — see azure-responses.ts's module doc —
+// so by the time a request reaches here, `kind` can no longer tell "our
+// proxy" apart from real OpenAI BYOK). `baseUrl` is the only stable tell,
+// mirroring audit.ts's existing `/api/lakshx-model` suffix match.
+const LAKSHX_PROXY_BASE_URL_RE = /\/api\/lakshx-model\/?$/;
 
 export class OpenAICompatAdapter implements ChatAdapter {
   constructor(private cfg: ProviderConfig) {}
@@ -65,7 +74,15 @@ export class OpenAICompatAdapter implements ChatAdapter {
       { signal: req.signal },
     );
     if (!res.ok) {
-      throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, await res.text()));
+      const rawBody = await res.text().catch(() => "");
+      // Gate on baseUrl (see LAKSHX_PROXY_BASE_URL_RE above) — a 429 from
+      // every OTHER provider on this shared adapter is a genuine rate-limit,
+      // not our own check_budget() cap, and must never be mislabeled.
+      if (res.status === 429 && LAKSHX_PROXY_BASE_URL_RE.test(this.cfg.baseUrl)) {
+        const friendly = budgetCapMessage(rawBody);
+        if (friendly) throw new Error(friendly);
+      }
+      throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, rawBody));
     }
 
     let text = "";

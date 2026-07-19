@@ -155,6 +155,67 @@ export function streamMaxMs(): number {
 export const SESSION_EXPIRED_SENTINEL = "__LAKSHX_SESSION_EXPIRED__:";
 
 /**
+ * Prefix marking an Error's message as "the free hosted-model budget cap was
+ * hit" — same duplication story as `SESSION_EXPIRED_SENTINEL` immediately
+ * above (extension.js mirrors this exact literal, no shared import boundary)
+ * so its catch block can render a plain, actionable system message instead
+ * of falling through to the generic error/Report-button path. Unlike a
+ * session expiry, this isn't a bug or something worth reporting — it's an
+ * expected state (see `budgetCapMessage()` below for the two reasons this
+ * covers).
+ */
+export const BUDGET_CAP_SENTINEL = "__LAKSHX_BUDGET_CAP__:";
+
+/**
+ * Turns a 429 response body from the LakshX hosted proxy
+ * (landing-page/app/api/lakshx-model/{chat/completions,responses}/route.ts)
+ * into a friendly, actionable, `BUDGET_CAP_SENTINEL`-prefixed message — or
+ * `undefined` if `rawBody` isn't one of the two known reasons, so the caller
+ * falls back to the generic `httpErrorMessage()` path rather than mislabeling
+ * an unrelated 429 (a genuine third-party rate-limit on openai-compat.ts's
+ * other providers, or a same-shaped-but-different route failure) as a budget
+ * cap.
+ *
+ * The two reasons come straight from `check_budget()` in
+ * landing-page/supabase/schema.sql (confirmed against schema.sql and both
+ * route.ts files: `Response.json({ error: reason }, { status: 429 })`, where
+ * `reason` is exactly one of these two literals, or a third fallback string
+ * for an RPC-level failure that intentionally does NOT match either case
+ * here and falls through instead):
+ *   - "user_cap_reached": THIS user hit their own $5 lifetime cap — upgrading
+ *     (a paid plan gets a monthly cap instead) or BYOK both unblock them, so
+ *     the message pushes both, with a clickable link to the pricing page.
+ *   - "global_ceiling_reached": a global, non-user-specific ceiling (~$800,
+ *     shared across every free-tier user) — upgrading does NOT help this one,
+ *     so the message must not push it; only BYOK or waiting helps.
+ *
+ * Shared by both hosted-proxy-serving adapters (azure-responses.ts,
+ * openai-compat.ts) so the wording can't drift between the two paths a
+ * capped-out user might hit depending on which model they're on.
+ */
+export function budgetCapMessage(rawBody: string): string | undefined {
+  let reason: unknown;
+  try {
+    reason = JSON.parse(rawBody)?.error;
+  } catch {
+    return undefined;
+  }
+  if (reason === "user_cap_reached") {
+    return (
+      `${BUDGET_CAP_SENTINEL}You've used your free $5 of hosted model credit. ` +
+      `[Upgrade →](https://lakshx.in/pricing) for a monthly cap, or add your own API key in Settings to keep using your own provider.`
+    );
+  }
+  if (reason === "global_ceiling_reached") {
+    return (
+      `${BUDGET_CAP_SENTINEL}LakshX's overall free-tier usage ceiling has been reached for now — this resets periodically. ` +
+      `Try again later, or add your own API key via the gear icon in this panel.`
+    );
+  }
+  return undefined;
+}
+
+/**
  * Builds a clean, user-facing message for a failed HTTP response — never
  * dumps a raw HTML error page (e.g. a platform-level 404/500 from an infra
  * layer in front of the actual app, which returns its own styled error page
