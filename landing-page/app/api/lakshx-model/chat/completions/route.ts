@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
   // underlying fetch that `meterStream` (tee'd below) reads from, so ANY
   // interruption silently dropped usage recording entirely — Azure had
   // already generated (and billed for) tokens that never made it into
-  // usage_ledger, undermining the $20/user and $800 global caps this whole
+  // usage_ledger, undermining the $5/user and $800 global caps this whole
   // proxy exists to enforce. Letting the Azure call run to natural
   // completion regardless of the client's presence costs nothing extra
   // (Azure bills generated tokens either way) and means we always get an

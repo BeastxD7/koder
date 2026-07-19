@@ -69,7 +69,7 @@ export class AzureResponsesAdapter implements ChatAdapter {
             // (openai-compat.ts's `maxTokensParamName`).
             max_output_tokens: req.maxTokens ?? 8192,
             // "low": this is the free/hosted, budget-capped path ($800 global
-            // ceiling, $20/user cap — landing-page's check_budget/record_usage),
+            // ceiling, $5/user cap — landing-page's check_budget/record_usage),
             // and an agentic coding loop pays this cost on EVERY tool-calling
             // round-trip, not once per conversation — favor latency/cost over
             // reasoning depth. Not verified against the (now-deleted) disposable

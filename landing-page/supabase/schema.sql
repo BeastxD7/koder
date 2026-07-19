@@ -31,7 +31,7 @@ alter table public.usage_ledger add column if not exists model text;
 
 create table if not exists public.user_budget (
   user_id uuid primary key references auth.users(id) on delete cascade,
-  credit_limit_usd numeric(10,2) not null default 20.00
+  credit_limit_usd numeric(10,2) not null default 5.00
 );
 
 -- Singleton row (id is always `true`) tracking total spend against the
@@ -64,7 +64,7 @@ alter table public.global_budget enable row level security;
 -- Pre-request gate: called by the proxy BEFORE forwarding to Azure. Reads
 -- the running totals directly from source-of-truth tables (no cache, no
 -- eventually-consistent counter) so the check is as fresh as the DB allows.
--- Auto-provisions a user_budget row (default $20) on first use.
+-- Auto-provisions a user_budget row (default $5) on first use.
 --
 -- TOCTOU note (row lock below), stated honestly: the proxy calls this
 -- function and record_usage() as two SEPARATE `supabase.rpc()` calls (see
@@ -102,7 +102,7 @@ alter table public.global_budget enable row level security;
 -- than this pass warrants for a low-concurrency, pre-revenue product; this
 -- lock is added now so it's already in place, correctly scoped, whenever
 -- that caller-side work happens.
-create or replace function public.check_budget(p_user_id uuid, p_default_limit numeric default 20.00)
+create or replace function public.check_budget(p_user_id uuid, p_default_limit numeric default 5.00)
 returns table(allowed boolean, reason text)
 language plpgsql
 security definer
@@ -530,7 +530,7 @@ begin
     -- same default as check_budget()'s p_default_limit when no user_budget
     -- row exists yet for this user (e.g. they've never made a hosted-model
     -- request, so check_budget() has never had a chance to provision one).
-    coalesce((select b.credit_limit_usd from user_budget b where b.user_id = auth.uid()), 20.00)::numeric,
+    coalesce((select b.credit_limit_usd from user_budget b where b.user_id = auth.uid()), 5.00)::numeric,
     coalesce((select sum(l.tokens_in) from usage_ledger l where l.user_id = auth.uid()), 0)::bigint,
     coalesce((select sum(l.tokens_out) from usage_ledger l where l.user_id = auth.uid()), 0)::bigint;
 end;
@@ -715,7 +715,7 @@ grant select on public.admin_agent_incidents_recent to service_role;
 -- upsert_subscription_from_webhook() below, service-role key), never
 -- writable by anon/authenticated (a user forging their own row would grant
 -- themselves Pro for free). `plan`/`status` drive check_budget()'s cap
--- logic below: Free stays the existing LIFETIME $20 cap unchanged; Pro gets
+-- logic below: Free gets a LIFETIME $5 cap; Pro gets
 -- a separate, resetting MONTHLY cap tied to current_period_start/end (the
 -- subscription's actual billing cycle, from Dodo's previous_billing_date/
 -- next_billing_date — not a calendar-month approximation).
@@ -812,7 +812,7 @@ grant select on public.admin_subscriptions_recent to service_role;
 -- user_budget.credit_limit_usd) for anyone with no user_subscription row,
 -- or a non-('pro','active') row (on_hold/cancelled/failed/expired all fall
 -- back to Free behavior — fail closed, not open, on any billing hiccup).
-create or replace function public.check_budget(p_user_id uuid, p_default_limit numeric default 20.00)
+create or replace function public.check_budget(p_user_id uuid, p_default_limit numeric default 5.00)
 returns table(allowed boolean, reason text)
 language plpgsql
 security definer

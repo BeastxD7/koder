@@ -40,7 +40,7 @@ export default function SignInPage() {
         a fair-use budget:
       </p>
       <ul>
-        <li>Each signed-in user gets a <strong>$20</strong> usage allowance.</li>
+        <li>Each signed-in user gets a <strong>$5</strong> usage allowance.</li>
         <li>
           There&rsquo;s also a shared, project-wide ceiling across every user — how the free tier stays
           free for everyone rather than one heavy user exhausting it for the rest.
