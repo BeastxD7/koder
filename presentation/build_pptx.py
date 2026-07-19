@@ -542,7 +542,7 @@ kicker(s, "Where this goes")
 headline(s, [("From autocomplete. To an autonomous agent. To an engineering team's ", {}),
              ("shared brain.", {"italic": True, "color": ACCENT})],
          size=34, top=Inches(2.2), height=Inches(3), width=Inches(11))
-footer(s, ["lakshx.in", "github.com/lakshx-ide/lakshx", "[ your contact here ]"])
+footer(s, ["lakshx.in", "github.com/BeastxD7/LakshX-IDE", "contact@lakshx.in"])
 
 prs.save("lakshx-pitch-deck.pptx")
 print("wrote lakshx-pitch-deck.pptx —", len(prs.slides.__iter__.__self__._sldIdLst), "slides")
