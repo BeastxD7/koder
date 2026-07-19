@@ -7,8 +7,8 @@
   graph mode: force layout, search/filter, hide/collapse externals, click-to-
   focus, hover tooltip, and cycle highlighting; the GUIDED TOUR mode: step
   panel (tier/counter/title/blurb), Next/Prev navigation, click-a-node-to-
-  jump, and the collapsed-cycle stop; plus the mode toggle back to the call
-  graph. NOT loaded by the extension — test-only.
+  jump, and the collapsed-cycle stop; plus the mode toggle between the two.
+  NOT loaded by the extension — test-only.
 -->
 <html><head>
 <meta charset="UTF-8">
@@ -18,21 +18,15 @@
 <div id="app">
   <div id="toolbar">
     <div id="modeToggle" role="tablist">
-      <button id="modeDep" role="tab">Dependencies</button>
-      <button id="modeCall" role="tab" class="active">Call graph</button>
+      <button id="modeDep" role="tab" class="active">Dependencies</button>
       <button id="modeTour" role="tab">Guided Tour</button>
     </div>
-    <span id="title">Call Graph</span>
     <div class="spacer"></div>
     <button id="zoomOut" class="ghost" title="Zoom out">&#8722;</button>
     <button id="zoomReset" class="ghost" title="Reset view">Reset</button>
     <button id="zoomIn" class="ghost" title="Zoom in">&#43;</button>
   </div>
-  <div id="legend">
-    <span class="chip incoming"><span class="dot"></span>Incoming (callers)</span>
-    <span class="chip outgoing"><span class="dot"></span>Outgoing (callees)</span>
-  </div>
-  <div id="depLegend" hidden>
+  <div id="depLegend">
     <span class="chip internal"><span class="dot"></span>File</span>
     <span class="chip external"><span class="dot"></span>External package</span>
     <span class="chip cycle"><span class="dot"></span>Circular dependency</span>
@@ -43,9 +37,9 @@
     <label class="check"><input id="depCollapseExt" type="checkbox" />Collapse externals</label>
     <button id="depRescan" class="ghost" title="Re-scan the workspace">Re-scan</button>
   </div>
-  <div id="stats" hidden></div>
+  <div id="stats"></div>
   <canvas id="canvas"></canvas>
-  <div id="empty" hidden>No call hierarchy available at the cursor.</div>
+  <div id="empty" hidden></div>
   <div id="depHint" hidden>
     Build an interactive map of your workspace's file &amp; package dependencies.
     <br><button id="depScanBtn">Scan workspace</button>

@@ -20,13 +20,6 @@
   --ease: cubic-bezier(0.25, 0.1, 0.25, 1);
   --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
 
-  /* graph-specific accents, kept in the same family as --accent */
-  --incoming: #45c4ff;
-  --outgoing: #ff9d5c;
-  --node-bg: #171b23;
-  --node-border: rgba(255, 255, 255, 0.1);
-  --node-root-border: var(--accent);
-
   /* dependency-graph palette */
   --external: #5cd6a8; /* external package nodes */
   --cycle: #ff5c7c; /* circular-dependency highlight */
@@ -63,14 +56,6 @@ html, body {
   flex-shrink: 0;
 }
 #toolbar .spacer { flex: 1; }
-#title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 button.ghost {
   background: rgba(255, 255, 255, 0.04);
@@ -113,7 +98,7 @@ button.ghost:hover {
   color: #fff;
 }
 
-#legend, #depLegend {
+#depLegend {
   display: flex;
   gap: 14px;
   padding: 6px 12px;
@@ -135,8 +120,6 @@ button.ghost:hover {
   border-radius: 50%;
   display: inline-block;
 }
-.chip.incoming .dot { background: var(--incoming); }
-.chip.outgoing .dot { background: var(--outgoing); }
 .chip.internal .dot { background: var(--accent); }
 .chip.external .dot { background: var(--external); }
 .chip.cycle .dot { background: var(--cycle); }

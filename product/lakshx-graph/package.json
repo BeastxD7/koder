@@ -1,7 +1,7 @@
 {
   "name": "lakshx-graph",
-  "displayName": "LakshX Call Graph",
-  "description": "LakshX's native call-graph panel — interactive incoming/outgoing call hierarchy from the symbol under your cursor.",
+  "displayName": "LakshX Graph",
+  "description": "LakshX's native dependency-graph panel — interactive file/package import map with cycle detection, a dependency-ordered Guided Tour, per-file explain, and inline vulnerability scanning.",
   "version": "0.0.1",
   "publisher": "lakshx",
   "license": "MIT",
@@ -17,11 +17,6 @@
   ],
   "contributes": {
     "commands": [
-      {
-        "command": "lakshx.showCallGraph",
-        "title": "LakshX: Show Call Graph",
-        "icon": "$(graph)"
-      },
       {
         "command": "lakshx.showDependencyGraph",
         "title": "LakshX: Show Dependency Graph",
@@ -44,29 +39,13 @@
       }
     ],
     "menus": {
-      "editor/title": [
-        {
-          "command": "lakshx.showCallGraph",
-          "when": "editorHasCallHierarchyProvider",
-          "group": "navigation@98"
-        }
-      ],
       "editor/context": [
-        {
-          "command": "lakshx.showCallGraph",
-          "when": "editorHasCallHierarchyProvider",
-          "group": "lakshx@1"
-        },
         {
           "command": "lakshx.graph.explainFile",
           "group": "lakshx@2"
         }
       ],
       "commandPalette": [
-        {
-          "command": "lakshx.showCallGraph",
-          "when": "editorHasCallHierarchyProvider"
-        },
         {
           "command": "lakshx.showDependencyGraph"
         },
