@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 import CtaButton from "./CtaButton";
@@ -56,6 +57,11 @@ export default function Pricing() {
           <motion.p variants={fadeUp} className="mt-4 text-base text-ink-navy/60 sm:text-lg">
             BYOK usage never has a cap. Pro just makes the hosted model your daily driver, no key required.
           </motion.p>
+          <motion.div variants={fadeUp} className="mt-3">
+            <Link href="/pricing" className="text-sm font-medium text-lakshx-violet underline decoration-lakshx-violet/30 hover:decoration-lakshx-violet">
+              See full plans, including Pro+ premium models →
+            </Link>
+          </motion.div>
         </motion.div>
 
         <motion.div

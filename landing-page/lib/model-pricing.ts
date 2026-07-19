@@ -9,6 +9,20 @@
  */
 export const PRICE_PER_1M_BY_MODEL: Record<string, { input: number; output: number }> = {
   "gpt-5-mini": { input: 0.125, output: 1.0 },
+
+  // --- Planned for Pro+ (not yet deployed to Azure AI Foundry) ---
+  // These keys are placeholders matching the Foundry catalog's usual naming;
+  // whatever deployment NAME is actually chosen at deploy time must match
+  // the key used here, or priceForModel() falls back to gpt-5-mini's rate
+  // and logs loudly (see below) rather than silently mispricing. Rates
+  // are from Azure AI Foundry's public pricing pages as of 2026-07 —
+  // re-verify against the live pricing page before actually deploying any
+  // of these, prices drift.
+  "gpt-5-nano": { input: 0.05, output: 0.4 }, // Pro's fallback-on-cap target
+  "gpt-5": { input: 1.25, output: 10.0 },
+  "grok-4-fast-reasoning": { input: 0.43, output: 1.73 },
+  "claude-sonnet-5": { input: 3.0, output: 15.0 },
+  "claude-opus-4-8": { input: 5.0, output: 25.0 },
 };
 
 /**
