@@ -1,18 +1,19 @@
 import Link from "next/link";
 import Logo from "./Logo";
-import SectionGlow from "./SectionGlow";
 
 /**
  * The homepage's full footer — a fuller sibling to LegalChrome.tsx's thin
  * legal-links row, now that there's real page content below a single hero.
  * Deliberately small: this is a pre-revenue product's marketing site, not an
  * enterprise footer with a dozen columns.
+ *
+ * No own background/overflow-hidden/SectionGlow — plain content inside the
+ * shared violet-wash wrapper in page.tsx, same as Features/Pricing. The
+ * top border is a deliberate thin footer rule, not a background seam.
  */
 export default function SiteFooter() {
   return (
-    <footer className="relative isolate overflow-hidden border-t border-ink-navy/[0.06] bg-white py-14">
-      <SectionGlow variant="c" />
-
+    <footer className="relative border-t border-ink-navy/[0.06] py-14">
       <div className="mx-auto flex max-w-6xl flex-col gap-10 px-6 sm:px-10">
         <div className="flex flex-col items-start justify-between gap-8 sm:flex-row sm:items-center">
           <div className="flex flex-col gap-2.5">

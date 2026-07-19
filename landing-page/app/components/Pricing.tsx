@@ -2,7 +2,6 @@
 
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
-import SectionGlow from "./SectionGlow";
 import CtaButton from "./CtaButton";
 
 const fadeUp = {
@@ -29,11 +28,11 @@ const PRO_ITEMS = [
   "Support that goes straight to the team building it",
 ];
 
+// No own background/overflow-hidden/SectionGlow here — plain content
+// inside the shared violet-wash wrapper in page.tsx, same as Features.
 export default function Pricing() {
   return (
-    <section className="relative isolate overflow-hidden bg-paper-dim py-24 sm:py-32">
-      <SectionGlow variant="b" />
-
+    <section className="relative py-24 sm:py-32">
       <div className="mx-auto max-w-5xl px-6 sm:px-10">
         <motion.div
           variants={stagger}

@@ -2,7 +2,6 @@
 
 import { motion } from "framer-motion";
 import { ShieldCheck, RotateCcw, KeyRound, Mic } from "lucide-react";
-import SectionGlow from "./SectionGlow";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -44,20 +43,12 @@ const FEATURES = [
   },
 ];
 
+// No own background/overflow-hidden/SectionGlow here — this renders as
+// plain content inside the single shared violet-wash wrapper in page.tsx
+// (alongside Pricing/SiteFooter), so there's no per-section seam.
 export default function Features() {
   return (
-    <section className="relative isolate overflow-hidden bg-white py-24 sm:py-32">
-      {/* Seam treatment: a short, low-opacity fade that softens the hard
-          pixel edge where the hero's photo ends, without reading as its own
-          dark band — the violet SectionGlow below picks up immediately, so
-          the eye moves from photo straight into the wash, not through a
-          separate dark "dead zone" first. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-16 bg-gradient-to-b from-black/25 to-transparent sm:h-20"
-      />
-      <SectionGlow variant="a" />
-
+    <section className="relative py-24 sm:py-32">
       <div className="mx-auto max-w-6xl px-6 sm:px-10">
         <motion.div
           variants={stagger}
