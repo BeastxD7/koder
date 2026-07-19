@@ -2250,7 +2250,26 @@ const settingsPanel = document.getElementById("settingsPanel");
 const settingsBody = document.getElementById("settingsBody");
 
 const PROVIDERS = {
-  lakshx: { label: "LakshX (free, no key needed)", managed: true, models: ["gpt-5-mini"] },
+  // gpt-5-mini/gpt-5-4-mini stream reasoning natively (Azure Responses API);
+  // everything else here is Chat Completions-only on the same hosted proxy —
+  // loop.ts routes each model to the right wire adapter automatically, this
+  // list is purely which models the picker offers under the one managed
+  // "lakshx" provider (no separate key/provider entry needed for either kind).
+  lakshx: {
+    label: "LakshX (free, no key needed)",
+    managed: true,
+    models: [
+      "gpt-5-mini",
+      "gpt-5-4-mini",
+      "grok-4-1-fast-reasoning",
+      "deepseek-v4-pro",
+      "codestral-2501",
+      "llama-4-maverick",
+      "kimi-k2-7-code",
+      "kimi-k2-6",
+      "gpt-oss-120b",
+    ],
+  },
   anthropic: { label: "Anthropic (Claude)", keyUrl: "console.anthropic.com", models: ["claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5", "claude-fable-5"] },
   // OpenRouter routes to hundreds of models across every provider — no
   // `models` list here at all (the model field below is always a plain

@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cleanAzureError } from "../../../../lib/upstream-error";
 import { computeCostUsd } from "../../../../lib/model-pricing";
+import { RESPONSES_API_MODELS, DEFAULT_MODEL } from "../../../../lib/hosted-models";
 
 export const runtime = "nodejs";
 // Agentic turns can run long (multi-tool-call loops) — this is the ceiling
@@ -34,14 +35,16 @@ function supabaseAdmin(): SupabaseClient {
  * Required env vars (same four as the sibling route):
  *   AZURE_OPENAI_ENDPOINT     e.g. https://lakshx-ide-global-resource.openai.azure.com/openai/v1
  *   AZURE_OPENAI_API_KEY      Foundry/Azure OpenAI resource key
- *   AZURE_OPENAI_DEPLOYMENT   the Foundry deployment name, e.g. "gpt-5-mini"
+ *   AZURE_OPENAI_DEPLOYMENT   the DEFAULT Foundry deployment name (used when
+ *                             the client sends no model, or one outside
+ *                             RESPONSES_API_MODELS) — e.g. "gpt-5-mini"
  *   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
  */
 export async function POST(req: NextRequest) {
   const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
   const apiKey = process.env.AZURE_OPENAI_API_KEY;
-  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT;
-  if (!endpoint || !apiKey || !deployment) {
+  const defaultDeployment = process.env.AZURE_OPENAI_DEPLOYMENT ?? DEFAULT_MODEL;
+  if (!endpoint || !apiKey) {
     return Response.json({ error: "proxy misconfigured — missing AZURE_OPENAI_* env vars" }, { status: 500 });
   }
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -77,8 +80,14 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   // client sends "model" per the Responses wire shape (see
-  // agent/src/providers/azure-responses.ts); Azure's model field must be the
-  // deployment name, not whatever the client asked for.
+  // agent/src/providers/azure-responses.ts) — validate it against the
+  // Responses-API-capable deployments on this resource rather than trusting
+  // it outright (an unlisted model is never forwarded to Azure), falling
+  // back to the configured default if the client sent nothing or something
+  // this route doesn't serve (e.g. an old IDE build, or a Chat-Completions-
+  // only model that should have gone to the sibling route instead).
+  const requestedModel = typeof body.model === "string" ? body.model : "";
+  const deployment = RESPONSES_API_MODELS.has(requestedModel) ? requestedModel : defaultDeployment;
   body.model = deployment;
   // Stateless replay only — the client already sends the full conversation
   // as `input` on every turn (azure-responses.ts's `toWire`); never let a

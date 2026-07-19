@@ -54,6 +54,19 @@ import { freezeSpec, parseVerificationSpecInput, runVerification, type Verificat
 export type AgentMode = "review" | "approve" | "auto" | "royal";
 
 /**
+ * Models on the hosted "lakshx" Foundry resource that support Azure's
+ * Responses API (reasoning-summary streaming) — every other model on that
+ * resource is Chat Completions-only. MUST stay in sync with
+ * landing-page/lib/hosted-models.ts's RESPONSES_API_MODELS — duplicated
+ * rather than shared since agent/ and landing-page/ are separate deploy
+ * targets with no import boundary between them (same tradeoff as
+ * SESSION_EXPIRED_SENTINEL in providers/types.ts). See this file's use
+ * below for how the rest of the models route through the "openai" kind
+ * adapter instead of azure-responses.ts.
+ */
+const RESPONSES_API_ONLY_MODELS = new Set(["gpt-5-mini", "gpt-5-4-mini"]);
+
+/**
  * Regional-language / Hinglish explain toggle (docs/research/16 round 2,
  * "Differentiation for the Indian/global vibecoder audience"). "english" is
  * the default/no-op — see `systemPrompt()` below for the byte-identical
@@ -1405,7 +1418,19 @@ export async function runPrompt(
 ): Promise<"end_turn" | "max_turn_requests" | "cancelled"> {
   const cfg = loadConfig();
   const { provider, model } = resolveModel(cfg, session.model);
-  const adapter = makeAdapter(provider.kind, provider);
+  // The hosted "lakshx" preset serves TWO different wire shapes off the same
+  // proxy/apiKey: gpt-5-mini/gpt-5-4-mini support Azure's Responses API
+  // (azure-responses.ts, reasoning-summary streaming), but every other
+  // model on that Foundry resource (Grok/DeepSeek/Codestral/Llama/Kimi/
+  // gpt-oss) is Chat Completions-only (see landing-page/lib/hosted-
+  // models.ts's RESPONSES_API_MODELS vs CHAT_COMPLETIONS_MODELS — must stay
+  // in sync with that file). Rather than a second managed provider id (which
+  // would need its own auth-sync plumbing in product/lakshx-chat/
+  // extension.js for no real benefit), override just the wire kind here —
+  // baseUrl/apiKey are identical either way, openai-compat.ts already speaks
+  // plain Chat Completions against the same proxy URL.
+  const adapterProvider = provider.kind === "azure-responses" && !RESPONSES_API_ONLY_MODELS.has(model) ? { ...provider, kind: "openai" as const } : provider;
+  const adapter = makeAdapter(adapterProvider.kind, adapterProvider);
 
   // Metadata-only cloud audit mirror (see audit.ts's postAuditMetadata) —
   // gated on the ACTIVE PROVIDER'S IDENTITY (kind === "azure-responses", the
