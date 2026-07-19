@@ -11,7 +11,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import { maybeCompact, readFileAtCommit, undoFile, undoPaths } from "./checkpoint.js";
 import { availableProviders, loadConfig } from "./config.js";
 import { normalizeExplainLanguage, runPrompt, toolTitle, type AgentMode, type AgentSession } from "./loop.js";
-import { BUDGET_CAP_SENTINEL, SESSION_EXPIRED_SENTINEL, toolResultText } from "./providers/types.js";
+import { BUDGET_CAP_SENTINEL, MODEL_REQUIRES_PRO_SENTINEL, SESSION_EXPIRED_SENTINEL, toolResultText } from "./providers/types.js";
 import { probeProvider } from "./providers/validate.js";
 import { loadSessionFile, pruneSessions, saveSessionSoon, type PromptCheckpoint, type PromptMarker } from "./store.js";
 import { backgroundTasks, formatTaskNotifications } from "./tasks.js";
@@ -510,7 +510,11 @@ const agentApp = acp
       // untouched (`.toResult()` keeps its own `.message` verbatim) — this
       // was only found by tracing a failing regression test, not by
       // inspection alone.
-      if (err?.message?.startsWith(SESSION_EXPIRED_SENTINEL) || err?.message?.startsWith(BUDGET_CAP_SENTINEL)) {
+      if (
+        err?.message?.startsWith(SESSION_EXPIRED_SENTINEL) ||
+        err?.message?.startsWith(BUDGET_CAP_SENTINEL) ||
+        err?.message?.startsWith(MODEL_REQUIRES_PRO_SENTINEL)
+      ) {
         throw new acp.RequestError(-32603, err.message);
       }
       await notify({

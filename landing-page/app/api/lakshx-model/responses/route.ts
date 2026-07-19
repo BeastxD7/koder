@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cleanAzureError } from "../../../../lib/upstream-error";
 import { computeCostUsd } from "../../../../lib/model-pricing";
-import { RESPONSES_API_MODELS, DEFAULT_MODEL } from "../../../../lib/hosted-models";
+import { RESPONSES_API_MODELS, DEFAULT_MODEL, getEffectivePlan, isModelAllowedForPlan } from "../../../../lib/hosted-models";
 
 export const runtime = "nodejs";
 // Agentic turns can run long (multi-tool-call loops) — this is the ceiling
@@ -88,6 +88,16 @@ export async function POST(req: NextRequest) {
   // only model that should have gone to the sibling route instead).
   const requestedModel = typeof body.model === "string" ? body.model : "";
   const deployment = RESPONSES_API_MODELS.has(requestedModel) ? requestedModel : defaultDeployment;
+
+  // Plan gate — see the identical block in the sibling chat/completions
+  // route.ts for the full reasoning (found missing live: gpt-5-4-mini is
+  // Pro-only same as every Chat-Completions model here, but nothing ever
+  // checked that on this route either).
+  const plan = await getEffectivePlan(supabase, userId);
+  if (!isModelAllowedForPlan(deployment, plan)) {
+    return Response.json({ error: "model_requires_pro", model: deployment }, { status: 403 });
+  }
+
   body.model = deployment;
   // Stateless replay only — the client already sends the full conversation
   // as `input` on every turn (azure-responses.ts's `toWire`); never let a

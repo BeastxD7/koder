@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cleanAzureError } from "../../../../../lib/upstream-error";
 import { computeCostUsd } from "../../../../../lib/model-pricing";
-import { CHAT_COMPLETIONS_MODELS, DEFAULT_MODEL, MODELS_REJECTING_STREAM_OPTIONS } from "../../../../../lib/hosted-models";
+import { CHAT_COMPLETIONS_MODELS, DEFAULT_MODEL, MODELS_REJECTING_STREAM_OPTIONS, getEffectivePlan, isModelAllowedForPlan } from "../../../../../lib/hosted-models";
 
 export const runtime = "nodejs";
 // Agentic turns can run long (multi-tool-call loops) — this is the ceiling
@@ -76,6 +76,21 @@ export async function POST(req: NextRequest) {
   // this route doesn't serve.
   const requestedModel = typeof body.model === "string" ? body.model : "";
   const deployment = CHAT_COMPLETIONS_MODELS.has(requestedModel) ? requestedModel : defaultDeployment;
+
+  // Plan gate (found missing live: a Free user could select and bill
+  // against ANY deployed model, not just gpt-5-mini — the allowlist above
+  // only ever checked "is this deployed at all," never "is this user's
+  // plan allowed to use it"). Checked AFTER the allowlist substitution
+  // above so an invalid/unlisted model never reaches this far in the first
+  // place — this only ever runs against a real, deployed model name. 403,
+  // not 429: this is an authorization gate, not a budget/rate one, and the
+  // agent-side adapters (azure-responses.ts/openai-compat.ts) key off that
+  // distinction to avoid conflating it with check_budget()'s cap.
+  const plan = await getEffectivePlan(supabase, userId);
+  if (!isModelAllowedForPlan(deployment, plan)) {
+    return Response.json({ error: "model_requires_pro", model: deployment }, { status: 403 });
+  }
+
   body.model = deployment;
   // usage-bearing final SSE chunk is required to know what to bill — force
   // it on regardless of what the client sent, EXCEPT for models that reject

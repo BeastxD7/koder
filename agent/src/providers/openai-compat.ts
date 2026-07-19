@@ -5,7 +5,7 @@
  */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { budgetCapMessage, fetchWithRetry, httpErrorMessage, sseLines, toolResultText } from "./types.js";
+import { budgetCapMessage, fetchWithRetry, httpErrorMessage, planGateMessage, sseLines, toolResultText } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 // OpenAI's reasoning-model family (o1/o3/o4/gpt-5*) rejects `max_tokens`
@@ -80,6 +80,13 @@ export class OpenAICompatAdapter implements ChatAdapter {
       // not our own check_budget() cap, and must never be mislabeled.
       if (res.status === 429 && LAKSHX_PROXY_BASE_URL_RE.test(this.cfg.baseUrl)) {
         const friendly = budgetCapMessage(rawBody);
+        if (friendly) throw new Error(friendly);
+      }
+      // Same reasoning, same gate — a 403 from every OTHER provider on this
+      // shared adapter is a genuine auth failure, never our own plan gate
+      // (see hosted-models.ts's isModelAllowedForPlan).
+      if (res.status === 403 && LAKSHX_PROXY_BASE_URL_RE.test(this.cfg.baseUrl)) {
+        const friendly = planGateMessage(rawBody);
         if (friendly) throw new Error(friendly);
       }
       throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, rawBody));

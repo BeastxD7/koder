@@ -69,6 +69,14 @@ const SESSION_EXPIRED_SENTINEL = "__LAKSHX_SESSION_EXPIRED__:";
 // self-resolving (upgrade, BYOK, or wait) state.
 const BUDGET_CAP_SENTINEL = "__LAKSHX_BUDGET_CAP__:";
 
+// Twin of agent/src/providers/types.ts's MODEL_REQUIRES_PRO_SENTINEL — same
+// duplication story as the two above. Marks an error thrown by the
+// hosted-model adapter as "this model needs an active Pro subscription" (the
+// Free tier is gpt-5-mini only — see landing-page/lib/hosted-models.ts's
+// FREE_TIER_MODELS), rendered the same non-error, actionable way as a
+// budget-cap hit.
+const MODEL_REQUIRES_PRO_SENTINEL = "__LAKSHX_MODEL_REQUIRES_PRO__:";
+
 /**
  * Locate the editor's own bundled ripgrep binary, so the agent's grep tool
  * works on machines with no system-wide `rg` install (which was the actual,
@@ -1692,6 +1700,14 @@ class AgentViewProvider {
           this.post({
             type: "system",
             text: err.message.slice(BUDGET_CAP_SENTINEL.length),
+            markdown: true,
+          });
+        } else if (err.message?.startsWith(MODEL_REQUIRES_PRO_SENTINEL)) {
+          // Same non-error, actionable treatment as the budget-cap case —
+          // picking a model your plan doesn't cover isn't a bug either.
+          this.post({
+            type: "system",
+            text: err.message.slice(MODEL_REQUIRES_PRO_SENTINEL.length),
             markdown: true,
           });
         } else {

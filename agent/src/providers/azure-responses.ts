@@ -37,7 +37,7 @@
  */
 import type { ProviderConfig } from "../config.js";
 import { IMAGE_UNSUPPORTED_PLACEHOLDER, isVisionCapableModel } from "../vision.js";
-import { budgetCapMessage, fetchWithRetry, httpErrorMessage, SESSION_EXPIRED_SENTINEL, sseLines, toolResultText } from "./types.js";
+import { budgetCapMessage, fetchWithRetry, httpErrorMessage, planGateMessage, SESSION_EXPIRED_SENTINEL, sseLines, toolResultText } from "./types.js";
 import type { ChatAdapter, ChatMessage, ToolResultPart, TurnRequest, TurnResult } from "./types.js";
 
 export class AzureResponsesAdapter implements ChatAdapter {
@@ -102,6 +102,15 @@ export class AzureResponsesAdapter implements ChatAdapter {
       if (res.status === 429) {
         const rawBody = await res.text().catch(() => "");
         const friendly = budgetCapMessage(rawBody);
+        if (friendly) throw new Error(friendly);
+        throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, rawBody));
+      }
+      // Same no-gate reasoning as the 429 branch above — a 403 here can
+      // only ever be this proxy's own model/plan gate (see hosted-models.ts's
+      // isModelAllowedForPlan), never a third-party provider's auth failure.
+      if (res.status === 403) {
+        const rawBody = await res.text().catch(() => "");
+        const friendly = planGateMessage(rawBody);
         if (friendly) throw new Error(friendly);
         throw new Error(httpErrorMessage(this.cfg.baseUrl, res.status, rawBody));
       }

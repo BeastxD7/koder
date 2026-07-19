@@ -344,6 +344,28 @@ test("lakshx agent e2e over ACP against a scripted provider", { timeout: 120_000
               await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "fake/test-model" });
             });
 
+            await t2.test("hosted-proxy 403 model-plan gate rejects session/prompt with the sentinel-prefixed message intact", async () => {
+              // Regression test for a real live-reported gap: the hosted-
+              // model proxy (landing-page/app/api/lakshx-model/*) only ever
+              // checked "is this model deployed at all" (CHAT_COMPLETIONS_
+              // MODELS/RESPONSES_API_MODELS), never "is this user's PLAN
+              // allowed to use it" — a Free user could select and bill
+              // against any deployed model, not just gpt-5-mini. Same
+              // sentinel-propagation mechanics as the 429 budget-cap test
+              // above (403 is NOT in fetchWithRetry's RETRYABLE_STATUSES,
+              // so unlike that test this needs only one queued response).
+              await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "lakshxProxy/whatever-model" });
+              fake.enqueueHttpError(403, { error: "model_requires_pro", model: "grok-4-1-fast-reasoning" });
+              await assert.rejects(() => session.prompt("hello"), (err: any) => {
+                assert.match(err.message, /^__LAKSHX_MODEL_REQUIRES_PRO__:/);
+                assert.match(err.message, /grok-4-1-fast-reasoning needs an active Pro subscription/);
+                assert.match(err.message, /\[Upgrade →\]\(https:\/\/lakshx\.in\/pricing\)/);
+                assert.notEqual(err.message, "Internal error");
+                return true;
+              });
+              await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "fake/test-model" });
+            });
+
             await t2.test("auto mode: destructive-command floor hard-blocks force-push — no permission prompt, no execution", async () => {
               await ctx.request("lakshx/set_model", { sessionId: session.sessionId, model: "fake/test-model" });
               const permsBefore = permissionRequests.length;

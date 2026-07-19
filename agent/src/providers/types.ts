@@ -216,6 +216,43 @@ export function budgetCapMessage(rawBody: string): string | undefined {
 }
 
 /**
+ * Prefix marking an Error's message as "this model requires an active Pro
+ * subscription" — same duplication story as the two sentinels above
+ * (extension.js mirrors this exact literal). Distinct from a 429 budget cap:
+ * this is a 403 authorization gate (found live: a Free user could select
+ * and bill against ANY deployed model — Grok/DeepSeek/Kimi/etc. — not just
+ * gpt-5-mini, because the proxy only ever checked "is this model deployed
+ * at all," never "is this user's plan allowed to use it"). See
+ * landing-page/lib/hosted-models.ts's FREE_TIER_MODELS/isModelAllowedForPlan
+ * for the actual gate this message reports the result of.
+ */
+export const MODEL_REQUIRES_PRO_SENTINEL = "__LAKSHX_MODEL_REQUIRES_PRO__:";
+
+/**
+ * Turns a 403 response body from the LakshX hosted proxy
+ * (`{error: "model_requires_pro", model: "..."}`, landing-page/app/api/
+ * lakshx-model/{chat/completions,responses}/route.ts) into a friendly,
+ * actionable, `MODEL_REQUIRES_PRO_SENTINEL`-prefixed message — or
+ * `undefined` if `rawBody` isn't that shape, so an unrelated 403 (a genuine
+ * auth failure on some other provider sharing this adapter) never gets
+ * mislabeled as a plan-gate message.
+ */
+export function planGateMessage(rawBody: string): string | undefined {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return undefined;
+  }
+  if (parsed?.error !== "model_requires_pro") return undefined;
+  const model = typeof parsed.model === "string" ? parsed.model : "that model";
+  return (
+    `${MODEL_REQUIRES_PRO_SENTINEL}${model} needs an active Pro subscription — the free tier is gpt-5-mini only. ` +
+    `[Upgrade →](https://lakshx.in/pricing) to use it, or add your own API key in Settings.`
+  );
+}
+
+/**
  * Builds a clean, user-facing message for a failed HTTP response — never
  * dumps a raw HTML error page (e.g. a platform-level 404/500 from an infra
  * layer in front of the actual app, which returns its own styled error page
