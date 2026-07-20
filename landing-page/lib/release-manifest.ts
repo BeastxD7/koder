@@ -27,29 +27,34 @@ export interface ReleaseManifest {
   };
 }
 
-// First real release: CI run 29744226651 (github.com/BeastxD7/LakshX-IDE/
-// actions/runs/29744226651), built from this exact commit — includes the
-// hosted-model picker fix (show all models, label+disable by plan), the
-// Royal mode dropdown contrast fix, the DB schema canvas pan/zoom, and
-// this update mechanism itself. macOS artifact re-packaged as a real .dmg
-// locally (create-dmg.ts) from the same commit rather than uploading CI's
-// raw .app zip, same as every prior macOS publish — see downloads.ts's
-// doc comment for why. No "darwin-arm64" entry in `platforms`: the update
-// route hardcodes a 204 for that platform regardless (Squirrel.Mac +
-// ad-hoc signing, see the route's own doc comment), so populating it here
-// would just be dead data.
+// CI run 29749662076 (github.com/BeastxD7/LakshX-IDE/actions/runs/
+// 29749662076), built from this exact commit — adds the topbar "Update
+// available" badge itself, plus the fix that lets it actually see a real
+// darwin-arm64 update: the route's platform-known check now special-cases
+// darwin on the x-lakshx-badge-check header (see route.ts's doc comment)
+// instead of hardcoding 204 unconditionally, so THIS entry is what makes
+// that path do anything for the first time. Squirrel.Mac (no header) still
+// always gets 204 regardless of what's here — the badge's own click
+// handler opens this url in a browser rather than attempting a silent
+// apply. macOS artifact re-packaged as a real .dmg locally (create-dmg.ts)
+// from the same commit rather than uploading CI's raw .app zip, same as
+// every prior macOS publish — see downloads.ts's doc comment for why.
 export const LATEST_RELEASE: ReleaseManifest = {
-  commit: "ae47998cad0dcde09c0c110fc4844b927a38c512",
+  commit: "f14a3254fe149c495349bc801798e5ca48217b40",
   productVersion: "2026-07-20",
-  timestamp: 1784555188000,
+  timestamp: 1784561025000,
   platforms: {
+    "darwin-arm64": {
+      url: "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-macOS-arm64.dmg",
+      sha256: "faaccf8d5cee394b0a2e36136007cff119fddd30bf41f6d0b9249af294c72aeb",
+    },
     "linux-x64": {
       url: "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Linux-x64.deb",
-      sha256: "3a8a69561bfc26eb4a0107d7679b1639aa42656f31fcb90c4d8975a8c3772fbe",
+      sha256: "020d37ff376dfcef4ad85f58bc0b57d3c0a5489204596c665c5920f33f3612b3",
     },
     "win32-x64": {
       url: "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Windows-x64.exe",
-      sha256: "118efb0d70038f01e9f7627a68a02c74ad3c51bd0ec0e8fdcee71c6a46220f14",
+      sha256: "546b5e9bea6b4099be27d1b908c16f4ef09e1a29c4f0cdbab6f72f953bd507e9",
     },
   },
 };

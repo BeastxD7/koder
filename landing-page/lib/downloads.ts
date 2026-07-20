@@ -49,17 +49,16 @@ export interface DownloadTarget {
 /** Bump the value for a platform every time a new file is uploaded to its
  * (stable) blob path — see the cache-busting note above. */
 const BLOB_VERSION: Record<Exclude<DownloadKey, "macIntel">, string> = {
-  // Rebuilt from commit ae47998 (CI run 29744226651) -- all three
-  // platforms, including the hosted-model picker fix (show every model,
-  // label + disable by plan instead of hiding), the Royal mode dropdown
-  // contrast fix, DB schema canvas pan/zoom, and the new in-app updater
-  // (lib/release-manifest.ts). macOS CI only zips the raw .app (see this
-  // file's own doc comment above); the .dmg came from the same manual
-  // create-dmg.ts run this session already exercised (ad-hoc codesign +
-  // dmgbuild), applied to this run's freshly downloaded .app.
-  macArm: "2026-07-20-1",
-  windows: "2026-07-20-1",
-  linux: "2026-07-20-1",
+  // Rebuilt from commit f14a325 (CI run 29749662076) -- all three
+  // platforms, including the topbar "Update available" badge and the fix
+  // that lets it see a real macOS update (see release-manifest.ts's doc
+  // comment). macOS CI only zips the raw .app (see this file's own doc
+  // comment above); the .dmg came from the same manual create-dmg.ts run
+  // this session already exercised (ad-hoc codesign + dmgbuild), applied
+  // to this run's freshly downloaded .app.
+  macArm: "2026-07-20-2",
+  windows: "2026-07-20-2",
+  linux: "2026-07-20-2",
 };
 
 const withVersion = (url: string, version: string) => `${url}?v=${version}`;
