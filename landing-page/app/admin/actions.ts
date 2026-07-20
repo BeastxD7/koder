@@ -20,18 +20,6 @@ async function assertAdmin() {
   if (!isAdminEmail(user?.email)) throw new Error("not authorized");
 }
 
-/** Same check as assertAdmin(), but returns the user — for actions (like
- * the test-checkout one below) that need the admin's own identity, not
- * just a yes/no gate. */
-async function requireAdminUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!isAdminEmail(user?.email) || !user) throw new Error("not authorized");
-  return user;
-}
-
 export async function updateUserCredit(formData: FormData) {
   await assertAdmin();
   const userId = String(formData.get("userId") ?? "");
@@ -119,30 +107,3 @@ export async function deletePromoCode(formData: FormData) {
   revalidatePath("/admin/promo-codes");
 }
 
-/**
- * Test-mode-only convenience: creates a real Dodo Checkout Session for
- * LakshX Pro tied to the admin's OWN Supabase account, exactly the same
- * code path /api/checkout/create uses for a real signed-in IDE user (same
- * product_cart, same metadata.supabase_user_id convention the webhook
- * relies on) — just sourced from the admin's cookie session here instead
- * of a bearer token, since there's no live "Upgrade" button on the
- * frontend yet to click through. Lets the whole flow (checkout -> Dodo
- * test-card payment -> webhook -> user_subscription row) be exercised
- * for real without needing to extract an IDE session token by hand.
- */
-export async function createTestCheckoutSession(): Promise<string> {
-  const user = await requireAdminUser();
-
-  const session = await dodoClient().checkoutSessions.create({
-    product_cart: [{ product_id: PRO_PRODUCT_ID, quantity: 1 }],
-    customer: {
-      email: user.email!,
-      name: (user.user_metadata?.full_name as string | undefined) ?? (user.user_metadata?.name as string | undefined) ?? user.email!,
-    },
-    metadata: { supabase_user_id: user.id },
-    return_url: "https://lakshx.in/admin/subscriptions",
-  });
-
-  if (!session.checkout_url) throw new Error("Dodo did not return a checkout URL");
-  return session.checkout_url;
-}

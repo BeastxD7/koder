@@ -31,7 +31,7 @@ export default async function AdminPromoCodesPage() {
       <div>
         <h1 className="font-heading text-2xl font-bold text-foreground">Promo codes</h1>
         <p className="text-sm text-muted-foreground">
-          Percentage-off discount codes for LakshX Pro, managed directly through Dodo Payments (test mode).
+          Percentage-off discount codes for LakshX Pro, managed directly through Dodo Payments (live mode).
         </p>
       </div>
 

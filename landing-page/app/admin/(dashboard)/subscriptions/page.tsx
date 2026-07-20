@@ -1,6 +1,5 @@
 import { supabaseAdmin } from "../../../../lib/supabase/admin";
 import { SubscriptionsTable, type AdminSubscriptionRow } from "../../../../components/admin/subscriptions-table";
-import { TestCheckoutButton } from "../../../../components/admin/test-checkout-button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../../components/ui/card";
 
 export const dynamic = "force-dynamic";
@@ -16,14 +15,11 @@ export default async function AdminSubscriptionsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground">Subscriptions</h1>
-          <p className="text-sm text-muted-foreground">
-            {activeCount} active Pro subscriber{activeCount === 1 ? "" : "s"} — Dodo Payments (test mode).
-          </p>
-        </div>
-        <TestCheckoutButton />
+      <div>
+        <h1 className="font-heading text-2xl font-bold text-foreground">Subscriptions</h1>
+        <p className="text-sm text-muted-foreground">
+          {activeCount} active Pro subscriber{activeCount === 1 ? "" : "s"} — Dodo Payments (live mode).
+        </p>
       </div>
 
       <Card className="bg-card">
