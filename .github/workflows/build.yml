@@ -165,6 +165,27 @@ jobs:
           codesign --force --deep -s - "$app"
           ditto -c -k --keepParent "$app" ../${{ matrix.artifact }}.zip
 
+      # A real drag-to-Applications .dmg, not just the raw .app zip above —
+      # same "download, drag one thing to install" experience the Linux
+      # .deb/Windows .exe below already get. Mirrors OS-Build/build-macos.sh's
+      # own local-build step exactly (same tool, same two-arg invocation);
+      # this used to be a manual local run because CI didn't do it, which is
+      # the whole reason scripts/publish-release.mjs historically needed a
+      # human in the loop for macOS specifically — this step is what removes
+      # that. create-dmg.ts resolves its own paths relative to its own file
+      # location (upstream/build/darwin/), so it must run from inside
+      # upstream/ with the repo root passed as both the app-search dir and
+      # the output dir — not from this job's default working directory.
+      - name: Create DMG (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          arch="${MATRIX_TARGET#darwin-}"
+          cd upstream
+          VSCODE_ARCH="$arch" VSCODE_QUALITY=stable node build/darwin/create-dmg.ts "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE"
+          mv "$GITHUB_WORKSPACE/VSCode-darwin-${arch}.dmg" "$GITHUB_WORKSPACE/${{ matrix.artifact }}.dmg"
+        env:
+          MATRIX_TARGET: ${{ matrix.target }}
+
       # A proper .deb package, not a tarball of loose files — same "download,
       # install one thing" experience Cursor/VS Code itself ships (and
       # matches the .exe installer below for Windows). The gulp tasks
@@ -268,9 +289,58 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.dmg
             ${{ matrix.artifact }}.deb
             ${{ matrix.artifact }}.exe
           if-no-files-found: error
+
+  # Publishes every platform's installer to the koder-downloads Vercel Blob
+  # store and updates landing-page/lib/release-data.json (which both the
+  # download links AND the in-app update-check route read) — see
+  # scripts/publish-release.mjs's own doc comment for the full contract.
+  # This used to be a manual step (download each CI run's artifacts, upload
+  # by hand, hand-edit two TS files) — this job is what removes that.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.17.0"
+      - name: Publish release
+        run: node scripts/publish-release.mjs
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      # [skip ci] avoids this push re-triggering the workflow's own `push`
+      # trigger for a no-op `test`-only run (the `build`/`publish` jobs
+      # themselves stay gated to tags/workflow_dispatch regardless, so
+      # there's no risk of a build loop even without this — it's purely to
+      # skip the pointless extra `test` run).
+      - name: Commit release-data.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add landing-page/lib/release-data.json
+          if git diff --staged --quiet; then
+            echo "release-data.json unchanged, nothing to commit"
+          else
+            git commit -m "Publish release ${{ github.sha }} [skip ci]"
+            # Always targets main explicitly, not GITHUB_REF_NAME — a
+            # tag-triggered run checks out the TAG (detached HEAD), and a
+            # tag ref can't be rebased onto or pushed to like a branch. The
+            # release commit always belongs on main regardless of which
+            # ref triggered this workflow.
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

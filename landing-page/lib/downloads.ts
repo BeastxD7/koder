@@ -4,8 +4,9 @@
  * CI (`Build LakshX` GitHub Actions workflow) doesn't publish a GitHub
  * Release, so there's no `github.com/.../releases/...` asset to link to.
  * Build artifacts are hosted publicly on Vercel Blob (store
- * `koder-downloads`) instead, uploaded manually from each CI run's build
- * artifacts.
+ * `koder-downloads`) instead — the workflow's own `publish` job uploads
+ * them automatically (scripts/publish-release.mjs) once the build matrix
+ * succeeds, no manual step required.
  *
  * Every download button/link in this app MUST read from this object —
  * do not hardcode a URL anywhere else.
@@ -32,6 +33,7 @@
  * file is uploaded to the same path, so returning visitors are forced to
  * fetch fresh bytes instead of serving a stale disk-cached copy.
  */
+import releaseData from "./release-data.json";
 
 export const NOT_CONFIGURED_URL = "#download-not-configured";
 
@@ -46,20 +48,12 @@ export interface DownloadTarget {
   url: string;
 }
 
-/** Bump the value for a platform every time a new file is uploaded to its
- * (stable) blob path — see the cache-busting note above. */
-const BLOB_VERSION: Record<Exclude<DownloadKey, "macIntel">, string> = {
-  // Rebuilt from commit f14a325 (CI run 29749662076) -- all three
-  // platforms, including the topbar "Update available" badge and the fix
-  // that lets it see a real macOS update (see release-manifest.ts's doc
-  // comment). macOS CI only zips the raw .app (see this file's own doc
-  // comment above); the .dmg came from the same manual create-dmg.ts run
-  // this session already exercised (ad-hoc codesign + dmgbuild), applied
-  // to this run's freshly downloaded .app.
-  macArm: "2026-07-20-2",
-  windows: "2026-07-20-2",
-  linux: "2026-07-20-2",
-};
+/** Bumped by the publish pipeline (scripts/publish-release.mjs) every time
+ * a new file is uploaded to its (stable) blob path — see the cache-busting
+ * note above. Lives in release-data.json (same machine-written file
+ * release-manifest.ts's LATEST_RELEASE reads) so one release only needs
+ * one write, not two hand-edited files kept in sync by hand. */
+const BLOB_VERSION: Record<Exclude<DownloadKey, "macIntel">, string> = releaseData.blobVersion;
 
 const withVersion = (url: string, version: string) => `${url}?v=${version}`;
 
@@ -67,12 +61,13 @@ export const DOWNLOADS: Record<DownloadKey, DownloadTarget> = {
   macArm: {
     label: "macOS (Apple Silicon)",
     shortLabel: "macOS (Apple Silicon)",
-    // A real .dmg installer now (drag-to-Applications, matching how every
+    // A real .dmg installer (drag-to-Applications, matching how every
     // other macOS app is distributed), not a raw .zip of the app bundle --
-    // built locally via upstream/build/darwin/create-dmg.ts since CI is
-    // currently blocked. See patches/darwin-dmg-title-use-product-name.patch
-    // for a real branding bug found while building this (volume title said
-    // "VS Code" despite the app inside correctly being LakshX.app).
+    // built via upstream/build/darwin/create-dmg.ts, now a CI step itself
+    // (build.yml's macOS matrix leg) rather than a manual local run. See
+    // patches/darwin-dmg-title-use-product-name.patch for a real branding
+    // bug found while building this (volume title said "VS Code" despite
+    // the app inside correctly being LakshX.app).
     url: withVersion("https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-macOS-arm64.dmg", BLOB_VERSION.macArm),
   },
   macIntel: {

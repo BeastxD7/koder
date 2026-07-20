@@ -1,0 +1,24 @@
+{
+  "commit": "f14a3254fe149c495349bc801798e5ca48217b40",
+  "productVersion": "2026-07-20",
+  "timestamp": 1784561025000,
+  "platforms": {
+    "darwin-arm64": {
+      "url": "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-macOS-arm64.dmg",
+      "sha256": "faaccf8d5cee394b0a2e36136007cff119fddd30bf41f6d0b9249af294c72aeb"
+    },
+    "linux-x64": {
+      "url": "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Linux-x64.deb",
+      "sha256": "020d37ff376dfcef4ad85f58bc0b57d3c0a5489204596c665c5920f33f3612b3"
+    },
+    "win32-x64": {
+      "url": "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Windows-x64.exe",
+      "sha256": "546b5e9bea6b4099be27d1b908c16f4ef09e1a29c4f0cdbab6f72f953bd507e9"
+    }
+  },
+  "blobVersion": {
+    "macArm": "2026-07-20-2",
+    "windows": "2026-07-20-2",
+    "linux": "2026-07-20-2"
+  }
+}
