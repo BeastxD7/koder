@@ -27,21 +27,29 @@ export interface ReleaseManifest {
   };
 }
 
-// PLACEHOLDER — deliberately not a real commit: this repo's HEAD at the
-// moment this file was authored isn't yet the commit any CI build was
-// actually stamped with (BUILD_SOURCEVERSION is set from whatever gets
-// pushed and then built, which happens strictly after this file is
-// committed — a real value can't exist before that). `platforms` stays
-// empty until it's updated, so the update route always 204s (equivalent
-// to "no update available") rather than ever advertising a URL that
-// doesn't exist yet. Update this whole object for real once a CI build
-// succeeds and its artifacts are uploaded to the blob store (same step as
-// downloads.ts's BLOB_VERSION bump): commit = that build's actual
-// BUILD_SOURCEVERSION, productVersion = a display date, platforms = the
-// uploaded blob URLs.
+// First real release: CI run 29744226651 (github.com/BeastxD7/LakshX-IDE/
+// actions/runs/29744226651), built from this exact commit — includes the
+// hosted-model picker fix (show all models, label+disable by plan), the
+// Royal mode dropdown contrast fix, the DB schema canvas pan/zoom, and
+// this update mechanism itself. macOS artifact re-packaged as a real .dmg
+// locally (create-dmg.ts) from the same commit rather than uploading CI's
+// raw .app zip, same as every prior macOS publish — see downloads.ts's
+// doc comment for why. No "darwin-arm64" entry in `platforms`: the update
+// route hardcodes a 204 for that platform regardless (Squirrel.Mac +
+// ad-hoc signing, see the route's own doc comment), so populating it here
+// would just be dead data.
 export const LATEST_RELEASE: ReleaseManifest = {
-  commit: "0000000000000000000000000000000000000000",
-  productVersion: "unreleased",
-  timestamp: 0,
-  platforms: {},
+  commit: "ae47998cad0dcde09c0c110fc4844b927a38c512",
+  productVersion: "2026-07-20",
+  timestamp: 1784555188000,
+  platforms: {
+    "linux-x64": {
+      url: "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Linux-x64.deb",
+      sha256: "3a8a69561bfc26eb4a0107d7679b1639aa42656f31fcb90c4d8975a8c3772fbe",
+    },
+    "win32-x64": {
+      url: "https://qflnh9roir6uolgc.public.blob.vercel-storage.com/koder/LakshX-Windows-x64.exe",
+      sha256: "118efb0d70038f01e9f7627a68a02c74ad3c51bd0ec0e8fdcee71c6a46220f14",
+    },
+  },
 };
