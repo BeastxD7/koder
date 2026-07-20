@@ -21,21 +21,32 @@ export const runtime = "nodejs";
  * `:platform` is read from the path via `params` below, not needed
  * separately.
  */
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ platform: string; quality: string; commit: string }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ platform: string; quality: string; commit: string }> }) {
   const { platform, commit } = await params;
 
-  // macOS updates are deliberately never advertised yet: Squirrel.Mac
-  // (electron.autoUpdater, updateService.darwin.ts) validates the signing
-  // identity between the installed and downloaded app before it will
-  // apply an update, and our .dmg is ad-hoc signed only (`codesign
-  // --force --deep -s -`, no real Developer ID / Team ID) — the likely
-  // outcome is Squirrel surfacing an "update is improperly signed" error
-  // in the user's face instead of a working update. Unlike Linux (which
-  // falls back to just opening the downloads page — see
-  // updateService.linux.ts's doDownloadUpdate), Darwin has no such
-  // graceful fallback built in. 204 here means "no update available" —
-  // silent, not broken — until real Developer ID + notarization exists.
-  const platformEntry = platform === "darwin-arm64" ? undefined : LATEST_RELEASE.platforms[platform as keyof typeof LATEST_RELEASE.platforms];
+  // This ONE endpoint is polled by two different callers on macOS, and
+  // they need different answers:
+  //   1. VS Code's own native updater (electron.autoUpdater / Squirrel.Mac,
+  //      updateService.darwin.ts) — it validates the signing identity
+  //      between the installed and downloaded app before applying, and our
+  //      .dmg is ad-hoc signed only (`codesign --force --deep -s -`, no
+  //      real Developer ID/Team ID). Handing it a real update here risks
+  //      it showing the user an "update is improperly signed" error while
+  //      trying to silently apply — so it always gets 204.
+  //   2. product/lakshx-chat's own badge check (extension.js's
+  //      checkForLakshxUpdate) — it never asks VS Code to silently apply
+  //      anything; its click handler opens the download page in a browser
+  //      instead (same graceful fallback Linux's own updater already has
+  //      built in — see updateService.linux.ts's doDownloadUpdate). Safe
+  //      to tell the truth to.
+  // Distinguished by a header only the extension's own fetch() call sends
+  // (getUpdateRequestHeaders() in abstractUpdateService.ts building
+  // Squirrel's real request never includes anything like it) — not by
+  // User-Agent sniffing, which is easy to get subtly wrong either
+  // direction.
+  const isLakshxBadgeCheck = req.headers.get("x-lakshx-badge-check") === "1";
+  const platformKnown = platform !== "darwin-arm64" || isLakshxBadgeCheck;
+  const platformEntry = platformKnown ? LATEST_RELEASE.platforms[platform as keyof typeof LATEST_RELEASE.platforms] : undefined;
 
   if (!platformEntry || commit === LATEST_RELEASE.commit) {
     return new Response(null, { status: 204 });

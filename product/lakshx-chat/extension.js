@@ -122,7 +122,15 @@ async function checkForLakshxUpdate() {
   const platform = updatePlatformId();
   if (!commit || !platform) return null;
   try {
-    const res = await fetch(`https://lakshx.in/api/update/${platform}/stable/${commit}`);
+    // x-lakshx-badge-check tells the route this is OUR check, not VS
+    // Code's own native Squirrel.Mac poller hitting the same URL — see
+    // the route's doc comment. Only matters on darwin, but sent
+    // unconditionally: harmless on win32/linux, and a platform-specific
+    // header here would be one more thing to keep in sync with that
+    // route's own darwin-only branch.
+    const res = await fetch(`https://lakshx.in/api/update/${platform}/stable/${commit}`, {
+      headers: { "x-lakshx-badge-check": "1" },
+    });
     if (res.status !== 200) return null; // 204 = already latest; anything else = don't know, stay quiet
     return await res.json();
   } catch {
@@ -2384,21 +2392,32 @@ class AgentViewProvider {
       }
       case "checkForLakshxUpdate": {
         const update = await checkForLakshxUpdate();
+        this.lastLakshxUpdate = update; // used by "applyLakshxUpdate" below — avoids re-fetching or round-tripping the URL through the webview
         this.post({ type: "lakshxUpdateResult", update });
         break;
       }
-      // The badge's click action: reuses VS Code's OWN built-in update
-      // command (same one Help > Check for Updates runs) rather than
-      // reimplementing download/apply here — this gets the real
-      // native flow (silent-apply where the platform's signing situation
-      // allows it, an external download otherwise) for free, and stays a
-      // single source of truth for what "applying an update" means.
+      // The badge's click action. On win32/linux this reuses VS Code's OWN
+      // built-in update command (same one Help > Check for Updates runs)
+      // rather than reimplementing download/apply — real native flow for
+      // free, one source of truth for what "applying an update" means. On
+      // darwin it deliberately does NOT do that: `update.checkForUpdate`
+      // drives the SAME Squirrel.Mac path that would try to silently apply
+      // an ad-hoc-signed build and likely error — this route's own
+      // x-lakshx-badge-check gate means Squirrel never sees a real update
+      // in the first place, so calling that command here would just find
+      // nothing (confusing: badge says available, native check says none).
+      // Opening the download page directly is the same graceful fallback
+      // Linux's own native updater already has built in.
       case "applyLakshxUpdate":
-        // Real command id is 'update.checkForUpdate' (singular) — see
-        // upstream/src/vs/workbench/contrib/update/browser/update.
-        // contribution.ts's CheckForUpdateAction; do not "fix" this to the
-        // more natural-sounding plural, it silently no-ops instead.
-        vscode.commands.executeCommand("update.checkForUpdate");
+        if (process.platform === "darwin") {
+          vscode.env.openExternal(vscode.Uri.parse(this.lastLakshxUpdate?.url || "https://lakshx.in"));
+        } else {
+          // Real command id is 'update.checkForUpdate' (singular) — see
+          // upstream/src/vs/workbench/contrib/update/browser/update.
+          // contribution.ts's CheckForUpdateAction; do not "fix" this to
+          // the more natural-sounding plural, it silently no-ops instead.
+          vscode.commands.executeCommand("update.checkForUpdate");
+        }
         break;
       case "reportError": {
         // Scoped to the hosted lakshx model + signed-in users only, matching
