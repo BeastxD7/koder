@@ -297,9 +297,10 @@ jobs:
   # Publishes every platform's installer to the koder-downloads Vercel Blob
   # store and updates landing-page/lib/release-data.json (which both the
   # download links AND the in-app update-check route read) — see
-  # scripts/publish-release.mjs's own doc comment for the full contract.
-  # This used to be a manual step (download each CI run's artifacts, upload
-  # by hand, hand-edit two TS files) — this job is what removes that.
+  # landing-page/scripts/publish-release.mjs's own doc comment for the full
+  # contract. This used to be a manual step (download each CI run's
+  # artifacts, upload by hand, hand-edit two TS files) — this job is what
+  # removes that.
   publish:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: build
@@ -314,8 +315,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24.17.0"
+      # Installs into landing-page/node_modules specifically so plain Node
+      # module resolution finds @vercel/blob from the publish script — see
+      # that script's own doc comment for why it uses the SDK (not the
+      # `vercel` CLI, which needs a full login session even with an
+      # --rw-token passed — confirmed the hard way, one failed run).
+      - name: Install landing-page dependencies
+        working-directory: landing-page
+        run: npm ci
       - name: Publish release
-        run: node scripts/publish-release.mjs
+        run: node landing-page/scripts/publish-release.mjs
         env:
           RELEASE_COMMIT: ${{ github.sha }}
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
