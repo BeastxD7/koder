@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import {
   type ColumnDef,
@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { updateUserCredit } from "../../app/admin/actions";
+import { updateUserCredit, updateUserPlan } from "../../app/admin/actions";
 
 export type AdminUserRow = {
   user_id: string;
@@ -27,6 +27,8 @@ export type AdminUserRow = {
   total_tokens_out: number;
   credit_limit_usd: number;
   last_used_at: string | null;
+  plan: string;
+  subscription_status: string | null;
 };
 
 function formatUsd(n: number | null | undefined) {
@@ -88,6 +90,53 @@ function EditCapDialog({ row }: { row: AdminUserRow }) {
   );
 }
 
+/**
+ * Auto-submits on change, same pattern as ModelPlansTable's PlanSelect
+ * (components/admin/model-plans-table.tsx) — a two-value toggle reads
+ * better as "pick a value, it's saved" than a form with a separate Save
+ * button. Writes straight to user_subscription via updateUserPlan()
+ * (app/admin/actions.ts), bypassing Dodo entirely — for comps, support
+ * fixes, or unblocking someone while billing is misbehaving.
+ */
+function PlanSelect({ row }: { row: AdminUserRow }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  return (
+    <form
+      ref={formRef}
+      action={async (formData) => {
+        setStatus("saving");
+        setErrorMsg(null);
+        try {
+          await updateUserPlan(formData);
+          setStatus("saved");
+          setTimeout(() => setStatus((s) => (s === "saved" ? "idle" : s)), 1500);
+        } catch (err) {
+          setStatus("error");
+          setErrorMsg(err instanceof Error ? err.message : "failed to save");
+        }
+      }}
+      className="flex items-center gap-2"
+    >
+      <input type="hidden" name="userId" value={row.user_id} />
+      <select
+        name="plan"
+        defaultValue={row.plan}
+        onChange={() => formRef.current?.requestSubmit()}
+        className="h-8 rounded-md border border-input bg-background px-2 text-sm capitalize"
+      >
+        <option value="free">Free</option>
+        <option value="pro">Pro</option>
+      </select>
+      {status === "saving" && <span className="text-xs text-muted-foreground">Saving…</span>}
+      {status === "saved" && <span className="text-xs text-emerald-600">Saved</span>}
+      {status === "error" && <span className="text-xs text-destructive">{errorMsg}</span>}
+    </form>
+  );
+}
+
 const columns: ColumnDef<AdminUserRow>[] = [
   {
     accessorKey: "email",
@@ -136,6 +185,11 @@ const columns: ColumnDef<AdminUserRow>[] = [
         <EditCapDialog row={row.original} />
       </div>
     ),
+  },
+  {
+    accessorKey: "plan",
+    header: "Plan",
+    cell: ({ row }) => <PlanSelect row={row.original} />,
   },
   {
     id: "actions",

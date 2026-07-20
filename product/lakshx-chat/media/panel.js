@@ -2453,6 +2453,12 @@ function renderSettings() {
       vscode.postMessage({ type: isSet ? "lakshxLogout" : "lakshxLogin" });
     });
     if (isSet) vscode.postMessage({ type: "getLakshxUsage" });
+    // Same "fetch once, cache in liveModels" guard the BYOK validate path
+    // below uses — opening Settings while already signed in shouldn't
+    // re-fetch on every render (renderSettings() re-runs on provider select
+    // change etc), but should still pick it up if "ready"'s own fetch (see
+    // the "ready" case) hasn't resolved yet.
+    if (isSet && !liveModels.lakshx) vscode.postMessage({ type: "getLakshxModels" });
   }
   // "lakshx/validate" probes a live GET /models endpoint the managed proxy
   // doesn't implement (it only speaks POST chat/completions) — not
@@ -2513,6 +2519,12 @@ window.addEventListener("message", (e) => {
       if (m.models.providers.length === 0 && messagesEl.querySelector(".empty")) {
         showEmpty(true);
       }
+      // Refreshes PROVIDERS.lakshx.models (and this same top-bar select)
+      // from the server's actual, admin-configured, plan-filtered list once
+      // it arrives — see the "lakshxModelsResult" case below. Only relevant
+      // once signed in (lakshx in providers); a signed-out user has nothing
+      // to fetch this with.
+      if (m.models.providers.includes("lakshx")) vscode.postMessage({ type: "getLakshxModels" });
       break;
     }
     case "replay":
@@ -2657,6 +2669,38 @@ window.addEventListener("message", (e) => {
       const spent = Number(m.usage.spent_usd ?? 0);
       const cap = Number(m.usage.credit_limit_usd ?? 0);
       el.textContent = `Used $${spent.toFixed(2)} of $${cap.toFixed(2)} this cycle`;
+      break;
+    }
+    case "lakshxModelsResult": {
+      // getModels() (lakshx-auth.js) resolves null on any failure (offline,
+      // expired session, proxy misconfigured) — leave PROVIDERS.lakshx.models
+      // at whatever it already was (the hardcoded free-tier default,
+      // gpt-5-mini) rather than clearing the picker down to nothing.
+      const available = m.result?.models?.filter((x) => x.available).map((x) => x.id) ?? [];
+      if (available.length) {
+        PROVIDERS.lakshx.models = available;
+        liveModels.lakshx = available;
+      }
+      // Same pattern as "providerStatus" above for BYOK providers — only
+      // matters if Settings happens to be open on the lakshx provider right
+      // now.
+      if (!settingsPanel.hidden && document.getElementById("providerSelect")?.value === "lakshx") renderSettings();
+      // The top-bar quick-select was already populated at "ready" time from
+      // the old hardcoded list — add any newly-available models to it now
+      // rather than waiting for a reload. Never REMOVES an option: if a
+      // model this user currently has selected became unavailable, the next
+      // request against it gets a clean upgrade prompt (MODEL_REQUIRES_PRO_
+      // SENTINEL handling, extension.js) instead of silently vanishing out
+      // from under them mid-session.
+      const existing = new Set([...modelEl.options].map((o) => o.value));
+      for (const model of available) {
+        const val = `lakshx/${model}`;
+        if (existing.has(val)) continue;
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = val;
+        modelEl.appendChild(opt);
+      }
       break;
     }
     case "reportErrorDone": {

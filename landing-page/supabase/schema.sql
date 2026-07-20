@@ -178,6 +178,11 @@ grant execute on function public.record_usage(uuid, bigint, bigint, numeric, tex
 -- Admin dashboard convenience view — per-user total spend + their cap.
 -- Also service-role only (no grants to anon/authenticated); the /admin
 -- route reads this with the service-role key from a server-side handler.
+--
+-- plan/subscription_status added so the users list can show + edit plan
+-- directly (updateUserPlan(), app/admin/actions.ts) without a second query
+-- per row — left join because most rows won't have a user_subscription row
+-- yet (Free by omission, same fallback getEffectivePlan() uses).
 create or replace view public.admin_user_usage as
 select
   u.id as user_id,
@@ -186,11 +191,14 @@ select
   coalesce(sum(l.tokens_in), 0) as total_tokens_in,
   coalesce(sum(l.tokens_out), 0) as total_tokens_out,
   b.credit_limit_usd,
-  max(l.created_at) as last_used_at
+  max(l.created_at) as last_used_at,
+  coalesce(s.plan, 'free') as plan,
+  s.status as subscription_status
 from auth.users u
 left join usage_ledger l on l.user_id = u.id
 left join user_budget b on b.user_id = u.id
-group by u.id, u.email, b.credit_limit_usd;
+left join user_subscription s on s.user_id = u.id
+group by u.id, u.email, b.credit_limit_usd, s.plan, s.status;
 
 revoke all on public.admin_user_usage from public, anon, authenticated;
 grant select on public.admin_user_usage to service_role;
@@ -915,3 +923,27 @@ alter table public.hosted_model_plans enable row level security;
 -- hold a service-role client.
 revoke all on public.hosted_model_plans from public, anon, authenticated;
 grant select, insert, update on public.hosted_model_plans to service_role;
+
+-- -----------------------------------------------------------------------------
+-- 100%-off promo code redemptions (app/pricing/actions.ts's startProCheckout).
+-- Dodo's own discount.times_used only increments on a completed Dodo
+-- checkout — a 100%-off code is intentionally never sent to Dodo at all (it
+-- grants Pro directly via setUserPlan(), lib/subscriptions.ts, skipping
+-- payment entirely), so without this table Dodo's usage_limit would be
+-- silently unenforceable for exactly the codes that need it most. One row
+-- per (code, user) redemption; the primary key doubles as "has this user
+-- already redeemed this code" so re-submitting the same code is a no-op
+-- rather than double-counting toward the limit.
+create table if not exists public.promo_code_redemptions (
+  code text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  redeemed_at timestamptz not null default now(),
+  primary key (code, user_id)
+);
+
+alter table public.promo_code_redemptions enable row level security;
+-- no policies -> default deny for anon/authenticated; only service-role
+-- (which the promo-redemption path in app/pricing/actions.ts holds) can
+-- read or write this table.
+revoke all on public.promo_code_redemptions from public, anon, authenticated;
+grant select, insert on public.promo_code_redemptions to service_role;

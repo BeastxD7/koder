@@ -2323,6 +2323,12 @@ class AgentViewProvider {
         this.post({ type: "lakshxUsageResult", usage });
         break;
       }
+      case "getLakshxModels": {
+        const token = readProvidersJson().providers?.lakshx?.apiKey;
+        const result = token ? await lakshxAuth.getModels(token) : null;
+        this.post({ type: "lakshxModelsResult", result });
+        break;
+      }
       case "reportError": {
         // Scoped to the hosted lakshx model + signed-in users only, matching
         // uploadFeedbackEvent's privacy scoping — a BYOK user's own prompts/

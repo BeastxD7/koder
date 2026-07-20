@@ -75,4 +75,29 @@ async function getMyUsage(accessToken) {
   }
 }
 
-module.exports = { parseAuthCallback, refreshSession, getMyUsage };
+/**
+ * Which hosted models this user's plan actually allows, sourced from the
+ * SAME hosted_model_plans table /admin/models edits — not a hand-maintained
+ * list baked into this extension (that's how a Free user being able to
+ * select a Pro-gated model in the picker happened: the picker's list and
+ * the proxy's actual enforcement were two independent, silently-drifting
+ * sources of truth). Goes through the landing-page route rather than
+ * Supabase directly, unlike getMyUsage above — hosted_model_plans is
+ * service-role-only (no RLS policy grants it to authenticated users), so
+ * there's no way to read it straight from the client with just a login
+ * token. Returns null on any failure — same best-effort-display contract as
+ * getMyUsage; the picker falls back to whatever list it already had.
+ */
+async function getModels(accessToken) {
+  try {
+    const res = await fetch("https://lakshx.in/api/lakshx-model/list", {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    return await res.json(); // { plan, models: [{id, requiredPlan, available}] }
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { parseAuthCallback, refreshSession, getMyUsage, getModels };

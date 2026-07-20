@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "../../lib/supabase/server";
 import { isAdminEmail, supabaseAdmin } from "../../lib/supabase/admin";
 import { dodoClient, PRO_PRODUCT_ID } from "../../lib/dodo";
+import { setUserPlan } from "../../lib/subscriptions";
 
 /**
  * Defense in depth: proxy.ts already gates /admin/*, but this re-checks the
@@ -52,6 +53,27 @@ export async function updateModelPlan(formData: FormData) {
   if (error) throw new Error(error.message);
 
   revalidatePath("/admin/models");
+}
+
+/**
+ * Manual override for user_subscription.plan — for comping a user, honoring
+ * a support request, or unblocking someone while Dodo/the webhook is
+ * misbehaving, without needing a real Dodo subscription behind it. Goes
+ * through setUserPlan() (lib/subscriptions.ts) so it writes the exact same
+ * shape the webhook does; getEffectivePlan()/check_budget() can't tell a
+ * manual grant apart from a paid one. No expiry — stays Pro until an admin
+ * changes it back, since there's no billing cycle driving a renewal here.
+ */
+export async function updateUserPlan(formData: FormData) {
+  await assertAdmin();
+  const userId = String(formData.get("userId") ?? "");
+  const plan = String(formData.get("plan") ?? "");
+  if (!userId) throw new Error("missing user id");
+  if (plan !== "free" && plan !== "pro") throw new Error("invalid plan");
+
+  await setUserPlan(userId, plan);
+
+  revalidatePath("/admin", "layout");
 }
 
 export async function updateGlobalCeiling(formData: FormData) {
